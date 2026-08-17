@@ -1,7 +1,7 @@
 import type { Module } from '../types';
-import { HUD } from './HUD';
+import { UiLayer } from './UiLayer';
 
 /** Owned by the UI agent. Add internal modules here, in update order. */
 export function createUiModules(): Module[] {
-  return [new HUD()];
+  return [new UiLayer()];
 }

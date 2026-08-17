@@ -1,0 +1,166 @@
+import { Bell } from './Bell';
+import { createBuffers } from './Buffers';
+import type { BusName } from './Buses';
+import { Mixer } from './Buses';
+import { Nodes, Ramp } from './Context';
+import { Music } from './Music';
+import { registerRigging } from './RiggingWorklet';
+import { Sea } from './Sea';
+import { ShipSounds } from './ShipSounds';
+import type { SimView } from './Sim';
+import { Weather } from './Weather';
+import { Wildlife } from './Wildlife';
+import { NoisePool, TonePool } from './Voices';
+
+export interface RigOptions {
+  /** Usually `ctx.destination`. */
+  destination?: AudioNode;
+  /** Tap an AnalyserNode off the master for live measurement. */
+  analyser?: boolean;
+  /** Families to silence — used by the offline tests to isolate a variable. */
+  mute?: BusName[];
+  /** 1 = full voice counts, 0.6 = reduced (low/medium quality tiers). */
+  voiceScale?: number;
+}
+
+/**
+ * The whole audio graph. Deliberately knows nothing about `World`: it is built
+ * against a `BaseAudioContext` and driven by a `SimView`, which is what lets
+ * scripts/audio-test.mjs rebuild it inside an OfflineAudioContext and measure it.
+ */
+export class Rig {
+  readonly nodes: Nodes;
+  readonly mixer: Mixer;
+  private readonly sea: Sea;
+  private readonly wind: import('./Wind').Wind;
+  private readonly ship: ShipSounds;
+  private readonly bell: Bell;
+  private readonly weather: Weather;
+  private readonly wildlife: Wildlife;
+  private readonly music: Music;
+  private readonly listenerRamps: Ramp[] | null;
+  private readonly legacyListener: {
+    setPosition?: (x: number, y: number, z: number) => void;
+    setOrientation?: (
+      fx: number,
+      fy: number,
+      fz: number,
+      ux: number,
+      uy: number,
+      uz: number,
+    ) => void;
+  } | null;
+
+  private constructor(
+    readonly ctx: BaseAudioContext,
+    opts: RigOptions,
+    workletReady: boolean,
+    WindCtor: typeof import('./Wind').Wind,
+  ) {
+    const nodes = new Nodes(ctx);
+    this.nodes = nodes;
+    const buffers = createBuffers(ctx);
+    const scale = opts.voiceScale ?? 1;
+    const n = (x: number): number => Math.max(2, Math.round(x * scale));
+
+    this.mixer = new Mixer(nodes, buffers, opts.destination ?? ctx.destination, opts.analyser !== false);
+    const b = this.mixer.buses;
+
+    // Three pools, split by family so a gale of sail cracks cannot starve the
+    // creaks, and so each pool can use the panning model it deserves.
+    const impacts = new NoisePool(nodes, n(7), buffers.dark, buffers.white, b.sea.in, false, 20);
+    const wood = new NoisePool(nodes, n(12), buffers.dark, buffers.white, b.ship.in, true, 11);
+    const canvas = new NoisePool(nodes, n(8), buffers.dark, buffers.white, b.ship.in, false, 26);
+    const tones = new TonePool(nodes, n(5), buffers.white, b.wildlife.in);
+
+    this.sea = new Sea(nodes, buffers, b.sea, impacts);
+    this.wind = new WindCtor(nodes, buffers, b.wind, workletReady);
+    this.ship = new ShipSounds(nodes, buffers, b.ship, wood, canvas, tones);
+    this.bell = new Bell(nodes, buffers, b.ship);
+    this.weather = new Weather(nodes, buffers, b.weather, impacts, wood, this.mixer);
+    this.wildlife = new Wildlife(tones, impacts, wood);
+    this.music = new Music(nodes, b.music, this.mixer);
+
+    for (const m of opts.mute ?? []) {
+      b[m].level.snap(0);
+      b[m].send.snap(0);
+    }
+
+    // Listener: AudioParams where available (everything current), the deprecated
+    // setters otherwise.
+    const l = ctx.listener;
+    if ('positionX' in l) {
+      this.listenerRamps = [
+        new Ramp(l.positionX, 0.02, 0.03),
+        new Ramp(l.positionY, 0.02, 0.03),
+        new Ramp(l.positionZ, 0.02, 0.03),
+        new Ramp(l.forwardX, 0.02, 0.004),
+        new Ramp(l.forwardY, 0.02, 0.004),
+        new Ramp(l.forwardZ, 0.02, 0.004),
+        new Ramp(l.upX, 0.05, 0.01),
+        new Ramp(l.upY, 0.05, 0.01),
+        new Ramp(l.upZ, 0.05, 0.01),
+      ];
+      this.legacyListener = null;
+    } else {
+      this.listenerRamps = null;
+      this.legacyListener = l as unknown as NonNullable<typeof this.legacyListener>;
+    }
+  }
+
+  static async build(ctx: BaseAudioContext, opts: RigOptions = {}): Promise<Rig> {
+    const [ready, wind] = await Promise.all([registerRigging(ctx), import('./Wind')]);
+    return new Rig(ctx, opts, ready, wind.Wind);
+  }
+
+  /** One frame. `now` must be `ctx.currentTime`. */
+  update(sim: SimView, now: number): void {
+    this.listener(sim, now);
+    this.mixer.update(sim, now);
+    this.sea.update(sim, now);
+    this.wind.update(sim, now);
+    this.ship.update(sim, now);
+    this.bell.update(sim, now);
+    this.weather.update(sim, now);
+    this.wildlife.update(sim, now);
+    this.music.update(sim, now);
+  }
+
+  lightning(distanceMetres: number, now: number): void {
+    this.weather.onLightning(distanceMetres, now);
+  }
+
+  strikeBell(count: number, now: number): void {
+    let t = now + 0.1;
+    for (let i = 0; i < Math.max(1, Math.min(8, count)); i++) {
+      this.bell.strikeOne(t, 1);
+      t += i % 2 === 0 ? 0.34 : 0.86;
+    }
+  }
+
+  private listener(sim: SimView, now: number): void {
+    const p = sim.listenerPos;
+    const f = sim.listenerFwd;
+    const u = sim.listenerUp;
+    const r = this.listenerRamps;
+    if (r) {
+      r[0].set(p.x, now);
+      r[1].set(p.y, now);
+      r[2].set(p.z, now);
+      r[3].set(f.x, now);
+      r[4].set(f.y, now);
+      r[5].set(f.z, now);
+      r[6].set(u.x, now);
+      r[7].set(u.y, now);
+      r[8].set(u.z, now);
+    } else if (this.legacyListener) {
+      this.legacyListener.setPosition?.(p.x, p.y, p.z);
+      this.legacyListener.setOrientation?.(f.x, f.y, f.z, u.x, u.y, u.z);
+    }
+  }
+
+  dispose(): void {
+    this.wind.rigging.dispose();
+    this.nodes.disposeAll();
+  }
+}
