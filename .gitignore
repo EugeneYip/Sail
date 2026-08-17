@@ -1,0 +1,8 @@
+node_modules/
+dist/
+shots/
+sheets/
+compare/
+refs/*.png
+*.key.json
+.DS_Store
