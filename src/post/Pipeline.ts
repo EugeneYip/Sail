@@ -186,6 +186,8 @@ export class Pipeline {
       vram: () => ({ total: this.targets.bytes() / 1048576, targets: this.targets.breakdown() }),
     };
     world.ext.post = this.ext;
+    // TEMP-DEBUG-RC: raw handle for the render-correctness instrumentation.
+    (globalThis as unknown as Record<string, unknown>).__rcPipe = this;
   }
 
   /* ------------------------------------------------------------------ *
