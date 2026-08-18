@@ -34,6 +34,13 @@ const SPINDRIFT_ONSET = 11.5;
 /** Wind speed at which the whole surface is smoking. Force 9. */
 const SPINDRIFT_FULL = 23;
 
+/**
+ * Emission integrates a rate against dt, so a slow frame asks for proportionally
+ * more particles — which makes the frame slower still. Clamp the integration
+ * step: at 30 fps and below we deliberately under-emit rather than spiral.
+ */
+const MAX_EMIT_DT = 1 / 30;
+
 export class Spray {
   private accBow = 0;
   private accSheet = 0;
@@ -47,7 +54,7 @@ export class Spray {
 
   update(ctx: VfxCtx, p: Particles, probe: WaterProbe, wake: WakeField): void {
     if (!p.available) return;
-    const dt = ctx.dt;
+    const dt = Math.min(ctx.dt, MAX_EMIT_DT);
     const d = ctx.density;
 
     this.bowSpray(ctx, p, probe, dt, d);
@@ -83,10 +90,17 @@ export class Spray {
 
     this.accBow += rate * dt;
     this.accSheet += sheetRate * dt;
-    const nDrops = Math.floor(this.accBow);
-    const nSheet = Math.floor(this.accSheet);
+    let nDrops = Math.floor(this.accBow);
+    let nSheet = Math.floor(this.accSheet);
     this.accBow -= nDrops;
     this.accSheet -= nSheet;
+    // The bow is the most important emitter, so it gets first call on the
+    // frame's budget, but it still must not overrun it.
+    const room = p.room;
+    if (nDrops + nSheet > room) {
+      nSheet = Math.min(nSheet, Math.max(1, room >> 3));
+      nDrops = Math.max(0, room - nSheet);
+    }
     if (nDrops === 0 && nSheet === 0) return;
 
     const stag = (ctx.speed * ctx.speed) / 19.62;
@@ -153,7 +167,7 @@ export class Spray {
 
     const power = clamp01((mag - g * 0.55) / (g * 2.2));
     const sN = Math.max(ctx.speedN, 0.12);
-    const n = Math.floor((90 + 420 * power) * (0.4 + sN) * d);
+    const n = Math.min(Math.floor((90 + 420 * power) * (0.4 + sN) * d), p.room);
     const stag = (ctx.speed * ctx.speed) / 19.62;
 
     ctx.toWorld(_local.set(0, 0, -HULL.lwl * 0.5 + 1.5), _c);
@@ -198,8 +212,9 @@ export class Spray {
     const rudder = Math.abs(ctx.rudder);
     const drive = Math.pow(sN, 2.4) * (1 + rudder * 1.6);
     this.accStern += 700 * drive * d * dt;
-    const n = Math.floor(this.accStern);
+    let n = Math.floor(this.accStern);
     this.accStern -= n;
+    n = Math.min(n, p.room);
 
     for (let i = 0; i < n; i++) {
       const across = (Math.random() * 2 - 1) * ctx.world.ship.beam * 0.42 - ctx.rudder * 3.0;
@@ -227,8 +242,9 @@ export class Spray {
     const sN = ctx.speedN;
     if (sN < 0.14) return;
     this.accFleck += 900 * Math.pow(sN, 1.6) * d * dt;
-    const n = Math.floor(this.accFleck);
+    let n = Math.floor(this.accFleck);
     this.accFleck -= n;
+    n = Math.min(n, p.room);
 
     const beam = ctx.world.ship.beam;
     for (let i = 0; i < n; i++) {
@@ -263,11 +279,11 @@ export class Spray {
     const w = ctx.windSpeed;
     if (w < SPINDRIFT_ONSET) return;
     const f = smoothstep(SPINDRIFT_ONSET, SPINDRIFT_FULL, w);
-    this.accDrift += 5200 * f * f * d * dt;
+    this.accDrift += 2400 * f * f * d * dt;
     let n = Math.floor(this.accDrift);
     this.accDrift -= n;
     if (n === 0) return;
-    n = Math.min(n, 420);
+    n = Math.min(n, 260, p.room);
 
     const res = probe.res;
     const cells = res * res;
@@ -298,42 +314,56 @@ export class Spray {
       _b.x += (Math.random() - 0.5) * 2.2;
       _b.z += (Math.random() - 0.5) * 2.2;
 
-      const streak = Math.random() < 0.55;
+      // Spindrift is overwhelmingly *streaks* — long thin ribbons of torn foam
+      // running downwind off the crest. Only a small fraction atomises into a
+      // cloud, and it stays small: fat mist puffs read as weather, not as sea.
+      const streak = Math.random() < 0.86;
       p.spawn(
         px, py, pz, _b.x, _b.y, _b.z,
-        streak ? 0.8 + Math.random() * 1.4 : 1.6 + Math.random() * 2.6,
-        streak ? 0.10 + Math.random() * 0.35 : 0.8 + Math.random() * 2.4,
+        streak ? 0.7 + Math.random() * 1.1 : 1.2 + Math.random() * 1.6,
+        streak ? 0.08 + Math.random() * 0.24 : 0.45 + Math.random() * 1.0,
         streak ? KIND.SPINDRIFT : KIND.MIST,
-        streak ? 1.6 + Math.random() * 2.5 : 2.6 + Math.random() * 2.0,
+        streak ? 1.8 + Math.random() * 2.6 : 3.0 + Math.random() * 2.0,
       );
     }
   }
 
-  /** Sea smoke hanging in the troughs once it is really blowing. */
+  /**
+   * Sea smoke hanging in the troughs once it is really blowing.
+   *
+   * Deliberately sparse and low. This used to spawn 5 m puffs that inflate to
+   * 15 m within 12 m of the lens, which filled the whole lower frame with an
+   * opaque bank of cloud; the effect only works as a thin veil that lets the
+   * wave structure through.
+   */
   private troughMist(ctx: VfxCtx, p: Particles, probe: WaterProbe, dt: number, d: number): void {
     const w = ctx.windSpeed;
     const f = smoothstep(14, 26, w) * (0.45 + 0.55 * clamp01(ctx.world.env.waveHeight / 6));
     if (f < 0.01) return;
-    this.accMist += 460 * f * d * dt;
-    const n = Math.floor(this.accMist);
+    this.accMist += 130 * f * d * dt;
+    let n = Math.floor(this.accMist);
     this.accMist -= n;
+    n = Math.min(n, p.room);
     if (n === 0) return;
 
     const cam = ctx.world.camera.position;
+    const trough = -ctx.world.env.waveHeight * 0.14;
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2;
-      const r = 12 + Math.pow(Math.random(), 0.6) * 150;
+      // Keep it off the lens: nothing inside 30 m, most of it in the middle
+      // distance where it reads as haze lying in the troughs.
+      const r = 30 + Math.pow(Math.random(), 0.45) * 170;
       const px = cam.x + Math.cos(ang) * r;
       const pz = cam.z + Math.sin(ang) * r;
       const wy = probe.heightAt(px, pz);
       // Only the troughs hold mist; crests are swept clean.
-      if (wy > -ctx.world.env.waveHeight * 0.08) continue;
+      if (wy > trough) continue;
       _b.copy(ctx.windVel).multiplyScalar(0.55 + Math.random() * 0.3);
-      _b.y += Math.random() * 0.6;
+      _b.y += Math.random() * 0.35;
       p.spawn(
-        px, wy + 0.4 + Math.random() * 1.6, pz, _b.x, _b.y, _b.z,
-        3.5 + Math.random() * 4.5,
-        2.5 + Math.random() * 5.0,
+        px, wy + 0.3 + Math.random() * 0.9, pz, _b.x, _b.y, _b.z,
+        3.0 + Math.random() * 3.0,
+        1.1 + Math.random() * 2.2,
         KIND.MIST, 1.2 + Math.random(),
       );
     }

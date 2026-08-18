@@ -22,14 +22,19 @@ export class VfxWeather implements Module {
 
   init(_world: World): void {}
 
-  update(_world: World): void {
+  update(world: World): void {
     const s = this.s;
     if (!s.ready) return;
     const ctx = s.ctx;
+    const st = world.settings.debug ? world.stats : null;
+    let t = st ? performance.now() : 0;
+    let n = 0;
 
     this.ordnance.update(ctx, s.particles, s.probe, s.wake);
+    if (st) { n = performance.now(); st['vfx:ord'] = n - t; t = n; }
 
     s.particles.end(ctx, s.probe);
+    if (st) { n = performance.now(); st['vfx:pool'] = n - t; }
   }
 
   applySettings(_world: World): void {}

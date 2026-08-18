@@ -26,6 +26,8 @@ export class HullWater {
   private skirtMat!: THREE.RawShaderMaterial;
   private waterPort = new THREE.Vector3();
   private waterStbd = new THREE.Vector3();
+  /** Hoisted so `update` allocates nothing — see AGENTS.md. */
+  private mats: THREE.RawShaderMaterial[] = [];
 
   init(world: World, foamTex: THREE.Texture): void {
     const lwl = HULL.lwl;
@@ -85,6 +87,8 @@ export class HullWater {
       blendSrc: THREE.OneFactor,
       blendDst: THREE.OneMinusSrcAlphaFactor,
     });
+
+    this.mats = [this.sheetMat, this.skirtMat];
 
     this.sheet = new THREE.Mesh(this.buildSheet(), this.sheetMat);
     this.sheet.frustumCulled = false;
@@ -195,11 +199,9 @@ export class HullWater {
     // Convert the real sea surface at six stations into ship-local Y so the
     // sheet and the boot top ride the actual water, not y = 0.
     _invShip.copy(ctx.shipMatrix).invert();
-    const stations: [number, THREE.Vector3][] = [
-      [-1, this.waterPort],
-      [1, this.waterStbd],
-    ];
-    for (const [side, out] of stations) {
+    for (let s = 0; s < 2; s++) {
+      const side = s === 0 ? -1 : 1;
+      const out = s === 0 ? this.waterPort : this.waterStbd;
       for (let k = 0; k < 3; k++) {
         const t = k * 0.5;
         const hb = ctx.halfBeam(t) * 0.9;
@@ -214,8 +216,8 @@ export class HullWater {
     this.sheet.visible = visible;
     this.skirt.visible = visible || ctx.wetness > 0.05;
 
-    for (const m of [this.sheetMat, this.skirtMat]) {
-      const u = m.uniforms;
+    for (let i = 0; i < this.mats.length; i++) {
+      const u = this.mats[i].uniforms;
       u.uSpeed.value = ctx.speed;
       u.uSpeedN.value = ctx.speedN;
       u.uHeel.value = ctx.heel;

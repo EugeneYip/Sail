@@ -9,7 +9,7 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
  *   T1  xyz = velocity m/s,   w = total lifetime
  *   T2  x = base size (m), y = kind, z = seed, w = wind drag coefficient
  *
- * Emission is a second, tiny pass: a `THREE.Points` draw straight into the same
+ * Emission is a second, tiny pass: a 'THREE.Points' draw straight into the same
  * MRT, one point per new particle, at the destination texel. That keeps the
  * whole system to two passes plus one draw, whatever the particle count.
  */
@@ -220,11 +220,12 @@ void main(){
   float kind = A.y;
   vKind = kind; vSeed = A.z; vLt = lt;
 
-  // Size lifecycle. Droplets barely change; mist and smoke inflate hard.
+  // Size lifecycle. Droplets barely change; smoke inflates hard. Mist used to
+  // triple, which turned spindrift into a bank of cumulus at the waterline.
   float grow = 1.0;
-  if (kind > 1.5 && kind < 2.5) grow = 0.35 + 2.6 * pow(lt, 0.55);
-  else if (kind > 0.5 && kind < 1.5) grow = 0.5 + 1.5 * pow(lt, 0.6);
-  else if (kind > 2.5 && kind < 3.5) grow = 0.6 + 1.5 * lt;
+  if (kind > 1.5 && kind < 2.5) grow = 0.45 + 1.35 * pow(lt, 0.6);
+  else if (kind > 0.5 && kind < 1.5) grow = 0.5 + 1.2 * pow(lt, 0.6);
+  else if (kind > 2.5 && kind < 3.5) grow = 0.6 + 1.1 * lt;
   else if (kind > 4.5 && kind < 5.5) grow = 0.6 + 2.2 * lt;
   else if (kind > 7.5) grow = 0.30 + 2.9 * pow(lt, 0.5);
   float size = A.x * grow;
@@ -248,8 +249,10 @@ void main(){
   vec2 d = vv.xy;
   float dl = length(d);
   vec2 axis = dl > 1e-4 ? d / dl : vec2(0.0, 1.0);
-  float stretchAmt = (kind < 1.5 || (kind > 2.5 && kind < 3.5)) ? uStretch : uStretch * 0.25;
-  float stretch = 1.0 + min(dl * stretchAmt / max(size, 0.02), 6.0);
+  bool drift = kind > 2.5 && kind < 3.5;
+  float stretchAmt = drift ? uStretch * 2.2 : (kind < 1.5 ? uStretch : uStretch * 0.25);
+  // Spindrift is a ribbon, not a blob: let it draw out much further than spray.
+  float stretch = 1.0 + min(dl * stretchAmt / max(size, 0.02), drift ? 14.0 : 6.0);
 
   vec2 off = vec2(position.x * size, position.y * size * stretch);
   vec2 o = vec2(off.x * axis.y + off.y * axis.x, -off.x * axis.x + off.y * axis.y);
@@ -293,7 +296,10 @@ varying float vFacing;
 
 void main(){
   float kind = vKind;
-  bool hard = kind < 1.5 || (kind > 3.5 && kind < 4.5) || (kind > 5.5 && kind < 7.5);
+  // DROPLET, FLECK, MOTE and GLITTER are discrete bodies of water and use the
+  // droplet sprite. SHEET is torn cloth of water, not a drop, so it shades with
+  // the mist path.
+  bool hard = kind < 0.5 || (kind > 3.5 && kind < 4.5) || (kind > 5.5 && kind < 7.5);
   bool smoke = kind > 7.5;
   vec4 tx = smoke ? texture2D(tSmoke, vUv)
                   : (hard ? texture2D(tDroplet, vUv) : texture2D(tMist, vUv));
@@ -304,8 +310,16 @@ void main(){
   float rim = hard ? tx.g : 0.0;
   float pip = hard ? tx.b : 0.0;
 
-  vec3 sun = uSunColor * uSunIntensity;
+  // RADIOMETRY (see the units contract in src/sky/constants.ts).
+  // uSunIntensity / uMoonIntensity are IRRADIANCE and owe the material a 1/PI;
+  // uSkyColor / uFogColor are RADIANCE and must not be divided again. 'sun' is
+  // therefore pre-divided here and every use below multiplies it raw — leaving
+  // the INV_PI off made spray and foam PI x too bright and, because foam is the
+  // brightest large object in frame, it dragged auto-exposure down over the
+  // whole image.
+  vec3 sun = uSunColor * uSunIntensity * INV_PI;
   vec3 sky = uSkyColor;
+  vec3 moon = uMoonColor * uMoonIntensity * INV_PI;
 
   // Water droplets are dielectric spheres: they scatter forward very strongly,
   // pick up a bright Fresnel rim, and carry a hot specular pip. The forward
@@ -324,9 +338,10 @@ void main(){
     return;
   }
   if (kind > 6.5 && kind < 7.5) {
-    // Sun glitter: a tiny specular chip on the surface.
+    // Sun glitter: a tiny specular chip on the surface. A mirror facet returns
+    // sun *radiance*, not irradiance/PI, so this one is legitimately hot.
     float g = pow(saturate1(vFacing), 2.0);
-    col = sun * (0.045 + 0.5 * g) * (0.5 + pip);
+    col = sun * (0.15 + 1.6 * g) * (0.5 + pip);
     gl_FragColor = vec4(col * cover * vAlpha, 0.0);
     return;
   }
@@ -337,26 +352,28 @@ void main(){
     float dens = 1.0 - 0.55 * vLt;
     float ss = pow(fwd, 2.2) * 0.55 + 0.16;
     vec3 albedo = mix(vec3(0.90, 0.89, 0.86), vec3(0.42, 0.43, 0.47), vLt * 0.7);
-    col = albedo * (sun * INV_PI * (0.10 + 0.55 * ss * (1.0 - thick * 0.6))
+    col = albedo * (sun * (0.10 + 0.55 * ss * (1.0 - thick * 0.6))
                     + sky * (0.55 + 0.35 * (1.0 - thick)));
-    col += uMoonColor * uMoonIntensity * 0.05;
+    col += moon * 0.16;
     a *= dens * 0.85;
   } else if (hard) {
     float wrap = 0.42 + 0.58 * saturate1(uSunDirection.y * 1.6 + 0.15);
-    col = sun * INV_PI * wrap * (0.55 + 0.9 * thick) * spectral;
-    col += sun * lobe * thick * 0.10 * spectral;
-    col += sky * (0.7 + 0.9 * rim);
-    col += sun * pip * 0.35;
-    if (kind > 3.5 && kind < 4.5) col = mix(col, sky * 1.1 + sun * INV_PI * 0.8, 0.5);
-    col += uMoonColor * uMoonIntensity * 0.08;
+    col = sun * wrap * (0.55 + 0.9 * thick) * spectral;
+    col += sun * lobe * thick * 0.42 * spectral;
+    // Sky fill on a scatterer can never exceed the radiance arriving at it.
+    col += sky * (0.42 + 0.5 * rim);
+    // Specular pip: a curved mirror of the disc, so scaled against radiance.
+    col += sun * pip * 1.3;
+    if (kind > 3.5 && kind < 4.5) col = mix(col, sky * 0.85 + sun * 0.85, 0.5);
+    col += moon * 0.25;
   } else {
     // Mist / torn sheet: an optically thin scattering slab.
     float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.3 + 0.25);
-    col = sun * INV_PI * wrap * (0.4 + 0.6 * thick) * spectral;
-    col += sun * lobe * 0.14 * (1.0 - thick * 0.5) * spectral;
-    col += sky * 1.05;
-    col += uMoonColor * uMoonIntensity * 0.08;
-    a *= 0.62;
+    col = sun * wrap * (0.4 + 0.6 * thick) * spectral;
+    col += sun * lobe * 0.5 * (1.0 - thick * 0.5) * spectral;
+    col += sky * 0.8;
+    col += moon * 0.25;
+    a *= 0.5;
   }
 
   // Soft against the water: fade as the sprite approaches the real surface, so
@@ -367,11 +384,18 @@ void main(){
   a *= smoothstep(0.4, 1.6, vViewZ);
 
 #ifdef VFX_DEPTH_SOFT
-  // Soft against everything else, when the post stack hands us a depth buffer.
+  // Soft against everything else. 'tDepth' is post's standalone 'sceneDepth'
+  // copy — last frame's non-linear window depth, safe to sample inside the
+  // scene pass (sampling the live attachment forms a feedback loop and the
+  // driver drops the draw). Without this, spray shows a hard cut line wherever
+  // it crosses the sea surface or the hull.
   float dz = texture2D(tDepth, gl_FragCoord.xy * uInvRes).r;
   float n = uNearFar.x, f = uNearFar.y;
   float sceneZ = (2.0 * n * f) / (f + n - (dz * 2.0 - 1.0) * (f - n));
-  a *= saturate1((sceneZ - vViewZ) / (smoke ? 3.0 : 1.2));
+  // Fade band scales with distance: at range a metre is sub-pixel, and a fixed
+  // band there just makes far spray vanish.
+  float band = (smoke ? 3.0 : 1.1) * (1.0 + vViewZ * 0.02);
+  a *= saturate1((sceneZ - vViewZ) / band);
 #endif
 
   vec3 view = normalize(vWorld - uCameraPos);

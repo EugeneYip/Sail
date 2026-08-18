@@ -8,7 +8,7 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
  * wrapped around the camera every frame, so drops stay put in the world and
  * parallax correctly — the box only ever re-homes a drop as it leaves the
  * far edge, where it is already faded out. The fall offset is pre-wrapped on
- * the CPU so `uTime * speed` never grows large enough to lose precision.
+ * the CPU so 'uTime * speed' never grows large enough to lose precision.
  *
  * A small fraction of instances are flagged as the near layer: a tiny box a
  * couple of metres across, with much larger, much softer sprites. That is the
@@ -31,7 +31,10 @@ uniform vec3  uOffsetNear;  // ditto for the near layer's much smaller box
 uniform vec3  uVel;         // rain velocity, m/s, world
 uniform float uShear;       // extra horizontal drift per metre of height
 uniform float uWidth;       // streak half-width, metres
-uniform float uExposure;    // streak length in seconds of "shutter"
+// Shutter time, seconds — NOT the shared uExposure, which is already declared
+// by SHARED_UNIFORM_DECL above. Naming it uExposure here redeclared the uniform
+// and the shader never compiled.
+uniform float uShutter;
 uniform float uNearFrac;    // fraction of instances assigned to the near layer
 
 varying vec2  vUv;
@@ -61,7 +64,7 @@ void main(){
   vec2 axis = normalize(vd.xy + vec2(1e-5, -1e-5));
 
   float halfW = uWidth * mix(1.0, 6.5, near);
-  float halfL = 0.5 * length(uVel) * uExposure * mix(1.0, 0.55, near) + halfW;
+  float halfL = 0.5 * length(uVel) * uShutter * mix(1.0, 0.55, near) + halfW;
   vec2 off = vec2(position.x * halfW, position.y * halfL);
   mv.xy += vec2(off.x * axis.y + off.y * axis.x, -off.x * axis.x + off.y * axis.y);
   gl_Position = projectionMatrix * mv;
@@ -87,11 +90,15 @@ void main(){
   float a = cover * vFade * uIntensity * mix(0.5, 0.16, vNear);
   if (a < 0.003) discard;
 
-  // A rain streak is a lens: it is mostly a smeared image of whatever is
-  // behind and above it, which in practice means the sky and the sun.
-  vec3 col = uSkyColor * 1.25 + uFogColor * 0.65;
-  col += uSunColor * uSunIntensity * INV_PI * 0.09 * mix(t.r, 0.3, vNear);
-  col += uMoonColor * uMoonIntensity * 0.12;
+  // A rain streak is a lens: it is mostly a smeared image of whatever is behind
+  // and above it, which in practice means the sky and the horizon. It cannot be
+  // BRIGHTER than what it is imaging, so the two radiance weights sum to ~1 —
+  // the old 1.25/0.65 pair was compensating for a sky that used to be 13x too
+  // dark, and clips now that uFogColor really is horizon radiance (0.5..1.6 at
+  // noon). uSunIntensity is irradiance and owes the 1/PI.
+  vec3 col = uSkyColor * 0.42 + uFogColor * 0.52;
+  col += uSunColor * uSunIntensity * INV_PI * 0.30 * mix(t.r, 0.3, vNear);
+  col += uMoonColor * uMoonIntensity * INV_PI * 0.4;
   gl_FragColor = vec4(col * a, a);
 }
 `;
@@ -108,7 +115,7 @@ void main(){
  * beads are lit rather than refractive: a bright Fresnel ring, a dim body
  * carrying sky colour, and a hot specular pip toward the sun. Against a dark
  * storm sky that is exactly what water on glass looks like. Deliberately
- * sparse; the effect dies completely below `rain ~ 0.4`.
+ * sparse; the effect dies completely below 'rain ~ 0.4'.
  */
 export const lensVert = /* glsl */ `
 precision highp float;
@@ -173,12 +180,15 @@ void main(){
   vec3 n = normalize(vec3(b.xy, sqrt(max(0.02, 1.0 - rn * rn)) * 1.25));
   float fres = pow(1.0 - saturate1(n.z), 2.2);
 
-  vec3 col = uSkyColor * (0.35 + 0.9 * fres) + uFogColor * 0.35;
+  // Same rule as the streaks: a bead images the sky, so the radiance weights
+  // stay at or below 1 in total. 'uFogColor' is horizon radiance, not a tint.
+  vec3 col = uSkyColor * (0.22 + 0.5 * fres) + uFogColor * 0.30;
   if (uSunUv.x > -0.5){
     vec2 sd = (vUv - uSunUv) * uAspect - n.xy * 0.06;
-    col += uSunColor * uSunIntensity * INV_PI * 0.5 * exp(-dot(sd, sd) * 40.0) * (0.3 + fres);
+    // A bead focusing the disc is a curved mirror: scaled against radiance.
+    col += uSunColor * uSunIntensity * INV_PI * 2.0 * exp(-dot(sd, sd) * 40.0) * (0.3 + fres);
   }
-  col += uMoonColor * uMoonIntensity * 0.25 * fres;
+  col += uMoonColor * uMoonIntensity * INV_PI * 0.8 * fres;
 
   float a = m * uIntensity * (0.16 + 0.5 * fres);
   gl_FragColor = vec4(col * a, a);

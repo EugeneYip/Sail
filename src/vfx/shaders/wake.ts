@@ -3,8 +3,8 @@ import { GLSL } from '../../util/glsl';
 /**
  * Shaders that write the world-anchored wake field.
  *
- * The field is a torus: `uv = fract((worldXZ - anchor) / size)`. The anchor only
- * ever moves in whole multiples of `size`, so the mapping is invariant and the
+ * The field is a torus: 'uv = fract((worldXZ - anchor) / size)'. The anchor only
+ * ever moves in whole multiples of 'size', so the mapping is invariant and the
  * buffer never has to be resampled — no accumulated bilinear smear, and a
  * floating-origin shift costs nothing.
  */
@@ -70,11 +70,13 @@ void main(){
   fetchTrack(aRow, t0, t1, t2);
 
   float xi = max(uSNow - t0.z, 0.0);
-  // Half-width must always exceed the 19.47 deg cusp (tan = 0.3536) so the
-  // caustic is never clipped, but must also stay inside the local turn radius
-  // or the ribs fold over on the inside of a turn.
+  // Half-width must comfortably exceed the 19.47 deg cusp (tan = 0.35355) so
+  // there is room to feather the rib edge to zero OUTSIDE the arms — a hard rib
+  // boundary anywhere near the cusp shows up as a straight dark line drawn
+  // across the sea. It must also stay inside the local turn radius or the ribs
+  // fold over on the inside of a turn.
   // Named halfW because half is a reserved word in GLSL ES.
-  float halfW = min(7.0 + 0.42 * xi, t1.w);
+  float halfW = min(10.0 + 0.62 * xi, t1.w);
   vec2 tang = t1.xy;
   vec2 perp = vec2(tang.y, -tang.x);
   vec2 p = t0.xy + perp * (aSide * halfW);
@@ -85,9 +87,10 @@ void main(){
   vSpeed = t0.w;
   vHeel = t1.z;
   vRudder = t2.x;
-  // Fade at the tail of the ribbon, and by absolute age so a ship that stops
-  // still sees its wake dissipate.
-  vFade = t2.y * (1.0 - smoothstep(uMaxXi * 0.7, uMaxXi, xi)) * exp(-t2.z / uWakeLife);
+  // Fade at the tail of the ribbon, at its lateral edge, and by absolute age so
+  // a ship that stops still sees its wake dissipate.
+  float edge = 1.0 - smoothstep(0.86, 1.0, abs(aSide));
+  vFade = t2.y * edge * (1.0 - smoothstep(uMaxXi * 0.7, uMaxXi, xi)) * exp(-t2.z / uWakeLife);
   vWorld = p;
 
   vec2 uv = (p - uAnchor) / uWakeSize + uUvOffset;
@@ -123,6 +126,14 @@ vec3 kelvinSource(float xi, float eta, float k0, float hs){
   float r = sqrt(xi * xi + eta * eta);
   // 1/sqrt(|phi''|): the roots merge on the cusp line, giving the bright arms.
   float caustic = pow(xi * xi / max(disc, 0.014 * xi * xi), 0.25);
+  // Stationary phase is singular ON the cusp and simply undefined outside it, so
+  // the raw solution steps from caustic x amp straight to zero across the cusp
+  // line. That step is a hard 19.47 deg crease in both elevation and slope and
+  // it read as two straight dark lines ruled across the water either side of the
+  // ship. The true field decays as an Airy tail; a smooth window over the last
+  // stretch of 'disc' reproduces the peak-just-inside-the-cusp look with a
+  // continuous outer edge, which is what an Airy function actually does.
+  caustic *= smoothstep(0.0, 1.0, disc / (0.11 * xi * xi));
   float spread = 1.0 / sqrt(1.0 + k0 * r * 0.5);
 
   vec3 acc = vec3(0.0);
@@ -210,30 +221,50 @@ void main(){
   float detail = fd.g * 0.55 + fd2.r * 0.45;
   float bubble = fd2.a * 0.6 + fd.r * 0.4;
 
-  // 1. Froth clinging to the wetted hull, strongest at the shoulder.
+  // WHY THE WEIGHTS BELOW LOOK LOPSIDED.
+  // This channel is MAX-blended into a persistent buffer, so what survives at a
+  // world point is the LARGEST value ever written there, not the value at the
+  // current xi. A term centred on the track (hull froth, turbulent core) is
+  // therefore recorded at its xi ~ 0 amplitude and then held for the whole life
+  // of the trail, while a term that lives on the cusp line only ever fires as
+  // that line sweeps outward past the point. Centre-line terms consequently
+  // paint a uniform slab and must be kept narrow and dim; the arms cost nothing
+  // and are what actually makes the wake read as a Kelvin V.
+
+  // 1. Froth clinging to the wetted hull. A BAND along the topsides, not a
+  //    filled footprint — filling it is what produced a solid white wedge.
   float hullT = linstep(uLwl * 1.06, 0.0, xi);
   float hbLocal = uBeam * 0.5 * pow(sin(PI * pow(saturate1(xi / uLwl), 0.58)), 0.62) + 0.7;
-  float hullBand = exp(-sq(max(aeta - hbLocal, 0.0) / 2.6));
+  float hullBand = exp(-sq((aeta - hbLocal) / 2.3));
   float hullFoam = hullBand * hullT * (0.55 + 0.45 * hullT);
   // A heeled ship buries the lee bow and throws far more water that side.
   float lee = sign(vHeel) * sign(eta);
   hullFoam *= 1.0 + lee * min(abs(vHeel) * 3.4, 0.85);
 
-  // 2. Turbulent core the hull drags behind it. Deflected by the rudder.
+  // 2. Turbulent core the hull drags behind it. Deflected by the rudder. Narrow
+  //    (roughly the beam), and torn into streaks rather than laid on solid.
   float washOff = -vRudder * 5.5 * linstep(uLwl * 0.75, uLwl + 45.0, xi);
-  float coreW = uBeam * 0.42 + 1.4 + xi * 0.055;
-  float core = exp(-pow(abs(eta - washOff) / coreW, 2.1));
-  float coreLife = exp(-xi / uCoreLen);
-  float coreFoam = core * coreLife * (0.85 + 0.5 * detail);
+  float coreW = uBeam * 0.34 + 0.8 + xi * 0.022;
+  float core = exp(-pow(abs(eta - washOff) / coreW, 2.4));
+  float coreLife = exp(-xi / (uCoreLen * 0.55));
+  float coreFoam = core * coreLife * saturate1(0.35 + 1.05 * detail);
 
-  // 3. Breaking crests. Divergent arms break near the caustic; transverse
-  //    crests only break close astern where they are still steep.
+  // 3. Breaking crests. The divergent arms break along the cusp; transverse
+  //    crests break only close astern where they are still steep.
   float steep = length(slopeLocal) / max(amp, 1e-3);
-  float crest = linstep(0.16, 0.5, steep) * step(0.0, kel.x);
+  float crest = linstep(0.14, 0.42, steep) * step(0.0, kel.x);
   float cuspN = aeta / max(xi, 1.0) / 0.35355;            // 1 exactly on the cusp
-  float cuspBand = exp(-sq((cuspN - 1.0) / 0.16));
-  float armFoam = cuspBand * exp(-xi / (uCoreLen * 1.9)) * (0.5 + 0.7 * bubble);
-  float crestFoam = crest * exp(-xi / (uCoreLen * 1.2)) * 0.7;
+  // Sit the band just INSIDE the cusp, where the Airy peak actually is.
+  float cuspBand = exp(-sq((cuspN - 0.94) / 0.20));
+  // Along the cusp the divergent phase advances at 0.9186 * k0 per metre, so the
+  // arms are a row of separate crescents about 0.70 * V^2 metres apart, not a
+  // painted line. That periodicity is the single strongest "this is a real ship
+  // wake" cue in the whole effect.
+  float armPhase = 0.9186 * k0 * xi;
+  float crescent = 0.35 + 0.65 * pow(saturate1(cos(armPhase) * 0.5 + 0.5), 1.6);
+  float armFoam = cuspBand * crescent * exp(-xi / (uCoreLen * 2.4))
+                  * (0.45 + 0.75 * bubble);
+  float crestFoam = crest * exp(-xi / (uCoreLen * 0.9)) * (0.5 + 0.6 * detail);
 
   // 4. The rudder itself sheds a short, ragged, very white wash.
   float rudW = 1.6 + xi * 0.09;
@@ -242,8 +273,8 @@ void main(){
   float rudFoam = rud * min(abs(vRudder) * 3.0, 1.0) * (0.4 + 0.9 * detail);
 
   float gate = smoothstep(0.05, 0.30, uSpeedN);
-  float foam = hullFoam * 1.15 + coreFoam * 1.0 + armFoam * 0.75 +
-               crestFoam * 0.6 + rudFoam * 0.9;
+  float foam = hullFoam * 0.85 + coreFoam * 0.60 + armFoam * 0.95 +
+               crestFoam * 0.55 + rudFoam * 0.8;
   foam *= gate * vFade;
   // Chop tears the wake apart faster.
   foam *= mix(1.0, 0.72, uChop);

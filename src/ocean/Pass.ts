@@ -6,6 +6,9 @@ import * as THREE from 'three';
  * per-frame allocation.
  */
 export class FullScreenPass {
+  /** Passes issued since the last reset. Debug only. */
+  static count = 0;
+
   private static scene: THREE.Scene | null = null;
   private static mesh: THREE.Mesh | null = null;
   private static camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -34,6 +37,7 @@ export class FullScreenPass {
     target: THREE.WebGLRenderTarget | null,
   ): void {
     const { scene, mesh } = FullScreenPass.ensure();
+    FullScreenPass.count++;
     mesh.material = material;
     const prevTarget = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;

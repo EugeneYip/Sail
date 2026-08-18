@@ -149,7 +149,9 @@ export function buildHull(bins: Bins, quality: number): HullResult {
         },
         (i, j) => [uLen[i][run.lo + j] / TILE_ALONG, (vLen[i][run.lo + j] / TILE_ACROSS) * side],
         {
-          flip: side < 0,
+          // cross(d/di, d/dj) on this grid points INBOARD, so the outboard
+          // planking has to be flipped on the starboard side, not the port one.
+          flip: side > 0,
           skip: (i, j) => cut[i][run.lo + j] === 1,
           colorFn: (i, j, c) => hullColor(stations[i].t, run.lo + j, side, ports, c),
         },
@@ -341,17 +343,35 @@ function buildPortLiner(
   const e0 = new THREE.Vector3();
   const e1 = new THREE.Vector3();
 
+  // A liner is a short tunnel, so every one of its faces looks in at the
+  // aperture. Aiming at the aperture centre gets the sill, head and both jambs
+  // right in one rule instead of four hand-chosen vertex orders that only
+  // happened to be correct on one side of the ship.
+  const aim = new THREE.Vector3();
+  {
+    const mid = ((i0 + i1) / 2) | 0;
+    const jm = (jLo + jHi) >> 1;
+    inner(mid, jm, a);
+    outer(mid, jm, bb);
+    aim.addVectors(a, bb).multiplyScalar(0.5);
+  }
+  const ctr = new THREE.Vector3();
+
   const quadFrom = (
     fa: (o: THREE.Vector3) => void, fb: (o: THREE.Vector3) => void,
     fc: (o: THREE.Vector3) => void, fd: (o: THREE.Vector3) => void,
   ) => {
     fa(a); fb(bb); fc(cc); fd(dd);
     n.crossVectors(e0.subVectors(bb, a), e1.subVectors(cc, a)).normalize();
+    ctr.copy(a).add(bb).add(cc).add(dd).multiplyScalar(0.25);
+    const flip = n.dot(e0.subVectors(aim, ctr)) < 0;
+    if (flip) n.negate();
     const i0v = b.vert(a, n, 0, 0);
     const i1v = b.vert(bb, n, 0.5, 0);
     const i2v = b.vert(cc, n, 0.5, 0.5);
     const i3v = b.vert(dd, n, 0, 0.5);
-    b.quad(i0v, i1v, i2v, i3v);
+    if (flip) b.quad(i0v, i3v, i2v, i1v);
+    else b.quad(i0v, i1v, i2v, i3v);
   };
 
   // Sill and head: run along the columns so they follow the hull's sheer.
@@ -436,14 +456,14 @@ function buildKeel(bins: Bins): void {
       pts.length, 2,
       (i, j, out) => out.set(side * hw, pts[i].y + (j === 0 ? -hh : hh), pts[i].z),
       (i, j) => [pts[i].z / TILE_ALONG, j * 0.7],
-      { flip: side < 0 },
+      { flip: side > 0 },
     );
   }
   b.grid(
     pts.length, 2,
     (i, j, out) => out.set((j === 0 ? -hw : hw), pts[i].y - hh, pts[i].z),
     (i, j) => [pts[i].z / TILE_ALONG, j * 0.6],
-    { flip: false },
+    { flip: true },
   );
 }
 
@@ -482,7 +502,7 @@ function buildStem(bins: Bins, stations: Station[]): void {
           out.set(side * hw, y + (jj === 0 ? -0.55 : 0.0), z + (jj === 0 ? 0.5 : 0));
         },
         (ii, jj) => [ii * 1.2, jj * 0.5],
-        { flip: side < 0 },
+        { flip: side > 0 },
       );
     }
   }
@@ -681,6 +701,7 @@ function buildTransom(
         out.set(fx * (w + 0.1), y + 0.46 + j * 0.1, st.z + rake(y) + 0.3 * (1 - fx * fx) + (j - 0.5) * 0.26);
       },
       (i, j) => [i * 0.35, j * 0.35],
+      { flip: true },
     );
   }
 
@@ -706,7 +727,7 @@ function buildTransom(
         out.copy(s2);
       },
       (i, j) => [i * 0.3, j * 0.3],
-      { flip: side < 0 },
+      { flip: side > 0 },
     );
     glass.setColorHexLinear(0x7f95a8, 0.5);
     glass.box(side * (w + 0.42), yc + 0.3, Z_TRANSOM - 4.4, 0.06, 0.34, 0.5);
@@ -772,7 +793,8 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
       },
       (i, j) => [inner[i + iStart][j].z / TILE_ALONG, (j / (levels.length - 1)) * 1.6 * side],
       {
-        flip: side > 0,
+        // The inboard face of the bulwark looks in at the deck.
+        flip: side < 0,
         skip: (i, j) => cutIn[i + iStart][j] === 1,
         colorFn: (i, j, c) => {
           // Buff paint gets scuffed low down where gear and feet hit it.
@@ -828,7 +850,7 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
         out.set(side * (w + 0.06 + Math.sin(a) * r * 0.7), y + 0.46 + (1 - Math.cos(a)) * r, z);
       },
       (i, j) => [i * 0.4, j * 0.25],
-      { flip: side < 0, colorFn: (i, _j, c) => c.setScalar(0.9 + 0.14 * fract(Math.sin(i * 12.9898) * 43758.5453)) },
+      { flip: side > 0, colorFn: (i, _j, c) => c.setScalar(0.9 + 0.14 * fract(Math.sin(i * 12.9898) * 43758.5453)) },
     );
   }
 }
@@ -904,7 +926,7 @@ function buildDecks(bins: Bins, stations: Station[]): void {
         out.set(side * Math.max(0.3, st.widthAt(y) - HULL_THICK), y, zAt(t));
       },
       (i, j) => [zAt(0.08 + (i / 39) * 0.85) / TILE_ALONG, j * 0.6],
-      { flip: side > 0 },
+      { flip: side < 0 },
     );
   }
   // Underside of the spar deck.
@@ -954,6 +976,7 @@ function buildChannels(bins: Bins): void {
           out.set(side * (w + (j === 0 ? 0.02 : 0.92)), y + 0.06, z);
         },
         (i, j) => [i * 0.5, j * 0.5],
+        { flip: side < 0 },
       );
       b.grid(
         7, 2,
@@ -966,7 +989,7 @@ function buildChannels(bins: Bins): void {
           out.set(side * (w + (j === 0 ? 0.02 : 0.92)), y - 0.06, z);
         },
         (i, j) => [i * 0.5, j * 0.5],
-        { flip: true },
+        { flip: side > 0 },
       );
       // Outer edge with the deadeye score.
       b.grid(
@@ -980,7 +1003,7 @@ function buildChannels(bins: Bins): void {
           out.set(side * (w + 0.92), y + (j === 0 ? -0.06 : 0.28), z);
         },
         (i, j) => [i * 0.5, j * 0.5],
-        { flip: side < 0 },
+        { flip: side > 0 },
       );
       // Chainplates: iron straps from the channel down to the wale.
       ir.setColorHexLinear(0xffffff, 0.85);

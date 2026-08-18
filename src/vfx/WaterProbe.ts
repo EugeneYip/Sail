@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { World } from '../types';
+import type { IOcean, World } from '../types';
 
 /**
  * A coarse CPU-sampled height field of the sea around the ship, uploaded as a
@@ -18,7 +18,24 @@ import type { World } from '../types';
  *
  * Channels (RGBA16F): R = height (m), G = dH/dx, B = dH/dz, A = crest measure
  * (0 in a trough, 1 on a steep crest).
+ *
+ * PERFORMANCE. Every cell costs one `ocean.sampleHeight`, and the ocean's CPU
+ * wave sum is not cheap: a full 50x50 refresh measured 2.4-2.9 ms/frame on its
+ * own. Rows are therefore refreshed on an interleaved cycle — every `PHASES`-th
+ * row each frame — so two adjacent rows are never more than `PHASES - 1` frames
+ * apart in age. At 60 fps that is a sub-centimetre step between neighbouring
+ * rows even in a gale, and these consumers use the field for soft fades and
+ * crest picking, not for shading.
  */
+const PHASES = 3;
+
+/**
+ * Crest measure is built from surface curvature, which must be divided by the
+ * texel size squared or the number silently changes meaning whenever the grid
+ * does. This gain reproduces the original tuning at the original 4.4 m texel.
+ */
+const CREST_CURV_GAIN = 34.0;
+
 export class WaterProbe {
   /** Metres covered by the whole texture. */
   readonly worldSize: number;
@@ -32,6 +49,8 @@ export class WaterProbe {
   private data: Float32Array;
   private heights: Float32Array;
   private texel: number;
+  private phase = 0;
+  private primed = false;
 
   constructor(res = 32, worldSize = 240) {
     this.res = res;
@@ -56,37 +75,79 @@ export class WaterProbe {
   /** Height at a world XZ, bilinear from the cached grid. Cheap, no ocean call. */
   heightAt(x: number, z: number): number {
     const r = this.res;
+    const stride = r + 2;
     const fx = (x - this.origin.x) / this.texel - 0.5;
     const fz = (z - this.origin.y) / this.texel - 0.5;
     const ix = Math.floor(fx);
     const iz = Math.floor(fz);
     const tx = fx - ix;
     const tz = fz - iz;
-    const g = (cx: number, cz: number) => {
-      const qx = cx < -1 ? -1 : cx > r ? r : cx;
-      const qz = cz < -1 ? -1 : cz > r ? r : cz;
-      return this.heights[(qz + 1) * (r + 2) + (qx + 1)];
-    };
-    const a = g(ix, iz);
-    const b = g(ix + 1, iz);
-    const c = g(ix, iz + 1);
-    const d = g(ix + 1, iz + 1);
+    // Grid index is cell + 1 because of the guard ring; clamp to the ring.
+    const last = stride - 1;
+    const gx0 = ix < -1 ? 0 : ix > r ? last : ix + 1;
+    const gx1 = ix < -2 ? 0 : ix + 1 > r ? last : ix + 2;
+    const gz0 = (iz < -1 ? 0 : iz > r ? last : iz + 1) * stride;
+    const gz1 = (iz < -2 ? 0 : iz + 1 > r ? last : iz + 2) * stride;
+    const h = this.heights;
+    const a = h[gz0 + gx0];
+    const b = h[gz0 + gx1];
+    const c = h[gz1 + gx0];
+    const d = h[gz1 + gx1];
     return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+  }
+
+  /** Sample grid columns [i0, i1) of grid row `j` straight from the ocean. */
+  private sampleRow(ocean: IOcean, j: number, i0: number, i1: number): void {
+    const stride = this.res + 2;
+    const t = this.texel;
+    const wz = this.origin.y + (j - 0.5) * t;
+    const x0 = this.origin.x - 0.5 * t;
+    const row = j * stride;
+    const h = this.heights;
+    for (let i = i0; i < i1; i++) h[row + i] = ocean.sampleHeight(x0 + i * t, wz);
+  }
+
+  /**
+   * Slide the cached heights by a whole number of texels so a moving window
+   * keeps its samples instead of re-sampling the whole grid. Returns nothing;
+   * the caller re-samples the exposed border.
+   */
+  private shift(dix: number, diz: number): void {
+    const stride = this.res + 2;
+    const h = this.heights;
+    const rowStep = diz > 0 ? 1 : -1;
+    const jStart = diz > 0 ? 0 : stride - 1;
+    const jEnd = diz > 0 ? stride : -1;
+    for (let jd = jStart; jd !== jEnd; jd += rowStep) {
+      const js = jd + diz;
+      if (js < 0 || js >= stride) continue;
+      const dst = jd * stride;
+      const src = js * stride;
+      if (dix >= 0) h.copyWithin(dst, src + dix, src + stride);
+      else h.copyWithin(dst - dix, src, src + stride + dix);
+    }
   }
 
   update(world: World): void {
     const ocean = world.ocean;
     const r = this.res;
     const t = this.texel;
+    const stride = r + 2;
 
-    // Bias the window forward of the ship: that is where the bow spray, the
-    // bow wave and the oncoming crests all live.
     const cx = world.ship.position.x;
     const cz = world.ship.position.z;
-    this.origin.set(
-      Math.floor((cx - this.worldSize * 0.5) / t) * t,
-      Math.floor((cz - this.worldSize * 0.5) / t) * t,
-    );
+    const ox = Math.floor((cx - this.worldSize * 0.5) / t) * t;
+    const oz = Math.floor((cz - this.worldSize * 0.5) / t) * t;
+
+    let full = !this.primed || !ocean;
+    let dix = 0;
+    let diz = 0;
+    if (!full) {
+      dix = Math.round((ox - this.origin.x) / t);
+      diz = Math.round((oz - this.origin.y) / t);
+      if (Math.abs(dix) >= stride || Math.abs(diz) >= stride) full = true;
+    }
+    this.origin.set(ox, oz);
 
     const inv = 1 / this.worldSize;
     this.matrix.set(
@@ -95,37 +156,50 @@ export class WaterProbe {
       0, 0, 1,
     );
 
-    // One guard ring so central differences never read out of bounds.
-    const stride = r + 2;
-    if (ocean) {
-      for (let j = -1; j <= r; j++) {
-        const wz = this.origin.y + (j + 0.5) * t;
-        const row = (j + 1) * stride;
-        for (let i = -1; i <= r; i++) {
-          this.heights[row + i + 1] = ocean.sampleHeight(this.origin.x + (i + 0.5) * t, wz);
+    if (!ocean) {
+      this.heights.fill(0);
+    } else if (full) {
+      for (let j = 0; j < stride; j++) this.sampleRow(ocean, j, 0, stride);
+      this.primed = true;
+    } else {
+      if (dix !== 0 || diz !== 0) {
+        this.shift(dix, diz);
+        // Rows the row-shift left undefined, then columns the column-shift did.
+        const jNew0 = diz > 0 ? stride - diz : 0;
+        const jNew1 = diz > 0 ? stride : -diz;
+        for (let j = jNew0; j < jNew1; j++) this.sampleRow(ocean, j, 0, stride);
+        if (dix !== 0) {
+          const iNew0 = dix > 0 ? stride - dix : 0;
+          const iNew1 = dix > 0 ? stride : -dix;
+          for (let j = 0; j < stride; j++) {
+            if (j >= jNew0 && j < jNew1) continue;
+            this.sampleRow(ocean, j, iNew0, iNew1);
+          }
         }
       }
-    } else {
-      this.heights.fill(0);
+      // Interleaved refresh: every PHASES-th row, so neighbours stay in step.
+      for (let j = this.phase; j < stride; j += PHASES) this.sampleRow(ocean, j, 0, stride);
     }
+    this.phase = (this.phase + 1) % PHASES;
 
     const inv2t = 1 / (2 * t);
+    const invt2 = CREST_CURV_GAIN / (t * t);
+    const h = this.heights;
     for (let j = 0; j < r; j++) {
       const row = (j + 1) * stride;
       for (let i = 0; i < r; i++) {
-        const h = this.heights[row + i + 1];
-        const dx = (this.heights[row + i + 2] - this.heights[row + i]) * inv2t;
-        const dz = (this.heights[row + stride + i + 1] - this.heights[row - stride + i + 1]) * inv2t;
+        const c = h[row + i + 1];
+        const xp = h[row + i + 2];
+        const xm = h[row + i];
+        const zp = h[row + stride + i + 1];
+        const zm = h[row - stride + i + 1];
+        const dx = (xp - xm) * inv2t;
+        const dz = (zp - zm) * inv2t;
         // Curvature picks crests out of troughs; slope picks steep faces.
-        const lap =
-          this.heights[row + i + 2] +
-          this.heights[row + i] +
-          this.heights[row + stride + i + 1] +
-          this.heights[row - stride + i + 1] -
-          4 * h;
-        const crest = Math.max(0, Math.min(1, -lap * 1.8 + Math.hypot(dx, dz) * 0.9 - 0.05));
+        const lap = xp + xm + zp + zm - 4 * c;
+        const crest = Math.max(0, Math.min(1, -lap * invt2 + Math.hypot(dx, dz) * 0.9 - 0.05));
         const o = (j * r + i) * 4;
-        this.data[o] = h;
+        this.data[o] = c;
         this.data[o + 1] = dx;
         this.data[o + 2] = dz;
         this.data[o + 3] = crest;

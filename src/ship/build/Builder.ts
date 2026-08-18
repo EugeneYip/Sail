@@ -270,7 +270,10 @@ export class MeshBuilder {
     }
     for (let i = 0; i < n - 1; i++) {
       for (let k = 0; k < radial; k++) {
-        this.quad(ids[i][k], ids[i + 1][k], ids[i + 1][k + 1], ids[i][k + 1]);
+        // Wound so the face normal from the winding agrees with the stored
+        // outward normal — otherwise every spar is back-face culled and you
+        // see the inside of the tube shaded by a normal pointing away.
+        this.quad(ids[i][k], ids[i][k + 1], ids[i + 1][k + 1], ids[i + 1][k]);
       }
     }
     if (caps) {
@@ -337,7 +340,8 @@ export class MeshBuilder {
     }
     for (let i = 0; i < n - 1; i++) {
       for (let k = 0; k < segments; k++) {
-        this.quad(ids[i][k], ids[i][k + 1], ids[i + 1][k + 1], ids[i + 1][k]);
+        // Same winding correction as `tube`.
+        this.quad(ids[i][k], ids[i + 1][k], ids[i + 1][k + 1], ids[i][k + 1]);
       }
     }
   }

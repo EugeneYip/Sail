@@ -4,8 +4,12 @@ import { clamp01, smoothstep } from '../util/math';
 import { AtmosphereCpu } from './AtmosphereCpu';
 import {
   AIRGLOW,
+  CLOUD_LOW_BOTTOM_M,
+  CLOUD_LOW_TOP_M,
+  CLOUD_MULTISCATTER_GAIN,
   EARTHSHINE_FRACTION,
   GROUND_RADIUS_KM,
+  M_TO_KM,
   MIE_ABSORPTION,
   MIE_ANISOTROPY,
   MIE_SCALE_HEIGHT_KM,
@@ -27,6 +31,16 @@ import {
 const SH_SAMPLES = 48;
 const SH_PER_FRAME = 12;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+/** Cloud-deck optics, supplied by `CloudField`. All 0..1. */
+export interface CloudOptics {
+  /** Mean sun transmittance through the deck — the shadow map's spatial mean. */
+  beamTransmittance: number;
+  /** Fraction of the above-deck irradiance that arrives below as diffuse. */
+  diffuseTransmittance: number;
+  /** How much of the sky hemisphere the deck actually hides. */
+  skyOcclusion: number;
+}
 
 /**
  * Everything the rest of the game needs to know about the sky as NUMBERS: the
@@ -62,8 +76,15 @@ export class Radiometry {
     .copy(SOLAR_IRRADIANCE)
     .multiplyScalar(RADIANCE_SCALE);
 
-  /** Direct sun irradiance on a surface facing it, game units. */
+  /** Direct sun irradiance on a surface facing it, game units. Cloud-attenuated. */
   readonly sunIrradiance = new THREE.Vector3();
+  /**
+   * The same before the cloud deck takes its cut. The rendered sun DISC must use
+   * this: the volumetric clouds are drawn in front of it and do the occluding
+   * themselves, so dimming the disc by the deck's spatial mean as well would
+   * make the sun read wrong every time it shows through a gap.
+   */
+  readonly sunIrradianceClear = new THREE.Vector3();
   readonly sunColor = new THREE.Color(1, 1, 1);
   sunIntensity = 0;
 
@@ -99,11 +120,31 @@ export class Radiometry {
    */
   readonly sh = new Float32Array(27);
   private shAccum = new Float32Array(27);
+  /** The sweep's raw, cloud-free result; `sh` is derived from it every frame. */
+  private shClear = new Float32Array(27);
   private shCursor = 0;
+
+  /* --- cloud coupling ------------------------------------------------- *
+   * The volumetric deck is rendered on the GPU, but the numbers the rest of
+   * the game reads have to agree with it, so the same optics are mirrored
+   * here. `Clouds`/`CloudField` supplies the three scalars; everything else
+   * below is derived, and the derivation is the *only* place cloud cover is
+   * allowed to touch a published quantity.
+   * ------------------------------------------------------------------- */
+
+  /** Direction the clouds are lit from — the sun, or the moon after dark. */
+  readonly cloudLightDir = new THREE.Vector3(0, 1, 0);
+  /** Irradiance at deck altitude from that light, game units. */
+  readonly cloudLightIrradiance = new THREE.Vector3();
+  /** Isotropic ambient radiance a cloud top / base sees, gain already applied. */
+  readonly cloudAmbientTop = new THREE.Vector3();
+  readonly cloudAmbientBottom = new THREE.Vector3();
 
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
+  private tmp3 = new THREE.Vector3();
   private radiance = new THREE.Vector3();
+  private overcast = new THREE.Vector3();
   private skyIrradiance = new THREE.Vector3();
   private skyIrradianceAccum = new THREE.Vector3();
 
@@ -113,8 +154,9 @@ export class Radiometry {
 
   /**
    * @param camAltKm  observer altitude, kilometres.
+   * @param cloud     deck optics from `CloudField`. Omit for a cloud-free sky.
    */
-  update(env: Environment, camAltKm: number): void {
+  update(env: Environment, camAltKm: number, cloud?: CloudOptics): void {
     // DEADBAND, not plain quantisation. Baking the transmittance table is 2048
     // texels x a 24-step march — several milliseconds of JS — and both this and
     // the GPU LUT chain rebake whenever `mieMul` moves. The weather sim drifts
@@ -190,6 +232,40 @@ export class Radiometry {
       .copy(this.moonDiscRadiance)
       .multiplyScalar(EARTHSHINE_FRACTION * (1 - illum) * (1 - 0.6 * env.cloudCover));
 
+    /* --- cloud deck: the direct beam -------------------------------- *
+     * The clouds themselves are lit by the UNATTENUATED beam — they are what
+     * is doing the attenuating. Everything below the deck sees the attenuated
+     * one. Keeping both is what lets a sunlit cloud top stay brilliant over a
+     * sea that has gone dark, which is the whole look of a squall.
+     * --------------------------------------------------------------- */
+
+    this.sunIrradianceClear.copy(this.sunIrradiance);
+
+    // Irradiance at deck altitude, from whichever luminary is actually lighting
+    // it. A hard switch is invisible: the moon only wins once the sun has set,
+    // by which point the sun's contribution is four orders of magnitude down.
+    const rDeck = GROUND_RADIUS_KM + (CLOUD_LOW_BOTTOM_M + CLOUD_LOW_TOP_M) * 0.5 * M_TO_KM;
+    if (this.sunIntensity >= this.moonIntensity) {
+      this.cloudLightDir.copy(env.sunDirection);
+      this.cpu.transmittance(rDeck, Math.max(sunY, 0.0016), this.tmp3);
+      this.cloudLightIrradiance.set(
+        this.tmp3.x * this.solarIrradiance.x,
+        this.tmp3.y * this.solarIrradiance.y,
+        this.tmp3.z * this.solarIrradiance.z,
+      ).multiplyScalar(sunGate);
+    } else {
+      this.cloudLightDir.copy(env.moonDirection);
+      this.cloudLightIrradiance.copy(this.moonGlow);
+    }
+
+    const beamT = cloud ? cloud.beamTransmittance : 1;
+    if (beamT < 1) {
+      this.sunIrradiance.multiplyScalar(beamT);
+      this.sunIntensity *= beamT;
+      this.sunLuminance = luminance(this.sunIrradiance);
+      this.moonIntensity *= beamT;
+    }
+
     /* --- sky, ground, fog ------------------------------------------- */
 
     // Both luminaries are placed in the CPU model's own frame, sun at
@@ -228,23 +304,74 @@ export class Radiometry {
     // the horizon colour IS the fog colour and there is nothing left to trim.
     this.fogColor.copy(this.horizonColor);
 
-    // Sea bounce: the sky and sun that the water reflects and scatters back up.
-    const downwelling = this.tmp.copy(this.skyIrradiance);
-    downwelling.x += this.sunIrradiance.x * Math.max(0, sunY);
-    downwelling.y += this.sunIrradiance.y * Math.max(0, sunY);
-    downwelling.z += this.sunIrradiance.z * Math.max(0, sunY);
-    this.groundColor.setRGB(
-      (downwelling.x * SEA_BOUNCE_ALBEDO.x) / Math.PI,
-      (downwelling.y * SEA_BOUNCE_ALBEDO.y) / Math.PI,
-      (downwelling.z * SEA_BOUNCE_ALBEDO.z) / Math.PI,
-    );
-
     this.skyColor.setRGB(
       this.skyIrradiance.x / Math.PI,
       this.skyIrradiance.y / Math.PI,
       this.skyIrradiance.z / Math.PI,
     );
-    this.skyLuminance = luminance(this.skyIrradiance) / Math.PI;
+
+    /* --- cloud deck: the diffuse half ------------------------------- *
+     * A cloud replaces the sky it hides. The blend below is the whole reason
+     * `storm` reads as an overcast gale rather than as a dark blue sky: what
+     * the deck sends down is a bright, near-neutral, almost isotropic field
+     * about a stop under the clear sky, and it is what every material's ambient
+     * term, the fog colour and the SH now see.
+     * --------------------------------------------------------------- */
+
+    // Cloud tops see the clear sky above them; bases see the sea plus the
+    // horizon ring under the deck. Both arrive as isotropic radiance with the
+    // multiple-scattering gain already applied — see CLOUD_MULTISCATTER_GAIN.
+    const ambGain = 0.25 * CLOUD_MULTISCATTER_GAIN;
+    this.cloudAmbientTop.set(this.skyColor.r, this.skyColor.g, this.skyColor.b).multiplyScalar(ambGain);
+    this.cloudAmbientBottom
+      .set(
+        this.horizonColor.r * 0.25,
+        this.horizonColor.g * 0.25,
+        this.horizonColor.b * 0.25,
+      )
+      .multiplyScalar(ambGain);
+
+    if (cloud && cloud.skyOcclusion > 0.001) {
+      // Horizontal irradiance on top of the deck, then Lambert's law backwards:
+      // E_below = PI * L_base and E_below = E_above * T_diffuse.
+      const eAbove = this.tmp
+        .copy(this.skyIrradiance)
+        .addScaledVector(this.sunIrradianceClear, Math.max(0, sunY));
+      this.overcast.copy(eAbove).multiplyScalar(cloud.diffuseTransmittance / Math.PI);
+      // Transmitted cloud light is close to neutral: droplets scatter almost
+      // achromatically, so whatever hue the beam had is largely washed out.
+      const grey = luminance(this.overcast);
+      this.overcast.lerp(this.tmp2.setScalar(grey), 0.7);
+
+      const k = cloud.skyOcclusion;
+      lerpColor(this.zenithColor, this.overcast, k);
+      lerpColor(this.horizonColor, this.overcast, k);
+      lerpColor(this.skyColor, this.overcast, k);
+      this.fogColor.copy(this.horizonColor);
+      this.zenithLuminance = colorLuminance(this.zenithColor);
+      this.skyIrradiance.set(
+        this.skyColor.r * Math.PI,
+        this.skyColor.g * Math.PI,
+        this.skyColor.b * Math.PI,
+      );
+    }
+
+    this.skyLuminance = colorLuminance(this.skyColor);
+    this.applyCloudSh(cloud);
+
+    // Sea bounce: the sky and sun that the water reflects and scatters back up.
+    const downwelling = this.tmp
+      .set(this.skyColor.r, this.skyColor.g, this.skyColor.b)
+      .multiplyScalar(Math.PI)
+      .addScaledVector(this.sunIrradiance, Math.max(0, sunY));
+    this.groundColor.setRGB(
+      (downwelling.x * SEA_BOUNCE_ALBEDO.x) / Math.PI,
+      (downwelling.y * SEA_BOUNCE_ALBEDO.y) / Math.PI,
+      (downwelling.z * SEA_BOUNCE_ALBEDO.z) / Math.PI,
+    );
+    this.cloudAmbientBottom.x += this.groundColor.r * ambGain;
+    this.cloudAmbientBottom.y += this.groundColor.g * ambGain;
+    this.cloudAmbientBottom.z += this.groundColor.b * ambGain;
 
     /* --- stars ------------------------------------------------------ */
 
@@ -254,9 +381,25 @@ export class Radiometry {
     this.milkyWayBrightness = MILKY_WAY_RADIANCE * this.starVisibility;
   }
 
+  /** See the note on SH_UNIFORM. Runs every frame; the sweep does not. */
+  private applyCloudSh(cloud?: CloudOptics): void {
+    const k = cloud ? cloud.skyOcclusion : 0;
+    if (k <= 0.001) {
+      this.sh.set(this.shClear);
+      return;
+    }
+    this.sh[0] = this.shClear[0] + (this.overcast.x * SH_UNIFORM - this.shClear[0]) * k;
+    this.sh[1] = this.shClear[1] + (this.overcast.y * SH_UNIFORM - this.shClear[1]) * k;
+    this.sh[2] = this.shClear[2] + (this.overcast.z * SH_UNIFORM - this.shClear[2]) * k;
+    const damp = 1 - 0.72 * k;
+    for (let i = 3; i < 27; i++) this.sh[i] = this.shClear[i] * damp;
+  }
+
   /** Sun disc radiance, written into `out`. */
   sunDiscRadiance(out: THREE.Vector3): THREE.Vector3 {
-    return out.copy(this.sunIrradiance).multiplyScalar(SUN_DISC_RADIANCE_SCALE / SUN_SOLID_ANGLE);
+    return out
+      .copy(this.sunIrradianceClear)
+      .multiplyScalar(SUN_DISC_RADIANCE_SCALE / SUN_SOLID_ANGLE);
   }
 
   /**
@@ -357,9 +500,9 @@ export class Radiometry {
         const conv = SH_COSINE_CONVOLUTION;
         for (let k = 0; k < 9; k++) {
           const c = conv[k];
-          this.sh[k * 3 + 0] = a[k * 3 + 0] * c;
-          this.sh[k * 3 + 1] = a[k * 3 + 1] * c;
-          this.sh[k * 3 + 2] = a[k * 3 + 2] * c;
+          this.shClear[k * 3 + 0] = a[k * 3 + 0] * c;
+          this.shClear[k * 3 + 1] = a[k * 3 + 1] * c;
+          this.shClear[k * 3 + 2] = a[k * 3 + 2] * c;
         }
         a.fill(0);
         this.skyIrradiance.copy(this.skyIrradianceAccum);
@@ -368,6 +511,19 @@ export class Radiometry {
     }
   }
 }
+
+/**
+ * Fold the cloud deck into the published SH.
+ *
+ * The sweep in `accumulateSh` marches the CLOUD-FREE medium, because that is
+ * what `AtmosphereCpu` models. Overcast does two things to that field: it
+ * changes its magnitude, and it very nearly removes its directionality. Band 0
+ * is blended to the deck's own radiance — a uniform radiance L projects to
+ * L * 0.282095 * 4PI, which after the cosine convolution evaluates back to
+ * exactly L — and bands 1-8 are damped rather than zeroed, since even a solid
+ * deck is brighter overhead than it is toward the sea.
+ */
+const SH_UNIFORM = 4 * Math.PI * 0.282095;
 
 /** A_l / PI for l = 0, 1, 2 with A = (PI, 2PI/3, PI/4). */
 const SH_COSINE_CONVOLUTION = [1, 2 / 3, 2 / 3, 2 / 3, 0.25, 0.25, 0.25, 0.25, 0.25];
@@ -418,6 +574,17 @@ function slabAttenuation(tau: number): number {
 
 function luminance(v: THREE.Vector3): number {
   return 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z;
+}
+
+function colorLuminance(c: THREE.Color): number {
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
+
+/** In-place lerp of a Color toward a Vector3 radiance. */
+function lerpColor(c: THREE.Color, to: THREE.Vector3, k: number): void {
+  c.r += (to.x - c.r) * k;
+  c.g += (to.y - c.g) * k;
+  c.b += (to.z - c.b) * k;
 }
 
 function quantise(v: number, step: number): number {

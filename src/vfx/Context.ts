@@ -45,7 +45,17 @@ export interface OceanExt {
   cascadeScales?: number[];
 }
 
-/** Shape we hope the post agent publishes on `world.ext.post`. All optional. */
+/**
+ * Shape the post agent publishes on `world.ext.post`. All optional here so we
+ * degrade gracefully if it is ever absent.
+ *
+ * `depthTexture` is a standalone R32F COPY of the scene depth attachment
+ * (post's `sceneDepth` target), holding LAST frame's depth for the whole of the
+ * current frame. Sampling it during the scene pass is safe — sampling the live
+ * attachment is not, and used to make the driver silently drop every particle
+ * draw. Values are non-linear window-space depth over `near`..`far`, read as
+ * `.r`, exactly like a `DepthTexture`.
+ */
 export interface PostExt {
   depthTexture?: THREE.Texture | null;
   /** Camera near/far actually used for the depth encode. */
@@ -73,6 +83,17 @@ export function frigateHalfBeam(t: number, beam: number): number {
   const transom = 0.42 + 0.58 * smoothstep(1.0, 0.72, u);
   return (beam * 0.5) * fwd * transom;
 }
+
+/**
+ * Waterline half-beam lookup table.
+ *
+ * `ctx.halfBeam(t)` is called once per bow-spray particle — several hundred
+ * times a frame. The ship agent's `ext.halfBeamAt` builds a whole hull section
+ * (two Float32Array(88)s, a control-point array and a closure) on every call,
+ * which cost ~9.7 ms/frame of `upd:vfx` and was the dominant source of GC
+ * pressure in the module. Bake it once into a table and lerp instead.
+ */
+const HB_LUT_N = 96;
 
 export interface VfxCtx {
   world: World;
@@ -115,6 +136,12 @@ export interface VfxCtx {
   /** Ship-local -> world, refreshed from `shipRoot` so we inherit smoothing. */
   shipMatrix: THREE.Matrix4;
 
+  /** Baked waterline half-beam table, `HB_LUT_N + 1` samples over t = 0..1. */
+  hbLut: Float32Array;
+  /** Identity of the function the table was baked from, so we can rebake. */
+  hbSource: unknown;
+
+  /** Waterline half-beam at `t` (0 = stem, 1 = transom), metres. Allocation free. */
   halfBeam(t: number): number;
   /** Ship-local point -> world, written into `out`. */
   toWorld(local: THREE.Vector3, out: THREE.Vector3): THREE.Vector3;
@@ -123,7 +150,7 @@ export interface VfxCtx {
 const HULL_SPEED_MS = 6.7; // 13 kn
 
 export function createCtx(world: World): VfxCtx {
-  return {
+  const ctx: VfxCtx = {
     world,
     dt: 0,
     speed: 0,
@@ -148,19 +175,42 @@ export function createCtx(world: World): VfxCtx {
     oceanExt: null,
     postExt: null,
     shipMatrix: new THREE.Matrix4(),
+    hbLut: new Float32Array(HB_LUT_N + 1),
+    hbSource: undefined,
     halfBeam(t: number) {
-      const ext = this.shipExt;
-      if (ext?.halfBeamAt) return ext.halfBeamAt(t);
-      return frigateHalfBeam(t, this.world.ship.beam);
+      const f = t <= 0 ? 0 : t >= 1 ? HB_LUT_N : t * HB_LUT_N;
+      const i = f | 0;
+      const u = f - i;
+      const lut = this.hbLut;
+      return lut[i] + (lut[i + 1 < lut.length ? i + 1 : i] - lut[i]) * u;
     },
     toWorld(local: THREE.Vector3, out: THREE.Vector3) {
       return out.copy(local).applyMatrix4(this.shipMatrix);
     },
   };
+  ctx.shipExt = (world.ext.ship as ShipExt | undefined) ?? null;
+  bakeHalfBeam(ctx);
+  return ctx;
 }
 
 const _bowLocal = new THREE.Vector3();
 const _sternLocal = new THREE.Vector3();
+
+/**
+ * Rebake the half-beam table. Called only when the ship agent's published
+ * function (or the fallback's beam) actually changes, i.e. once.
+ */
+function bakeHalfBeam(ctx: VfxCtx): void {
+  const fn = ctx.shipExt?.halfBeamAt;
+  const beam = ctx.world.ship.beam;
+  const key = fn ?? beam;
+  if (ctx.hbSource === key) return;
+  ctx.hbSource = key;
+  for (let i = 0; i <= HB_LUT_N; i++) {
+    const t = i / HB_LUT_N;
+    ctx.hbLut[i] = fn ? fn(t) : frigateHalfBeam(t, beam);
+  }
+}
 
 export function updateCtx(ctx: VfxCtx): void {
   const world = ctx.world;
@@ -207,4 +257,5 @@ export function updateCtx(ctx: VfxCtx): void {
   ctx.shipExt = (world.ext.ship as ShipExt | undefined) ?? null;
   ctx.oceanExt = (world.ext.ocean as OceanExt | undefined) ?? null;
   ctx.postExt = (world.ext.post as PostExt | undefined) ?? null;
+  bakeHalfBeam(ctx);
 }

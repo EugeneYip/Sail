@@ -19,7 +19,16 @@ Read `src/types/index.ts` in full before writing anything. It is the contract.
      also add the matching declaration to `SHARED_UNIFORM_DECL`.
    - You may add a field to your own slice of a `World` interface in
      `src/types/index.ts` — append only, never reorder or delete.
-3. **`npx tsc --noEmit` must pass** before you report done. Zero errors.
+3. **`npm run typecheck` must pass** before you report done. Zero errors. It runs
+   `scripts/check-glsl.mjs` first, which catches the mistake that has broken this
+   build more than any other:
+
+   **Never put a backtick inside a comment in GLSL template text.** In the text
+   portion of a template literal `//` is not a comment, it is literal characters,
+   so a backtick closes the template early and TypeScript reports a cascade of
+   syntax errors dozens of lines from the real cause. Use 'single quotes' for code
+   spans in shader comments. (Inside a `${ ... }` interpolation you are back in
+   TypeScript and backticks in comments are fine.)
 4. **Zero console errors or WebGL warnings** in `node scripts/capture.mjs`.
 5. **60 fps at 1600x900 on an M2 at `ultra`.** The capture harness prints fps
    and draw calls for every scene. If you regress fps below 60, fix it.

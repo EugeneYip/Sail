@@ -44,6 +44,9 @@ function poolSize(q: QualityTier): number {
 /** Hard ceiling on particles born in a single frame. */
 const MAX_EMIT = 2048;
 
+/** Attribute names re-uploaded after emission. Hoisted: `end` must not allocate. */
+const EMIT_ATTRS = ['position', 'aPos', 'aVel', 'aPar'] as const;
+
 const _shift = new THREE.Vector3();
 
 export class Particles {
@@ -79,6 +82,8 @@ export class Particles {
 
   private lastOrigin = new THREE.Vector3();
   private supported = true;
+  /** Whether the draw material is currently compiled with depth softness. */
+  private depthSoft = false;
 
   init(world: World, tex: VfxTextures, probe: WaterProbe): void {
     this.supported = world.renderer.extensions.has('EXT_color_buffer_float');
@@ -201,9 +206,10 @@ export class Particles {
 
     const post = world.ext.post as PostExt | undefined;
     const depth = post?.depthTexture ?? null;
+    this.depthSoft = !!depth;
 
     this.drawMat = new THREE.RawShaderMaterial({
-      defines: depth ? { VFX_DEPTH_SOFT: '' } : {},
+      defines: this.depthSoft ? { VFX_DEPTH_SOFT: '' } : {},
       uniforms: {
         ...world.uniforms,
         tPos: { value: null },
@@ -299,6 +305,15 @@ export class Particles {
     return this.supported;
   }
 
+  /**
+   * Emission slots left this frame. Emitters must clamp their loop counts to
+   * this — a rejected `spawn()` still costs all the CPU that produced its
+   * arguments, and in a gale the raw rates ask for several times MAX_EMIT.
+   */
+  get room(): number {
+    return this.supported ? MAX_EMIT - this.emitted : 0;
+  }
+
   /* ----------------------------------------------------------------- *
    *  Frame
    * ----------------------------------------------------------------- */
@@ -345,8 +360,13 @@ export class Particles {
 
     if (this.emitted > 0) {
       this.emitGeo.setDrawRange(0, this.emitted);
-      for (const name of ['position', 'aPos', 'aVel', 'aPar']) {
-        this.emitGeo.getAttribute(name).needsUpdate = true;
+      for (let i = 0; i < EMIT_ATTRS.length; i++) {
+        const a = this.emitGeo.getAttribute(EMIT_ATTRS[i]) as THREE.BufferAttribute;
+        // Only the slice actually written this frame goes over the bus; the
+        // pool arrays are MAX_EMIT long and a full re-upload is ~114 kB/frame.
+        a.clearUpdateRanges();
+        a.addUpdateRange(0, this.emitted * a.itemSize);
+        a.needsUpdate = true;
       }
       r.render(this.emitScene, this.cam);
     }
@@ -364,6 +384,19 @@ export class Particles {
     du.uStretch.value = 0.028;
     du.uSoftY.value = 0.75 + ctx.world.env.waveHeight * 0.14;
     (du.uInvRes.value as THREE.Vector2).set(1 / world.size.width, 1 / world.size.height);
+
+    // The post stack publishes its depth copy only once it has allocated, and
+    // reallocates it on a resize, so re-latch every frame rather than at init.
+    const post = ctx.postExt;
+    const depth = post?.depthTexture ?? null;
+    du.tDepth.value = depth;
+    (du.uNearFar.value as THREE.Vector2).set(post?.near ?? 0.25, post?.far ?? 60000);
+    if (!!depth !== this.depthSoft) {
+      this.depthSoft = !!depth;
+      if (this.depthSoft) this.drawMat.defines.VFX_DEPTH_SOFT = '';
+      else delete this.drawMat.defines.VFX_DEPTH_SOFT;
+      this.drawMat.needsUpdate = true;
+    }
   }
 
   applySettings(world: World, tex: VfxTextures, probe: WaterProbe): void {

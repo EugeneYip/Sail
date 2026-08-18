@@ -62,6 +62,13 @@ export class WakeField {
   target!: THREE.WebGLRenderTarget;
   interaction!: THREE.WebGLRenderTarget;
 
+  /**
+   * Global multiplier the consumer should apply to the whole field. 1 while the
+   * ship is making way; ramped down when the wake is not worth compositing so
+   * the ocean can skip the taps entirely.
+   */
+  strength = 0;
+
   readonly matrix = new THREE.Matrix3();
   readonly interactionMatrix = new THREE.Matrix3();
   readonly anchor = new THREE.Vector2();
@@ -587,6 +594,11 @@ export class WakeField {
     // Foam persistence: long in a calm sea, torn apart quickly in a gale.
     const tau = THREE.MathUtils.lerp(22, 6.5, clamp01(world.env.windSpeed / 24));
     this.decayMat.uniforms.uDecay.value = Math.exp(-ctx.dt / tau);
+
+    // Published to the consumer. Non-zero while there is anything in the buffer
+    // worth sampling: the ribbon may have stopped drawing but the persistent
+    // foam channel takes a good half-minute to decay away.
+    this.strength = this.trackFilled > 3 ? 1 : 0;
   }
 
   /** Integer wake-cell offsets the ribbon has to be drawn at to tile the torus. */
@@ -600,7 +612,8 @@ export class WakeField {
       const r0 = i * 4;
       const r1 = (TRACK_ROWS + i) * 4;
       const xi = Math.max(this.sNow - d[r0 + 2], 0);
-      const half = Math.min(7 + 0.42 * xi, d[r1 + 3]);
+      // Must match `halfW` in wakeRibbonVert.
+      const half = Math.min(10 + 0.62 * xi, d[r1 + 3]);
       _v2.set(d[r0] - half, d[r0 + 1] - half);
       box.expandByPoint(_v2);
       _v2.set(d[r0] + half, d[r0 + 1] + half);

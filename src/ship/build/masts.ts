@@ -229,7 +229,9 @@ function buildTop(bins: Bins, f: MastFrame, quality: number): void {
         return [(zFwd + v * (zAft - zFwd)) / 3.2, (fx * hwAt(v)) / 1.12];
       },
       {
-        flip: yOff < 0,
+        // cross(d/di, d/dj) on this grid points down, so the walked-on floor
+        // is the flipped one and the ceiling underneath is not.
+        flip: yOff >= 0,
         skip: (i, j) => {
           const v = (j + 0.5) / (NV - 1);
           const fx = ((i + 0.5) / (NU - 1)) * 2 - 1;

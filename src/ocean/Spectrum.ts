@@ -18,11 +18,11 @@ export const GRAVITY = 9.81;
 export const K_CAPILLARY = 364;
 
 /** Peak-enhancement of the wind-sea JONSWAP peak. 3.3 is the standard value. */
-const GAMMA_WIND = 3.3;
+export const GAMMA_WIND = 3.3;
 /** Swell is a far narrower peak — it has travelled out of its generating area. */
-const GAMMA_SWELL = 7.0;
+export const GAMMA_SWELL = 7.0;
 /** Directional spread exponent for swell (sech^2 beta). Large = narrow. */
-const BETA_SWELL = 11.0;
+export const BETA_SWELL = 11.0;
 /** Open-ocean fetch, metres. Caps how long the wind sea can grow. */
 const FETCH = 300e3;
 /** Pierson–Moskowitz fully developed peak coefficient. */
@@ -189,6 +189,15 @@ export function spectrumK(k: number, omegaPeak: number, gamma: number): number {
  * ∫D dθ = 1 over [-π, π]. `thetaRel` is the angle to the mean direction.
  */
 export function spreadDBH(omega: number, omegaPeak: number, thetaRel: number): number {
+  return spreadSech2(spreadBetaDBH(omega, omegaPeak), thetaRel);
+}
+
+/**
+ * The DBH spread exponent alone. Split out because it depends only on k, so the
+ * CPU sampler hoists it into a per-wavenumber table and pays it once per ring
+ * instead of once per mode.
+ */
+export function spreadBetaDBH(omega: number, omegaPeak: number): number {
   const wr = omega / Math.max(omegaPeak, 1e-4);
   let beta: number;
   if (wr < 0.95) beta = 2.61 * Math.pow(wr, 1.3);
@@ -197,8 +206,7 @@ export function spreadDBH(omega: number, omegaPeak: number, thetaRel: number): n
     const eps = -0.4 + 0.8393 * Math.exp(-0.567 * Math.log(wr * wr));
     beta = Math.pow(10, eps);
   }
-  beta = Math.max(beta, 0.12);
-  return spreadSech2(beta, thetaRel);
+  return Math.max(beta, 0.12);
 }
 
 export function spreadSech2(beta: number, thetaRel: number): number {
@@ -212,7 +220,11 @@ export function spreadSech2(beta: number, thetaRel: number): number {
  * slope variance on the way (needed for the glitter lobe and for specular
  * anti-aliasing).
  */
-export function solveSpectrum(env: Environment, cascades: CascadeLayout[]): SpectrumParams {
+export function solveSpectrum(
+  env: Environment,
+  cascades: CascadeLayout[],
+  out?: SpectrumParams,
+): SpectrumParams {
   const u = Math.max(0.6, env.windSpeed);
   const hs = Math.max(0.02, env.waveHeight);
   const chop = Math.min(1, Math.max(0, env.choppiness));
@@ -246,23 +258,25 @@ export function solveSpectrum(env: Environment, cascades: CascadeLayout[]): Spec
   const swellDirX = -Math.sin(env.swellBearing);
   const swellDirZ = Math.cos(env.swellBearing);
 
-  return {
-    omegaPeakWind,
-    omegaPeakSwell,
-    varScaleWind,
-    varScaleSwell,
-    windDirX,
-    windDirZ,
-    swellDirX,
-    swellDirZ,
-    // Steeper chop needs more horizontal displacement, but past ~1.6 the
-    // Jacobian folds everywhere and the surface self-intersects.
-    choppiness: 0.85 + 0.75 * chop,
-    hs,
-    peakK,
-    peakOmega: dispersion(peakK),
-    slopeRms: Math.sqrt(Math.max(m2, 1e-9)),
-  };
+  // Written in place when `out` is given: a rebake must not allocate, because it
+  // can land on any frame and a GC pause is worse than the rebake itself.
+  const p = out ?? ({} as SpectrumParams);
+  p.omegaPeakWind = omegaPeakWind;
+  p.omegaPeakSwell = omegaPeakSwell;
+  p.varScaleWind = varScaleWind;
+  p.varScaleSwell = varScaleSwell;
+  p.windDirX = windDirX;
+  p.windDirZ = windDirZ;
+  p.swellDirX = swellDirX;
+  p.swellDirZ = swellDirZ;
+  // Steeper chop needs more horizontal displacement, but past ~1.6 the
+  // Jacobian folds everywhere and the surface self-intersects.
+  p.choppiness = 0.85 + 0.75 * chop;
+  p.hs = hs;
+  p.peakK = peakK;
+  p.peakOmega = dispersion(peakK);
+  p.slopeRms = Math.sqrt(Math.max(m2, 1e-9));
+  return p;
 }
 
 /**

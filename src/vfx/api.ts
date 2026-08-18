@@ -23,6 +23,12 @@ export interface VfxExt {
   wakeMatrix: THREE.Matrix3;
   /** Metres spanned by the whole wake texture. */
   wakeWorldSize: number;
+  /**
+   * Global multiplier for the whole field, 0..1. 0 means there is nothing in the
+   * buffer yet (before the ship has laid any track) and the consumer may skip
+   * the taps entirely. Read it every frame; it is a plain number, not a box.
+   */
+  wakeStrength: number;
 
   /* ---- fine, single-frame interaction field ---- */
 

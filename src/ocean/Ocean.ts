@@ -4,6 +4,7 @@ import { CpuWaves } from './CpuWaves';
 import { FoamSim } from './Foam';
 import { SpectralNoise } from './Noise';
 import { OceanMesh } from './OceanMesh';
+import { FullScreenPass } from './Pass';
 import {
   buildCascades,
   cascadeSlopeVariance,
@@ -57,12 +58,18 @@ const MORPH_START = 0.74;
 const CELL_FADE_LO = 0.22;
 const CELL_FADE_HI = 0.9;
 
-/** Re-solve the spectrum when the weather has actually moved this much. */
-const REBAKE_WIND = 0.25; // m/s
-const REBAKE_HS = 0.04; // m
-const REBAKE_BEARING = 0.035; // rad
-const REBAKE_CHOP = 0.02;
-const REBAKE_MIN_INTERVAL = 0.3; // s
+/**
+ * Re-solve the spectrum when the weather has actually moved this much. A rebake
+ * rewrites every mode's amplitude on both the CPU and the GPU, so it is the most
+ * expensive thing the ocean ever does; the thresholds are set so that what it
+ * costs buys a change nobody can see. At these values the worst case is the
+ * spectrum lagging a squall by ~0.05 m of Hs, i.e. 2.5% at sea state 4.
+ */
+const REBAKE_WIND = 0.4; // m/s
+const REBAKE_HS = 0.05; // m
+const REBAKE_BEARING = 0.05; // rad
+const REBAKE_CHOP = 0.03;
+const REBAKE_MIN_INTERVAL = 1.1; // s
 
 /** Shape published on `world.ext.ocean`. Every field is stable for the app's life. */
 export interface OceanExt {
@@ -265,7 +272,7 @@ export class Ocean implements Module, IOcean {
     this.baked.swell = env.swellBearing;
     this.baked.chop = env.choppiness;
 
-    this.params = solveSpectrum(env, this.layouts);
+    this.params = solveSpectrum(env, this.layouts, this.params);
     for (const c of this.cascades) c.bake(world.renderer, this.params);
     this.cpu.setParams(this.params);
 
@@ -287,6 +294,10 @@ export class Ocean implements Module, IOcean {
 
   update(world: World): void {
     const dt = world.time.dt;
+    const prof = world.settings.debug;
+    const stats = world.stats;
+    let t0 = prof ? performance.now() : 0;
+    FullScreenPass.count = 0;
     this.simTime += dt;
     this.sinceRebake += dt;
 
@@ -300,9 +311,25 @@ export class Ocean implements Module, IOcean {
     this.cpu.setOrigin(this.originWrap.x, this.originWrap.y);
 
     this.solve(world, false);
+    if (prof) {
+      const t = performance.now();
+      stats['ocean:solve'] = t - t0;
+      t0 = t;
+    }
 
     for (const c of this.cascades) c.update(world.renderer, this.simTime);
+    if (prof) {
+      const t = performance.now();
+      stats['ocean:gpu'] = t - t0;
+      t0 = t;
+    }
+
     this.cpu.update(this.simTime);
+    if (prof) {
+      const t = performance.now();
+      stats['ocean:cpu'] = t - t0;
+      t0 = t;
+    }
 
     const cam = world.camera.position;
     this.foam.update(
@@ -314,6 +341,11 @@ export class Ocean implements Module, IOcean {
       world.env.windSpeed * world.env.gust,
     );
     this.material.uniforms.uFoam.value = this.foam.texture;
+    if (prof) {
+      const t = performance.now();
+      stats['ocean:foam'] = t - t0;
+      t0 = t;
+    }
 
     this.updateClipmap(cam.x, cam.z);
     this.updateWake(world);
@@ -325,6 +357,10 @@ export class Ocean implements Module, IOcean {
     u.uPixelAngle.value =
       (2 * Math.tan((world.camera.fov * Math.PI) / 360)) / Math.max(world.size.height, 1);
 
+    if (prof) {
+      stats['ocean:tail'] = performance.now() - t0;
+      stats['ocean:passes'] = FullScreenPass.count;
+    }
     world.stats['ocean.hs'] = this.params.hs;
   }
 
@@ -494,11 +530,16 @@ export class Ocean implements Module, IOcean {
   debugCompare(count = 4096): CompareReport {
     const renderer = this.world.renderer;
     if (!this.compareMat) {
+      // texelFetch does not exist in GLSL ES 1.00, so this has to address texel
+      // centres by uv instead. Getting that wrong makes the blit fail to compile
+      // and the readback silently return zeros, which reads as "the CPU mirror
+      // is completely wrong" rather than "the debug tool is broken".
       this.compareMat = new THREE.ShaderMaterial({
-        uniforms: { uSrc: { value: null } },
+        uniforms: { uSrc: { value: null }, uN: { value: 1 } },
         vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
         fragmentShader:
-          'precision highp float; uniform sampler2D uSrc; void main(){ gl_FragColor = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0); }',
+          'precision highp float; uniform sampler2D uSrc; uniform float uN;' +
+          ' void main(){ gl_FragColor = texture2D(uSrc, gl_FragCoord.xy / uN); }',
         depthTest: false,
         depthWrite: false,
       });
@@ -524,6 +565,7 @@ export class Ocean implements Module, IOcean {
       }
       const rt = this.compareRt;
       const buf = new Float32Array(n * n * 4);
+      this.compareMat.uniforms.uN.value = n;
       this.compareMat.uniforms.uSrc.value = c.displacement.texture;
       renderFullscreen(renderer, this.compareMat, rt);
       renderer.readRenderTargetPixels(rt, 0, 0, n, n, buf);

@@ -1,6 +1,11 @@
 import { GLSL } from '../../util/glsl';
 import { ATMOSPHERE_GLSL } from './atmosphere';
 import { CELESTIAL_GLSL } from './celestial';
+import { CLOUD_COMMON_GLSL } from './cloudCommon';
+import { CLOUD_LIGHTING_GLSL } from './cloudLighting';
+
+/** Raymarch steps for the coarse in-line march the environment probe uses. */
+const ENV_CLOUD_STEPS = 14;
 
 /**
  * The visible sky. A fullscreen triangle drawn first in the main scene with
@@ -68,6 +73,29 @@ uniform float uSkyTime;
 
 #ifdef SKY_CLOUDS
 uniform sampler2D tClouds;
+#endif
+
+#ifdef SKY_ENV_CLOUDS
+${CLOUD_COMMON_GLSL}
+${CLOUD_LIGHTING_GLSL}
+uniform sampler2D tCloudShadow;
+uniform mat4 uCloudShadowMatrix;
+
+/**
+ * Coarse in-line cloud march for the environment probe.
+ *
+ * The probe is 256x128 and refreshes at 6 Hz, so 14 steps with no detail octave
+ * and no shaft march is about 400 k samples — a rounding error next to the
+ * screen march, and without it every ship surface would be lit by a blue sky
+ * while the visible sky is solid overcast. Same 'cloudMarch', same lighting, so
+ * the IBL cannot disagree with what the camera sees.
+ */
+vec4 envCloudMarch(vec3 camPos, vec3 dir){
+  vec3 pos = vec3(camPos.x * 0.001, RG + max(0.0, camPos.y) * 0.001, camPos.z * 0.001);
+  float jitter = hash12(dir.xz * 137.0) * 0.9;
+  return cloudMarch(pos, dir, uSunDirection, ${ENV_CLOUD_STEPS}.0, jitter, tTransmittance,
+                    false, tCloudShadow, uCloudShadowMatrix, false);
+}
 #endif
 
 /** Kasten-Young airmass — used for stellar extinction and scintillation. */

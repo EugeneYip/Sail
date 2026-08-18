@@ -22,6 +22,11 @@ export interface SkyUniforms {
   [key: string]: THREE.IUniform;
 }
 
+/**
+ * Shared by the sky mesh, the environment probe and every cloud pass. They are
+ * shared BY REFERENCE, so `CloudField` writing one of the cloud entries updates
+ * all four materials at once — do not deep-clone them.
+ */
 export function createSkyUniforms(): SkyUniforms {
   return {
     tTransmittance: { value: null },
@@ -41,6 +46,32 @@ export function createSkyUniforms(): SkyUniforms {
     uMilkyWay: { value: 0 },
     uMieMul: { value: 1 },
     uSkyTime: { value: 0 },
+
+    /* --- cloud density field, written by CloudField --- */
+    tCloudBase: { value: null },
+    tCloudDetail: { value: null },
+    tWeather: { value: null },
+    uFieldOffset: { value: new THREE.Vector2() },
+    uDetailOffset: { value: new THREE.Vector2() },
+    uCirrusOffset: { value: new THREE.Vector2() },
+    uWeatherExtent: { value: 48000 },
+    uBaseScale: { value: 1 / 6000 },
+    uDetailScale: { value: 1 / 750 },
+    uCoverage: { value: 0 },
+    uCloudType: { value: 0.7 },
+    uErosion: { value: 0.4 },
+    uLayerBottom: { value: 900 },
+    uLayerTop: { value: 4200 },
+    uShear: { value: 900 },
+    uWindDir: { value: new THREE.Vector2(1, 0) },
+    uDensityScale: { value: 1 },
+    uCirrusAmount: { value: 0.4 },
+
+    /* --- cloud lighting, written by Sky.publish --- */
+    uCloudLightDir: { value: new THREE.Vector3(0, 1, 0) },
+    uCloudLightIrradiance: { value: new THREE.Vector3() },
+    uCloudAmbientTop: { value: new THREE.Vector3() },
+    uCloudAmbientBottom: { value: new THREE.Vector3() },
   };
 }
 
@@ -91,6 +122,7 @@ export class SkyRender {
         uRayMatrix: { value: new THREE.Matrix4() },
         uCameraPosW: { value: new THREE.Vector3() },
         uPixelAngle: { value: 0.001 },
+        tClouds: { value: null },
       },
       depthTest: false,
       depthWrite: false,
@@ -108,6 +140,16 @@ export class SkyRender {
       this.syncCamera(camera, renderer);
       this.onDraw?.(camera, renderer);
     };
+  }
+
+  /** Toggle a compile-time feature. Recompiles, so settings changes only. */
+  setDefine(name: string, on: boolean): void {
+    const defines = this.material.defines as Record<string, string>;
+    const had = defines[name] !== undefined;
+    if (on === had) return;
+    if (on) defines[name] = '1';
+    else delete defines[name];
+    this.material.needsUpdate = true;
   }
 
   private syncCamera(camera: THREE.Camera, renderer: THREE.WebGLRenderer): void {

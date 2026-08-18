@@ -52,9 +52,26 @@ export class EnvProbe {
         uRayMatrix: { value: new THREE.Matrix4() },
         uCameraPosW: { value: new THREE.Vector3() },
         uPixelAngle: { value: 0.02 },
+        tCloudShadow: { value: null },
+        uCloudShadowMatrix: { value: new THREE.Matrix4() },
       },
-      { SKY_EQUIRECT: '1', SKY_ENV: '1' },
+      { SKY_EQUIRECT: '1', SKY_ENV: '1', SKY_ENV_CLOUDS: '1' },
     );
+  }
+
+  setClouds(shadow: THREE.Texture, matrix: THREE.Matrix4): void {
+    this.pass.uniforms.tCloudShadow.value = shadow;
+    this.pass.uniforms.uCloudShadowMatrix.value = matrix;
+  }
+
+  /** Recompile with or without the in-line cloud march. Settings changes only. */
+  setEnabled(clouds: boolean): void {
+    const defines = this.pass.material.defines as Record<string, string>;
+    const had = defines.SKY_ENV_CLOUDS !== undefined;
+    if (clouds === had) return;
+    if (clouds) defines.SKY_ENV_CLOUDS = '1';
+    else delete defines.SKY_ENV_CLOUDS;
+    this.pass.material.needsUpdate = true;
   }
 
   attach(world: World): void {
@@ -71,7 +88,10 @@ export class EnvProbe {
     const moved =
       Math.abs(env.sunDirection.y - this.lastSunY) > 0.004 ||
       Math.abs(env.cloudCover - this.lastCover) > 0.02 ||
-      Math.abs(mie - this.lastMie) > 0.03;
+      Math.abs(mie - this.lastMie) > 0.03 ||
+      // A drifting deck changes the IBL even when nothing else does, so once
+      // there are clouds the cooldown alone decides.
+      env.cloudCover > 0.02;
     if (!force && (this.cooldown > 0 || !moved)) return false;
 
     this.cooldown = 1 / 6;

@@ -7,7 +7,7 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
  * transom pad and rooster tail, and the wetted-hull skirt that carries the
  * boot-top band and the foam streaks running aft.
  *
- * All of it is parented to `shipRoot`, so it inherits the ship's visual heave,
+ * All of it is parented to 'shipRoot', so it inherits the ship's visual heave,
  * pitch and roll for free. The waterline is passed in as six sampled heights
  * (port/starboard x bow/mid/stern) converted to ship-local Y, so the sheet sits
  * on the real sea surface rather than on y = 0.
@@ -90,21 +90,24 @@ void main(){
     float heelGain = 1.0 + lee * min(abs(uHeel) * 4.2, 1.1);
     // Bow crest just aft of the stem, plus the quarter wave at the after
     // shoulder where the buttocks close in again.
-    float bowBump = exp(-sq((t - 0.085) / 0.145));
+    float bowBump = exp(-sq((t - 0.085) / 0.150));
     float quarter = 0.5 * exp(-sq((t - 0.80) / 0.14));
     float slamGain = 1.0 + min(uSlam * 0.05, 1.4);
-    float crest = stag * (0.62 * bowBump * slamGain + quarter) * heelGain
+    float crest = stag * (0.80 * bowBump * slamGain + quarter) * heelGain
                   * smoothstep(0.03, 0.30, uSpeedN);
 
     float ruf = ruffle(t * 9.0 + side * 3.0, side, uTime) * (0.10 + 0.16 * uChop);
-    // j = 0 at the hull/water root, 1 at the tip of the overturning lip.
+    // j = 0 at the hull/water root, 1 at the tip of the overturning lip. The lip
+    // pitches further over the faster we go, which is what turns a smooth bow
+    // wave into a breaking one.
     float rise = smoothstep(0.0, 0.66, j);
-    float over = smoothstep(0.58, 1.0, j);
-    float y = crest * (rise * (1.0 + ruf * 0.5) - over * 0.62);
+    float over = smoothstep(0.54, 1.0, j);
+    float curl = 0.55 + 0.55 * uSpeedN;
+    float y = crest * (rise * (1.0 + ruf * 0.5) - over * curl);
     // The sheet is thrown outboard and slightly aft as it climbs.
-    float width = (1.4 + crest * 1.35) * heelGain;
-    float outb = hb + width * (j * 0.9 + over * 0.55);
-    float zAft = (t + over * 0.035 * (1.0 + uSpeedN)) * uLwl - uLwl * 0.5;
+    float width = (1.4 + crest * 1.55) * heelGain;
+    float outb = hb + width * (j * 0.9 + over * 0.7);
+    float zAft = (t + over * 0.045 * (1.0 + uSpeedN)) * uLwl - uLwl * 0.5;
 
     p = vec3(side * outb, wl + y, zAft);
     vAer = saturate1(0.55 + 0.45 * rise + ruf * 0.4);
@@ -124,8 +127,8 @@ void main(){
     float y = stag * (0.5 * pad + 0.85 * plume) * (1.0 + ruf)
               * smoothstep(0.04, 0.34, uSpeedN);
     p = vec3(across * w, wl + y * 0.9, uLwl * 0.5 + aft * uLwl * 0.34);
-    vAer = saturate1(0.75 + 0.3 * plume + ruf);
-    vThick = saturate1((0.5 * pad + plume) * 1.6);
+    vAer = saturate1(0.52 + 0.34 * plume + ruf);
+    vThick = saturate1((0.42 * pad + plume) * 1.15);
     vStream = aft * 24.0;
   }
 
@@ -175,11 +178,16 @@ void main(){
 
   vec3 albedo = mix(vec3(0.28, 0.44, 0.46), vec3(0.86, 0.90, 0.93), cover);
   // Wrap lighting: foam has no meaningful normal, it is a scattering slab.
+  // uSunIntensity is irradiance and owes the 1/PI; uSkyColor / uGroundColor are
+  // radiance and must not be divided again (src/sky/constants.ts).
+  vec3 sun = uSunColor * uSunIntensity * INV_PI;
   float wrap = 0.55 + 0.45 * saturate1(uSunDirection.y * 1.4);
-  vec3 lit = albedo * (uSunColor * uSunIntensity * INV_PI * wrap * disperse
+  vec3 lit = albedo * (sun * wrap * disperse
                        + uSkyColor * 0.85 + uGroundColor * 0.12);
-  lit += uSunColor * uSunIntensity * forward * (1.0 - vThick) * 0.07 * cover;
-  lit += uMoonColor * uMoonIntensity * 0.06;
+  // Light coming THROUGH the thin part of the lip. Backlit breaking water is
+  // the whole reason a bow wave reads as water rather than as paint.
+  lit += sun * forward * (1.0 - vThick) * 0.55 * cover * disperse;
+  lit += uMoonColor * uMoonIntensity * INV_PI * 0.2;
 
   float edge = smoothstep(0.0, 0.12, vJ) * (1.0 - smoothstep(0.80, 1.0, vJ));
   if (vPart > 0.5) edge = 1.0 - smoothstep(0.55, 1.0, vT);
@@ -277,9 +285,10 @@ void main(){
   float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.5);
   vec3 sun = uSunColor * uSunIntensity * INV_PI;
   vec3 foamCol = vec3(0.88, 0.92, 0.95) * (sun * wrap + uSkyColor * 0.9);
-  // Wet paint: darker, much glossier. A sharp sky-coloured specular sells it.
+  // Wet paint: darker, much glossier. A sharp specular sells it — and a mirror
+  // returns sun RADIANCE, so this term is scaled against 'sun * PI', not 'sun'.
   float spec = pow(saturate1(dot(reflect(-uSunDirection, vec3(0.0, 1.0, 0.0)), view)), 26.0);
-  vec3 wetCol = uSkyColor * 0.55 + sun * spec * 2.2;
+  vec3 wetCol = uSkyColor * 0.55 + sun * spec * 7.0;
 
   float wetA = (wetBand * 0.5 + submerged * 0.34) * (0.35 + 0.65 * uWetness * 0.5 + 0.4);
   wetA = saturate1(wetA * uOpacity);

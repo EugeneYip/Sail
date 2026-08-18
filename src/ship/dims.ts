@@ -478,8 +478,18 @@ export const PART = {
   WHEEL: 17,
   TILLER: 18,
   CAPSTAN: 19,
+  /**
+   * 20..23 are the four headsails. A jib is hanked to its stay, so sheeting it
+   * is a rotation of the whole sail about the stay itself — which makes it the
+   * same kind of joint as a braced yard rather than a special case in the sail
+   * shader.
+   */
+  JIB0: 20,
 } as const;
-export const PART_COUNT = 22;
+export const PART_COUNT = 24;
+
+/** The four headsail stays, outboard to inboard, in `PART.JIB0 + i` order. */
+export const JIB_IDS = ['fore-staysail', 'inner-jib', 'outer-jib', 'flying-jib'] as const;
 
 /** Spanker boom and gaff, on the mizzen. */
 export const SPANKER = {

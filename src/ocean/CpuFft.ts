@@ -5,7 +5,8 @@
  * the same tile reproduces the GPU field exactly for every mode it carries.
  * Three channels ride together because the per-butterfly index arithmetic — not
  * the multiply-add — is what costs in JavaScript; transforming six real fields
- * in one pass amortises it.
+ * in one pass amortises it. For the same reason the channel loop is unrolled:
+ * at three channels the loop overhead was a third of the butterfly.
  */
 
 const CH = 3;
@@ -50,10 +51,20 @@ export class CpuFft {
   /**
    * In-place 2D inverse transform. `data` is n*n elements of 3 interleaved
    * complex values, row-major (index = (row * n + col) * 6).
+   *
+   * `rowMask`, if given, flags which rows hold any non-zero input. A row of
+   * zeros transforms to zeros, so those rows are skipped entirely — a
+   * band-limited cascade only occupies the middle third of its own grid, which
+   * makes this worth about a fifth of the whole transform. The column pass
+   * cannot be skipped the same way: the row pass spreads every row across all
+   * columns.
    */
-  transform2D(data: Float32Array): void {
+  transform2D(data: Float32Array, rowMask?: Uint8Array): void {
     const n = this.n;
-    for (let row = 0; row < n; row++) this.transformLine(data, row * n * STRIDE, STRIDE);
+    for (let row = 0; row < n; row++) {
+      if (rowMask !== undefined && rowMask[row] === 0) continue;
+      this.transformLine(data, row * n * STRIDE, STRIDE);
+    }
     for (let col = 0; col < n; col++) this.transformLine(data, col * STRIDE, n * STRIDE);
   }
 
@@ -76,30 +87,54 @@ export class CpuFft {
 
     const twCos = this.twCos;
     const twSin = this.twSin;
+    const total = n * STRIDE;
     let stage = 0;
     for (let len = 2; len <= n; len <<= 1, stage++) {
       const half = len >> 1;
       const toff = this.stageOffset[stage];
       const lenStride = len * STRIDE;
       const halfStride = half * STRIDE;
-      for (let blk = 0; blk < n * STRIDE; blk += lenStride) {
-        for (let j = 0; j < half; j++) {
-          const wr = twCos[toff + j];
-          const wi = twSin[toff + j];
-          const ai = blk + j * STRIDE;
+      for (let blk = 0; blk < total; blk += lenStride) {
+        const end = blk + halfStride;
+        let ai = blk;
+        let j = toff;
+        for (; ai < end; ai += STRIDE, j++) {
+          const wr = twCos[j];
+          const wi = twSin[j];
           const bi = ai + halfStride;
-          for (let c = 0; c < STRIDE; c += 2) {
-            const br = line[bi + c];
-            const bim = line[bi + c + 1];
-            const tr = br * wr - bim * wi;
-            const ti = br * wi + bim * wr;
-            const ar = line[ai + c];
-            const aim = line[ai + c + 1];
-            line[ai + c] = ar + tr;
-            line[ai + c + 1] = aim + ti;
-            line[bi + c] = ar - tr;
-            line[bi + c + 1] = aim - ti;
-          }
+
+          let br = line[bi];
+          let bim = line[bi + 1];
+          let tr = br * wr - bim * wi;
+          let ti = br * wi + bim * wr;
+          let ar = line[ai];
+          let aim = line[ai + 1];
+          line[ai] = ar + tr;
+          line[ai + 1] = aim + ti;
+          line[bi] = ar - tr;
+          line[bi + 1] = aim - ti;
+
+          br = line[bi + 2];
+          bim = line[bi + 3];
+          tr = br * wr - bim * wi;
+          ti = br * wi + bim * wr;
+          ar = line[ai + 2];
+          aim = line[ai + 3];
+          line[ai + 2] = ar + tr;
+          line[ai + 3] = aim + ti;
+          line[bi + 2] = ar - tr;
+          line[bi + 3] = aim - ti;
+
+          br = line[bi + 4];
+          bim = line[bi + 5];
+          tr = br * wr - bim * wi;
+          ti = br * wi + bim * wr;
+          ar = line[ai + 4];
+          aim = line[ai + 5];
+          line[ai + 4] = ar + tr;
+          line[ai + 5] = aim + ti;
+          line[bi + 4] = ar - tr;
+          line[bi + 5] = aim - ti;
         }
       }
     }

@@ -42,7 +42,14 @@ function bitReverse(value: number, bits: number): number {
   return r;
 }
 
-/** (twiddle.re, twiddle.im, indexA, indexB) per (stage, output index). */
+/**
+ * (twiddle.re, twiddle.im, indexA, indexB) per (stage, output index), laid out
+ * for a texture of width `stages` and height `n` — so the row is the output
+ * index and the column is the stage, matching `texelFetch(uButterfly,
+ * ivec2(stage, idx))`. Getting this transposed still yields a well-defined
+ * linear operator, so the water keeps moving and merely stops being a wave
+ * field: isotropic crinkle at ~0.55x the requested amplitude, no swell.
+ */
 export function buildButterflyData(n: number): Float32Array {
   const stages = Math.log2(n) | 0;
   const data = new Float32Array(stages * n * 4);
@@ -63,7 +70,7 @@ export function buildButterflyData(n: number): Float32Array {
         top = bitReverse(top, stages);
         bot = bitReverse(bot, stages);
       }
-      const o = (s * n + y) * 4;
+      const o = (y * stages + s) * 4;
       data[o] = sign * Math.cos(ang);
       data[o + 1] = sign * Math.sin(ang);
       data[o + 2] = top;

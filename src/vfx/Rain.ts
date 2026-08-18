@@ -96,7 +96,10 @@ export class Rain {
         uVel: { value: new THREE.Vector3(0, -FALL_SPEED, 0) },
         uShear: { value: 0.012 },
         uWidth: { value: 0.011 },
-        uExposure: { value: 0.085 },
+        // Shutter time. Deliberately NOT called uExposure — that name belongs to
+        // the shared uniform block spread in above, and shadowing it here both
+        // redeclared the GLSL uniform and stole the post stack's exposure.
+        uShutter: { value: 0.085 },
         uNearFrac: { value: 0.035 },
         uIntensity: { value: 0 },
       },
@@ -159,10 +162,12 @@ export class Rain {
   update(ctx: VfxCtx, p: Particles, probe: WaterProbe, wake: WakeField): void {
     const world = ctx.world;
     const rain = ctx.rain;
-    const dt = ctx.dt;
+    // Rate integration is clamped so a slow frame under-emits instead of asking
+    // for proportionally more particles and making itself slower still.
+    const dt = Math.min(ctx.dt, 1 / 30);
 
-    this.streaks(ctx, rain, dt);
-    this.lensWater(ctx, rain, dt);
+    this.streaks(ctx, rain, ctx.dt);
+    this.lensWater(ctx, rain, ctx.dt);
     if (rain < 0.02) return;
 
     this.seaRings(ctx, wake, probe, dt);
@@ -201,7 +206,7 @@ export class Rain {
     offN.set(wrap(this.phase.x, 3.2), wrap(this.phase.y, 2.6), wrap(this.phase.z, 3.2));
 
     u.uShear.value = 0.004 + 0.012 * clamp01(ctx.windSpeed / 22);
-    u.uExposure.value = 0.075 + 0.05 * rain;
+    u.uShutter.value = 0.075 + 0.05 * rain;
     u.uIntensity.value = Math.pow(rain, 0.75);
     u.uWidth.value = 0.009 + 0.006 * rain;
 

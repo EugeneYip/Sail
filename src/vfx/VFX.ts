@@ -52,6 +52,7 @@ export class VFX implements Module {
       wakeTexture: wake.target.texture,
       wakeMatrix: wake.matrix,
       wakeWorldSize: WAKE_WORLD_SIZE,
+      wakeStrength: 0,
       interactionTexture: wake.interaction.texture,
       interactionMatrix: wake.interactionMatrix,
       interactionWorldSize: wake.interactionWorldSize,
@@ -67,14 +68,26 @@ export class VFX implements Module {
     const s = this.s;
     if (!s.ready) return;
     const ctx = s.ctx;
+    // Sub-attribution, debug only. Written explicitly rather than through a
+    // closure because `update` must not allocate.
+    const st = world.settings.debug ? world.stats : null;
+    let t = st ? performance.now() : 0;
+    let n = 0;
 
     updateCtx(ctx);
     s.probe.update(world);
+    if (st) { n = performance.now(); st['vfx:probe'] = n - t; t = n; }
+
     s.wake.update(ctx);
+    this.ext.wakeStrength = s.wake.strength;
+    if (st) { n = performance.now(); st['vfx:wake'] = n - t; t = n; }
+
     s.hull.update(ctx, s.probe);
+    if (st) { n = performance.now(); st['vfx:hull'] = n - t; t = n; }
 
     s.particles.begin(ctx);
     this.spray.update(ctx, s.particles, s.probe, s.wake);
+    if (st) { n = performance.now(); st['vfx:spray'] = n - t; }
     // `end` is deferred to the last vfx module so rain, smoke and ordnance can
     // all emit into the same pool before it is stepped.
   }

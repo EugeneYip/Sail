@@ -227,6 +227,17 @@ export const CLOUD_DETAIL_NOISE_SIZE = 32;
 export const CLOUD_WEATHER_SIZE = 512;
 /** Metres covered by one wrap of the weather texture. */
 export const CLOUD_WEATHER_EXTENT_M = 48000;
+/**
+ * Metres covered by one wrap of the base and detail volumes. Both divide
+ * CLOUD_WEATHER_EXTENT_M exactly (8x and 64x), which is what lets the
+ * accumulated wind scroll be wrapped modulo the weather extent without any of
+ * the three fields jumping — and wrapping it is what keeps the field coordinates
+ * inside fp32's useful range after an hour of sailing.
+ */
+export const CLOUD_BASE_TILE_M = 6000;
+export const CLOUD_DETAIL_TILE_M = 750;
+/** Cirrus samples the weather map at this multiple of the low deck's extent. */
+export const CLOUD_CIRRUS_MAP_SCALE = 2;
 
 export const CLOUD_SHADOW_SIZE = 512;
 /** Metres covered by the cloud shadow map, centred on the camera. */
@@ -234,3 +245,73 @@ export const CLOUD_SHADOW_EXTENT_M = 26000;
 
 /** Wind multiplier at cloud altitude — the deck runs ahead of the surface wind. */
 export const CLOUD_WIND_GAIN = 1.6;
+
+/**
+ * Extinction of the low deck at unit field density, 1/m. Measured cumulus runs
+ * 0.01–0.06 1/m; at 0.045 a 1 km chord of solid cloud has optical depth 45, so
+ * the deck is properly opaque and its interior is lit only by multiple
+ * scattering — which is exactly where the octave approximation earns its keep.
+ */
+export const CLOUD_EXTINCTION_PER_M = 0.045;
+/**
+ * Single-scattering albedo. Liquid water barely absorbs in the visible, so this
+ * is very close to 1 and cloud colour comes almost entirely from the light, not
+ * from the medium. Nudged below 1 so an infinitely deep march still converges.
+ */
+export const CLOUD_ALBEDO = 0.98;
+/**
+ * Energy gain applied to the multiple-scattering octaves.
+ *
+ * The octave approximation is known to under-light. Summed to infinity it
+ * converges to twice the isotropic phase — 0.16 sr^-1 — while a semi-infinite
+ * cloud of albedo 0.98 really returns about 0.85 of what falls on it, which as a
+ * Lambertian is 0.27 sr^-1. This is that shortfall, applied only to octaves 1
+ * and up so that single scattering — and with it the silver lining, which is a
+ * single-scattering phenomenon — stays exactly as physics gives it.
+ *
+ * The anchor is checkable: at noon, E_sun is ~12 game units, so a thick sunlit
+ * cumulus top must land near 0.85 * 12 / PI = 3.2 units of radiance, i.e. about
+ * 30 % brighter than a sunlit white sail. That is the number this is set for.
+ */
+export const CLOUD_MULTISCATTER_GAIN = 4.5;
+
+/**
+ * Two-stream diffusion coefficient, `T = 1/(1 + k tau)`.
+ *
+ * k = 0.75 (1 - g_eff). A single Mie scatter has g ~= 0.85, but after enough
+ * scatters the effective asymmetry decays toward zero; 0.19 corresponds to
+ * g_eff = 0.75, which is where the multiple-scattering octaves live. Only the
+ * octaves use it — single scattering stays exact Beer-Lambert.
+ */
+export const CLOUD_DIFFUSION_K = 0.19;
+
+/** Cirrus optical depth at full cover, along the vertical. Ice cloud is thin. */
+export const CLOUD_CIRRUS_OPTICAL_DEPTH = 0.55;
+/** Thickness of the cirrus shell, metres — used only for the ray path length. */
+export const CLOUD_CIRRUS_THICKNESS_M = 900;
+
+/** Sun-march samples per lit cloud sample, and for the shadow map. */
+export const CLOUD_SUN_STEPS = 5;
+export const CLOUD_SHADOW_STEPS = 14;
+/** Samples in the below-deck shaft march that produces crepuscular rays. */
+export const CLOUD_SHAFT_STEPS = 10;
+/** Distance the shaft march covers, metres. Beyond this the deck is at grazing. */
+export const CLOUD_SHAFT_RANGE_M = 26000;
+/**
+ * How much of the sky's inscattered radiance the deck is allowed to shadow.
+ * The sky-view LUT is baked cloud-free, so the air under an overcast deck comes
+ * out of it too bright; this is the correction, and the gaps in it are the
+ * crepuscular rays. Full strength would be 1.0 — held below that because the
+ * LUT's multiple-scattering term genuinely does still light shadowed air.
+ */
+export const CLOUD_AIR_SHADOW = 0.55;
+
+/**
+ * Temporal accumulation weight for the quarter-res cloud buffer, per frame at
+ * 60 Hz. 0.09 needs ~11 frames to converge, which is what lets 40 march steps
+ * look like 400; the neighbourhood clamp in the resolve is what stops that
+ * becoming a smear when the camera turns.
+ */
+export const CLOUD_TEMPORAL_ALPHA = 0.09;
+/** Divisor on each screen axis for the cloud raymarch target. */
+export const CLOUD_RESOLUTION_DIVISOR = 2;
