@@ -49,6 +49,7 @@ export class OrbitMode implements CameraMode {
   readonly lookYawLimit = Math.PI;
   readonly lookPitchMin = -0.3;
   readonly lookPitchMax = 0.35;
+  readonly distanceRange = [MIN_DISTANCE, MAX_DISTANCE] as const;
 
   /** Azimuth from dead astern, radians, signed. */
   private azimuth = CANONICAL_AZIMUTH;
@@ -100,6 +101,8 @@ export class OrbitMode implements CameraMode {
     out.avoidHull = true;
     out.avoidRig = true;
     out.waterClearance = 2.6;
+    out.posSmoothTime = 0.3;
+    out.targetSmoothTime = 0.55;
     out.shot = '';
   }
 

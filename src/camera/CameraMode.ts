@@ -15,6 +15,13 @@ export type FocusMode = 'point' | 'horizon' | 'fixed';
 export class CameraSolve {
   readonly position = new THREE.Vector3();
   readonly target = new THREE.Vector3();
+  /**
+   * Where the collision whiskers start. The rig pre-fills this with a point
+   * inside the hull before every solve, which is the right origin for a camera
+   * that orbits the ship; a mode with a different subject (a yardarm, the bow)
+   * overwrites it. It must be a point the camera is allowed to see.
+   */
+  readonly pivot = new THREE.Vector3();
   /** Extra roll about the view axis, radians. */
   roll = 0;
   /** Base vertical FOV in degrees, before the user's `settings.fov` offset. */
@@ -32,6 +39,15 @@ export class CameraSolve {
   avoidRig = false;
   /** Metres of clearance to hold above water/terrain. Negative permits a dip. */
   waterClearance = 1.6;
+  /**
+   * Final output filter, seconds of smooth time, applied by the rig on top of
+   * whatever the mode already did. Zero for anything bolted to the ship — a
+   * deck camera that lags its mount reads as the deck sliding under your feet.
+   * Detached cameras want a little, and the target wants MORE than the position
+   * so the hull drifts within the frame instead of being pinned to it.
+   */
+  posSmoothTime = 0;
+  targetSmoothTime = 0;
   /** True on the frame this mode cut to a new shot. */
   cut = false;
   /** Sub-shot id, published on `ext.camera.shot`. */
@@ -39,6 +55,8 @@ export class CameraSolve {
 
   reset(): void {
     this.roll = 0;
+    this.posSmoothTime = 0;
+    this.targetSmoothTime = 0;
     this.fov = 58;
     this.aperture = 4;
     this.focusMode = 'point';
@@ -79,6 +97,16 @@ export interface CameraMode {
   readonly lookYawLimit: number;
   readonly lookPitchMin: number;
   readonly lookPitchMax: number;
+  /** True when the mode reads `input.lookYaw/lookPitch` itself (free-cam). */
+  readonly ownsLook?: boolean;
+  /**
+   * Rate, per second, at which free-look decays back to the mode's composed
+   * axis once the player stops dragging. Only the framed modes want this: a
+   * first-person view that slowly turns your head for you is horrible.
+   */
+  readonly lookRecentreRate?: number;
+  /** Clamp applied to `cam.distance` while this mode is active. */
+  readonly distanceRange?: readonly [number, number];
   /** Called on every entry to the mode, including externally-set ones. */
   enter(ctx: CameraContext, out: CameraSolve): void;
   solve(ctx: CameraContext, out: CameraSolve): void;

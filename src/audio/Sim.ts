@@ -282,14 +282,25 @@ function wrapPi(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
 }
 
+/** Beyond this the cliff reverb and the gulls are both fully faded out anyway. */
+const LAND_QUERY_RADIUS_M = 5000;
+
 /**
- * `world.ext.world.nearestLand` is published by the world module, whose shape is
- * not pinned by the contract yet. Accept a number, a `{ distance }`, or a
+ * `world.ext.world.nearestLand` — `src/world/api.ts` declares it as
+ * `nearestLand(x, z, maxRadius?) => { distance } | null`, but the world module
+ * is still a placeholder, so also accept a number, a `{ distance }` or a
  * `{ position, radius }` and otherwise assume open ocean.
  */
 function readLandDistance(ext: Record<string, unknown>, shipPos: THREE.Vector3): number {
   const w = ext.world as { nearestLand?: unknown } | undefined;
-  const nl = w?.nearestLand;
+  let nl = w?.nearestLand;
+  if (typeof nl === 'function') {
+    try {
+      nl = (nl as (x: number, z: number, r?: number) => unknown).call(w, shipPos.x, shipPos.z, LAND_QUERY_RADIUS_M);
+    } catch {
+      return Infinity;
+    }
+  }
   if (nl == null) return Infinity;
   if (typeof nl === 'number') return Number.isFinite(nl) ? nl : Infinity;
   if (typeof nl !== 'object') return Infinity;

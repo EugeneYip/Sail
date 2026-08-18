@@ -29,11 +29,43 @@
 import * as THREE from 'three';
 import type { WaveSample } from '../types';
 import { CpuFft } from './CpuFft';
-import { modeVariance, type CascadeLayout, type SpectrumParams, dispersion } from './Spectrum';
+import {
+  HANDOVER_OCTAVES,
+  modeVariance,
+  type CascadeLayout,
+  type SpectrumParams,
+  dispersion,
+} from './Spectrum';
 import type { SpectralNoise } from './Noise';
 
-/** CPU grid size per cascade index. Coarser for the fine cascades. */
-const CPU_GRID = [64, 64, 32, 32];
+/**
+ * Cost ceiling per cascade index. A CPU FFT is O(m^2 log m) in JavaScript and
+ * runs every frame, so the budget goes to the cascades that actually move a
+ * 2200 t hull: the coarsest carries the swell and gets the big grid, the finest
+ * carries centimetre ripple that no hull can feel and gets the smallest.
+ */
+const CPU_GRID_CAP = [128, 64, 32, 32];
+
+function pow2ceil(x: number): number {
+  let n = 16;
+  while (n < x) n *= 2;
+  return n;
+}
+
+/**
+ * Grid that just covers a cascade's band. A grid of m over a tile of L reaches
+ * k = pi*m/L, so covering the band (including the top of the crossfade, which
+ * is kMax shifted up by HANDOVER_OCTAVES) needs m >= kTop*L/pi. Capped both by
+ * the budget above and by the GPU's own mode count — carrying modes the GPU
+ * does not render would make the CPU field wronger, not righter.
+ */
+function cpuGridFor(layout: CascadeLayout, index: number): number {
+  const cap = CPU_GRID_CAP[Math.min(index, CPU_GRID_CAP.length - 1)];
+  if (!Number.isFinite(layout.kMax)) return Math.min(cap, layout.n);
+  const kTop = layout.kMax * Math.pow(2, HANDOVER_OCTAVES);
+  const need = pow2ceil((kTop * layout.size) / Math.PI);
+  return Math.max(16, Math.min(cap, layout.n, need));
+}
 
 interface CpuCascade {
   layout: CascadeLayout;
@@ -55,14 +87,32 @@ export class CpuWaves {
   private noise: SpectralNoise;
   /** Scratch for sample(): never allocate per call. */
   private acc = new Float32Array(6);
+  /** Floating-origin offset, already reduced onto the coarsest tile. */
+  private originX = 0;
+  private originZ = 0;
 
   constructor(noise: SpectralNoise) {
     this.noise = noise;
   }
 
+  /**
+   * The GPU samples the cascades in wrapped-absolute XZ. Adding the same offset
+   * here is what keeps the two fields the same field rather than two
+   * realisations that merely look alike.
+   */
+  setOrigin(x: number, z: number): void {
+    this.originX = x;
+    this.originZ = z;
+  }
+
+  /** CPU grid size actually chosen for cascade `i`. */
+  gridSize(i: number): number {
+    return this.cascades[i]?.m ?? 0;
+  }
+
   build(layouts: CascadeLayout[]): void {
     this.cascades = layouts.map((layout, i) => {
-      const m = CPU_GRID[Math.min(i, CPU_GRID.length - 1)];
+      const m = cpuGridFor(layout, i);
       return {
         layout,
         m,
@@ -170,15 +220,17 @@ export class CpuWaves {
    * Bilinear-accumulate all six fields at world XZ into `this.acc`:
    *   [Dy, sx, sz, Jsum, Dx, Dz]
    */
-  private gather(x: number, z: number): void {
+  private gather(wx: number, wz: number): void {
+    const x = wx + this.originX;
+    const z = wz + this.originZ;
     const acc = this.acc;
     acc[0] = 0; acc[1] = 0; acc[2] = 0; acc[3] = 0; acc[4] = 0; acc[5] = 0;
     for (let ci = 0; ci < this.cascades.length; ci++) {
       const c = this.cascades[ci];
       const m = c.m;
       const inv = m / c.layout.size;
-      let fx = x * inv;
-      let fz = z * inv;
+      const fx = x * inv;
+      const fz = z * inv;
       let i0 = Math.floor(fx);
       let j0 = Math.floor(fz);
       const tx = fx - i0;
@@ -202,7 +254,9 @@ export class CpuWaves {
     }
   }
 
-  height(x: number, z: number): number {
+  height(wx: number, wz: number): number {
+    const x = wx + this.originX;
+    const z = wz + this.originZ;
     let h = 0;
     for (let ci = 0; ci < this.cascades.length; ci++) {
       const c = this.cascades[ci];

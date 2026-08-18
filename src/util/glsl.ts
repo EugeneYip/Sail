@@ -22,7 +22,7 @@ float remap(float x, float a, float b, float c, float d){ return c + (x-a)*(d-c)
 float remapc(float x, float a, float b, float c, float d){ return clamp(c + (x-a)*(d-c)/(b-a), min(c,d), max(c,d)); }
 float linstep(float a, float b, float x){ return saturate1((x-a)/(b-a)); }
 
-float luminance(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float lwLuminance(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
 // Hashes — Dave Hoskins, "Hash without Sine".
 float hash11(float p){ p = fract(p*0.1031); p *= p+33.33; p *= p+p; return fract(p); }
@@ -245,7 +245,7 @@ vec3 agx(vec3 col){
   col = agxDefaultContrast(col);
   col = AGX_OUT * col;
   // Punchy look: slight saturation restore, since AgX desaturates by design.
-  float l = luminance(col);
+  float l = lwLuminance(col);
   col = mix(vec3(l), col, 1.06);
   return clamp(col, 0.0, 1.0);
 }

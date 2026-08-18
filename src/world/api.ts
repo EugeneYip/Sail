@@ -21,6 +21,8 @@ export const DEEP_DEPTH = -140;
 export interface LandQuery {
   /** Metres from the query point to the nearest above-water land. */
   distance: number;
+  /** Compass bearing to that land, radians, 0 = north = -Z. */
+  bearing: number;
   /** Render-space position of that land point (y = terrain height). */
   position: THREE.Vector3;
   /** Which island it belongs to. */
@@ -34,12 +36,16 @@ export interface IslandInfo {
   tileZ: number;
   /** Render-space centre (y = 0). */
   center: THREE.Vector3;
+  /** Alias of `center` — the chart instrument reads this name. */
+  position: THREE.Vector3;
   /** Absolute voyage-space centre — stable across origin shifts. */
   absCenter: THREE.Vector3;
   /** Half-extent of the generated heightfield, metres. */
   halfExtent: number;
   /** Radius beyond which the island is certainly under water, metres. */
   landRadius: number;
+  /** Alias of `landRadius`. */
+  radius: number;
   /** Highest point, metres. */
   maxHeight: number;
   archetype: string;

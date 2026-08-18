@@ -101,7 +101,16 @@ export class ShipFrame {
   private vMountZ = { v: 0 };
   private heaveMean = 0;
 
-  update(world: World, dt: number): void {
+  /**
+   * @param bypass DEBUG — re-seed every filter from the raw transform on each
+   *  frame, so the frame IS the raw ship. Drives `ext.camera.bypassFilter`,
+   *  which exists to measure what the filters are actually rejecting.
+   */
+  update(world: World, dt: number, bypass = false): void {
+    if (bypass) {
+      this.snap(world);
+      return;
+    }
     const root = world.shipRoot;
     const ship = world.ship;
 
@@ -212,6 +221,8 @@ export class ShipFrame {
     this.pitch = world.ship.pitch;
     this.turnRate = 0;
     this.lateralAccel = 0;
+    this.heaveResidual = 0;
+    this.bowSlamNorm = clamp01(Math.abs(world.ship.bowSlam) / BOW_SLAM_FULL);
     this.velocity.copy(world.ship.velocity);
     this.prevVel.copy(this.velocity);
     this.speed = this.velocity.length();

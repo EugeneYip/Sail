@@ -21,6 +21,7 @@ export class FreeMode implements CameraMode {
   readonly lookYawLimit = 0; // unclamped; handled internally
   readonly lookPitchMin = -1.48;
   readonly lookPitchMax = 1.48;
+  readonly ownsLook = true;
 
   private pos = new THREE.Vector3();
   private vel = new THREE.Vector3();

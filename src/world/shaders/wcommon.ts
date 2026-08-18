@@ -14,7 +14,9 @@ export const HEIGHTFIELD = /* glsl */ `
 #define WORLD_HEIGHTFIELD
 uniform sampler2D tHeight;   // RG32F: r = height (m), g = moisture code
 uniform sampler2D tMat;      // RGBA8: rg = normal.xz, b = sandiness, a = AO
+uniform sampler2D tCoarse;   // R8, quarter res, LINEAR: height remapped to 0..1
 uniform vec4 uHF;            // x = gridN, y = extent, z = cell size, w = 1/gridN
+uniform vec4 uHFC;           // x = coarse size, y = height scale, z = offset, w = 1/size
 
 vec2 hfCoord(vec2 lxz){ return (lxz / uHF.y + 0.5) * (uHF.x - 1.0); }
 
@@ -33,6 +35,16 @@ vec2 hfSampleHM(vec2 lxz){
 }
 
 float hfHeight(vec2 lxz){ return hfSampleHM(lxz).r; }
+
+/**
+ * One-fetch filtered height from the quarter-res copy. Quantised to ~1/255 of
+ * the island's relief, which is far below anything a shadow ray or a distance
+ * query can see, and a quarter of the bandwidth of the bilinear fetch.
+ */
+float hfHeightCoarse(vec2 lxz){
+  vec2 uv = ((lxz / uHF.y + 0.5) * (uHFC.x - 1.0) + 0.5) * uHFC.w;
+  return texture(tCoarse, uv).r * uHFC.y + uHFC.z;
+}
 
 vec4 hfMat(vec2 lxz){
   return texture(tMat, (hfCoord(lxz) + 0.5) * uHF.w);
@@ -63,12 +75,12 @@ float hfSunShadow(vec2 lxz, float h, vec3 sunDir){
   vec2 dir = sunDir.xz / horiz;
   float rise = sunDir.y / horiz;
   float sh = 1.0;
-  float t = uHF.z * 1.5;
-  for (int i = 0; i < 10; i++){
-    float hh = hfHeight(lxz + dir * t);
+  float t = uHF.z * 2.0;
+  for (int i = 0; i < 8; i++){
+    float hh = hfHeightCoarse(lxz + dir * t);
     float hr = h + rise * t;
-    sh = min(sh, 1.0 - linstep(0.0, 14.0 + t * 0.02, hh - hr));
-    t *= 1.72;
+    sh = min(sh, 1.0 - linstep(0.0, 16.0 + t * 0.02, hh - hr));
+    t *= 2.05;
   }
   return sh;
 }

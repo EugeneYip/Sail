@@ -1,0 +1,13 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ headless: true, args: ['--use-angle=metal','--enable-gpu','--ignore-gpu-blocklist','--enable-unsafe-swiftshader','--autoplay-policy=no-user-gesture-required'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
+const errs = [], logs = [];
+p.on('pageerror', e => errs.push('PAGEERROR: ' + e.message));
+p.on('console', m => logs.push(m.type()+': '+m.text().slice(0,300)));
+await p.goto('http://127.0.0.1:5178/', { waitUntil: 'domcontentloaded' });
+await p.waitForTimeout(12000);
+const has = await p.evaluate(() => ({ leeward: !!window.__leeward, audio: !!window.__leeward?.world?.ext?.audio, status: window.__leeward?.world?.ext?.audio?.status }));
+console.log('has:', JSON.stringify(has));
+console.log('--- pageerrors ---'); console.log(errs.slice(0,5).join('\n'));
+console.log('--- console (last 20) ---'); console.log(logs.slice(-20).join('\n'));
+await b.close();

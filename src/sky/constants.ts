@@ -70,6 +70,61 @@ export const RADIANCE_SCALE = 13.0;
 /** Physical conversion for star visibility thresholds: 1.0 radiance -> cd/m^2. */
 export const LUMINANCE_PER_UNIT = 100000 / RADIANCE_SCALE;
 
+/** Solid angle of the solar disc, steradians. */
+export const SUN_SOLID_ANGLE = 2 * Math.PI * (1 - Math.cos(SUN_ANGULAR_RADIUS));
+
+/**
+ * The sun disc is rendered at 1% of its physical radiance. Physically the disc
+ * is ~1.5e5 in the same units where a sunlit white sail is ~2, and putting that
+ * in the HDR buffer wrecks any average-luminance auto-exposure and turns bloom
+ * into a white sheet. 1% keeps the disc ~700x brighter than white — still a
+ * hard clip with a strong glare — while the RATIO between noon and sunset is
+ * preserved, so the sun visibly dims as it sets.
+ */
+export const SUN_DISC_RADIANCE_SCALE = 0.01;
+
+/** Earthshine as a fraction of the sunlit lunar surface, at new moon. */
+export const EARTHSHINE_FRACTION = 0.014;
+
+/**
+ * Star and Milky Way radiance scale. Real first-magnitude stars are ~1e-5 of
+ * the daytime sky; at that level they never survive tone mapping at any exposure
+ * that also keeps the moon from clipping. These are tuned so the sky reads right
+ * at night rather than being radiometrically exact.
+ */
+export const STAR_RADIANCE = 0.055;
+export const MILKY_WAY_RADIANCE = 0.0042;
+/** Sky radiance at which stars are half washed out, game units. */
+export const STAR_WASHOUT = 0.0022;
+
+/**
+ * Airglow. The 557.7 nm oxygen line plus the OH Meinel bands: a real, permanent
+ * emission layer at ~90 km that is why a moonless, starless night sky is very
+ * dark green-grey rather than black.
+ */
+export const AIRGLOW = new THREE.Vector3(0.000055, 0.000082, 0.000072);
+
+/** Sea albedo used for the ground-bounce ambient term, linear RGB. */
+export const SEA_BOUNCE_ALBEDO = new THREE.Vector3(0.028, 0.045, 0.062);
+
+/**
+ * Koschmieder's constant for a 2% contrast threshold: V = 3.912 / beta. Kept
+ * here as well as in env/Optics so the two modules cannot write inconsistent
+ * values into `uFogDensity` — they are deriving the same physical quantity.
+ */
+export const KOSCHMIEDER = 3.912;
+
+/* ------------------------------------------------------------------ *
+ *  Shadows
+ * ------------------------------------------------------------------ */
+
+/** Half-extent of the sun's shadow frustum with the sun high, metres. */
+export const SHADOW_RADIUS_MIN_M = 74;
+/** ...and with the sun on the horizon, where shadows run long. */
+export const SHADOW_RADIUS_MAX_M = 200;
+/** Distance the shadow camera is pulled back along the light axis, metres. */
+export const SHADOW_PULLBACK_M = 420;
+
 /**
  * Cinematic moon. A physically exact full moon delivers 2.5e-6 of the sun's
  * illuminance; rendering that honestly needs a 4000x exposure swing that would

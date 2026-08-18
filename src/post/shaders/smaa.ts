@@ -24,7 +24,7 @@ uniform vec2 uTexelSize;
 uniform float uThreshold;
 varying vec2 vUv;
 
-float lum(vec2 uv) { return sqrt(luminance(tmap(max(texture2D(tColor, uv).rgb, vec3(0.0))))); }
+float lum(vec2 uv) { return sqrt(lwLuminance(tmap(max(texture2D(tColor, uv).rgb, vec3(0.0))))); }
 
 void main() {
   vec2 t = uTexelSize;

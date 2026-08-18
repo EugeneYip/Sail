@@ -24,7 +24,7 @@ varying vec2 vUv;
 #define FXAA_STEPS 12
 
 vec3 fetch(vec2 uv) { return tmap(max(texture2D(tColor, uv).rgb, vec3(0.0))); }
-float lum(vec3 c) { return sqrt(luminance(c)); }
+float lum(vec3 c) { return sqrt(lwLuminance(c)); }
 
 /**
  * Progressively longer strides — the reason FXAA 3.11 resolves long shallow

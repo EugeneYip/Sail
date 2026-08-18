@@ -1,52 +1,658 @@
 import * as THREE from 'three';
-import type { IOcean, Module, WaveSample, World } from '../types';
+import type { FoamSource, IOcean, Module, WaveSample, World } from '../types';
+import { CpuWaves } from './CpuWaves';
+import { FoamSim } from './Foam';
+import { SpectralNoise } from './Noise';
+import { OceanMesh } from './OceanMesh';
+import {
+  buildCascades,
+  cascadeSlopeVariance,
+  solveSpectrum,
+  type CascadeLayout,
+  type SpectrumParams,
+} from './Spectrum';
+import { WaveCascade } from './WaveCascade';
+import { surfaceShaders } from './shaders/surface';
+import { makeFoamDetail, makeStubTexture } from './textures';
 
 /**
- * PLACEHOLDER — replaced by the FFT ocean.
- * Kept only so the engine boots; implements the full IOcean contract.
+ * The ocean.
+ *
+ * Sim: N band-limited FFT cascades on the GPU (`WaveCascade`), a CPU mirror of
+ * the same modes for physics (`CpuWaves`), and a camera-following persistent
+ * foam buffer (`FoamSim`).
+ *
+ * Render: one camera-centred geometry clipmap (`OceanMesh`) with a single
+ * material (`shaders/surface.ts`), so the whole sea is 12 draw calls.
+ *
+ * COORDINATE SPACE — read this before touching a uniform.
+ * Everything the wave field is sampled with is *wrapped-absolute* XZ:
+ *   wrappedAbs = worldXZ + (origin.xz mod coarsestTileSize)
+ * Absolute voyage coordinates would lose float32 precision after a few hundred
+ * km, and every tile size divides the coarsest one exactly, so reducing the
+ * floating-origin offset modulo that tile leaves every cascade's phase
+ * untouched. `sample()` takes plain world XZ and does the wrap internally.
  */
+
+/** Clipmap grid cells per side, by quality tier. Cost is O(m^2) triangles. */
+const GRID_BY_TIER: Record<string, number> = { low: 64, medium: 96, high: 128, ultra: 128 };
+
+/** Persistent-foam window: resolution and world size in metres, by tier. */
+const FOAM_BY_TIER: Record<string, [number, number]> = {
+  low: [256, 700],
+  medium: [256, 700],
+  high: [512, 900],
+  ultra: [512, 900],
+};
+
+/** Outer band of each clipmap level that morphs toward the coarser level. */
+const MORPH_START = 0.74;
+
+/**
+ * A cascade stops displacing geometry once even its longest wave is below the
+ * local cell size; between these multiples of that wavelength it fades out.
+ * Everything shorter is handled by the mip chain, which band-limits the
+ * displacement to the cell instead of aliasing it.
+ */
+const CELL_FADE_LO = 0.22;
+const CELL_FADE_HI = 0.9;
+
+/** Re-solve the spectrum when the weather has actually moved this much. */
+const REBAKE_WIND = 0.25; // m/s
+const REBAKE_HS = 0.04; // m
+const REBAKE_BEARING = 0.035; // rad
+const REBAKE_CHOP = 0.02;
+const REBAKE_MIN_INTERVAL = 0.3; // s
+
+/** Shape published on `world.ext.ocean`. Every field is stable for the app's life. */
+export interface OceanExt {
+  /** The ocean draws its own statistical sun-glitter lobe; do not add another. */
+  readonly hasSunGlitter: true;
+  /** Persistent foam coverage, R = coverage 0..1, G = age. Camera-following window. */
+  readonly foamTexture: THREE.Texture;
+  /** (windowOriginX, windowOriginZ, 1/windowSize, 0), wrapped-absolute XZ. */
+  readonly foamWindow: THREE.Vector4;
+  /** Finest cascade's displacement, for anything that just wants "the water texture". */
+  readonly displacementTexture: THREE.Texture;
+  /** Per cascade, coarsest first. RGBA = (Dy, Dx, Dz, dDy/dx). */
+  readonly displacementTextures: THREE.Texture[];
+  /** Per cascade. RGBA = (dDy/dz, dDx/dx, dDz/dz, dDx/dz). */
+  readonly derivativeTextures: THREE.Texture[];
+  /** 1 / tileSize per cascade — multiply wrapped-absolute XZ by this to get uv. */
+  readonly cascadeScales: number[];
+  /** 0.5 / fftResolution per cascade — add to the uv above to hit texel centres. */
+  readonly cascadeHalfTexels: number[];
+  /** Tile size in metres per cascade. */
+  readonly cascadeSizes: number[];
+  /** Add this to a world XZ to get the wrapped-absolute XZ the textures use. */
+  readonly originWrap: THREE.Vector2;
+  /** Significant wave height currently rendered, metres. */
+  readonly waveHeight: number;
+  /** RMS surface slope of the whole spectrum. */
+  readonly slopeRms: number;
+  /** Dominant wave direction of travel and angular frequency. */
+  readonly peakDir: THREE.Vector2;
+  readonly peakOmega: number;
+  /** Conservative bound on |displacement.y| right now, metres. */
+  maxHeight(): number;
+  /** Persistent foam coverage at a world XZ, 0..1. CPU-side estimate. */
+  foamAt(x: number, z: number): number;
+  /** Register a moving foam source (wake, splash). Up to 8. */
+  addFoamSource(s: FoamSource): void;
+  /** One-shot GPU readback: how far the CPU sampler is from the rendered surface. */
+  debugCompare(count?: number): CompareReport;
+}
+
+export interface CompareReport {
+  /** Metres. */
+  rmsHeight: number;
+  maxHeight: number;
+  /** Dimensionless slope. */
+  rmsSlope: number;
+  samples: number;
+  /** Per cascade: CPU grid vs GPU grid, and whether the band is fully covered. */
+  cascades: { size: number; gpu: number; cpu: number; exact: boolean }[];
+}
+
 export class Ocean implements Module, IOcean {
   readonly name = 'ocean';
   readonly seaLevel = 0;
-  private mesh!: THREE.Mesh;
-  private t = 0;
+
+  private world!: World;
+  private noise!: SpectralNoise;
+  private layouts: CascadeLayout[] = [];
+  private cascades: WaveCascade[] = [];
+  private cpu!: CpuWaves;
+  private foam!: FoamSim;
+  private mesh!: OceanMesh;
+  private material!: THREE.ShaderMaterial;
+  private foamDetail!: THREE.DataTexture;
+  private stub!: THREE.DataTexture;
+  private params!: SpectrumParams;
+
+  private simTime = 0;
+  private sinceRebake = 1e9;
+  private baked = { wind: -1, hs: -1, bearing: -1, swell: -1, chop: -1 };
+  private gridM = 128;
+  private tileWrap = 2048;
+  private originWrap = new THREE.Vector2();
+  private hasWake = false;
+
+  /** Scratch — `update()` must never allocate. */
+  private tmpMatrix = new THREE.Matrix4();
+  private tmpVec2 = new THREE.Vector2();
+  private compareRt: THREE.WebGLRenderTarget | null = null;
+  private compareMat: THREE.ShaderMaterial | null = null;
 
   init(world: World): void {
-    const geo = new THREE.PlaneGeometry(20000, 20000, 1, 1).rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(0.02, 0.09, 0.14),
-      roughness: 0.08,
-      metalness: 0,
-    });
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.name = 'ocean-placeholder';
-    world.scene.add(this.mesh);
+    this.world = world;
+    this.noise = new SpectralNoise(0x5ea1);
+    this.foamDetail = makeFoamDetail();
+    this.stub = makeStubTexture();
+    this.cpu = new CpuWaves(this.noise);
+    this.build(world);
     world.ocean = this;
   }
 
-  update(world: World): void {
-    this.t = world.time.elapsed;
-    const c = world.camera.position;
-    this.mesh.position.set(c.x, 0, c.z);
+  /* ------------------------------------------------------------------ *
+   *  construction
+   * ------------------------------------------------------------------ */
+
+  private build(world: World): void {
+    const s = world.settings;
+    this.layouts = buildCascades(s.oceanCascades, s.oceanResolution);
+    this.tileWrap = this.layouts[0].size;
+    this.cascades = this.layouts.map((l) => new WaveCascade(l, this.noise));
+    this.cpu.build(this.layouts);
+
+    const [foamRes, foamSize] = FOAM_BY_TIER[s.quality] ?? FOAM_BY_TIER.high;
+    this.foam = new FoamSim(foamRes, foamSize, this.cascades);
+
+    this.gridM = GRID_BY_TIER[s.quality] ?? 128;
+    this.material = this.makeMaterial(world);
+    this.mesh = new OceanMesh(this.gridM, this.material);
+    world.scene.add(this.mesh.group);
+
+    this.solve(world, true);
+    this.publish(world);
   }
 
+  private makeMaterial(world: World): THREE.ShaderMaterial {
+    const n = this.layouts.length;
+    const src = surfaceShaders(n, this.hasWake);
+
+    const uniforms: Record<string, { value: unknown }> = {
+      ...world.uniforms,
+      uOceanOrigin: { value: this.originWrap },
+      uCascadeScale: { value: this.layouts.map((l) => 1 / l.size) },
+      uCascadeHalfTexel: { value: this.layouts.map((l) => 0.5 / l.n) },
+      uCascadeTexels: { value: this.layouts.map((l) => l.n / l.size) },
+      uCascadeCellFade: { value: this.layouts.map(() => new THREE.Vector2(1, 2)) },
+      uCascadePxFade: { value: this.layouts.map(() => new THREE.Vector2(1, 4)) },
+      uCascadeSlopeVar: { value: this.layouts.map(() => 0) },
+      uGridM: { value: this.gridM },
+      uMorphStart: { value: MORPH_START },
+      uFoam: { value: this.foam.texture },
+      uFoamDetail: { value: this.foamDetail },
+      uReflection: { value: this.stub },
+      uFoamWindow: { value: this.foam.window },
+      uResolution: { value: new THREE.Vector2(world.size.width, world.size.height) },
+      uPixelAngle: { value: 0.002 },
+      uSlopeRms: { value: 0.1 },
+      uWaveHeight: { value: 1 },
+      uHasReflection: { value: 0 },
+      uFoamAmount: { value: 1 },
+      uWake: { value: this.stub },
+      uWakeMatrix: { value: new THREE.Matrix3() },
+      uWakeStrength: { value: 0 },
+    };
+    for (let i = 0; i < n; i++) {
+      uniforms[`uDisp${i}`] = { value: this.cascades[i].displacement.texture };
+      uniforms[`uDeriv${i}`] = { value: this.cascades[i].derivatives.texture };
+    }
+
+    const mat = new THREE.ShaderMaterial({
+      name: 'ocean-surface',
+      uniforms,
+      vertexShader: src.vertexShader,
+      fragmentShader: src.fragmentShader,
+      side: THREE.DoubleSide,
+      transparent: false,
+      depthWrite: true,
+      depthTest: true,
+      fog: false,
+      lights: false,
+    });
+
+    // Cascade texel size sets both fade schedules: the cell fade is geometry,
+    // the pixel fade is where the normal map stops resolving and its variance
+    // has to become roughness instead.
+    const cellFade = mat.uniforms.uCascadeCellFade.value as THREE.Vector2[];
+    const pxFade = mat.uniforms.uCascadePxFade.value as THREE.Vector2[];
+    for (let i = 0; i < n; i++) {
+      const l = this.layouts[i];
+      const texel = l.size / l.n;
+      // Longest wave the cascade carries. The coarsest has no lower band edge,
+      // so it is the tile itself.
+      const lambdaMax = l.kMin > 0 ? (2 * Math.PI) / l.kMin : l.size;
+      cellFade[i].set(lambdaMax * CELL_FADE_LO, lambdaMax * CELL_FADE_HI);
+      pxFade[i].set(texel * 1.1, texel * 4.5);
+    }
+    return mat;
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  spectrum
+   * ------------------------------------------------------------------ */
+
+  private solve(world: World, force: boolean): void {
+    const env = world.env;
+    if (!force) {
+      if (this.sinceRebake < REBAKE_MIN_INTERVAL) return;
+      const b = this.baked;
+      const moved =
+        Math.abs(env.windSpeed - b.wind) > REBAKE_WIND ||
+        Math.abs(env.waveHeight - b.hs) > REBAKE_HS ||
+        Math.abs(env.windBearing - b.bearing) > REBAKE_BEARING ||
+        Math.abs(env.swellBearing - b.swell) > REBAKE_BEARING ||
+        Math.abs(env.choppiness - b.chop) > REBAKE_CHOP;
+      if (!moved) return;
+    }
+    this.sinceRebake = 0;
+    this.baked.wind = env.windSpeed;
+    this.baked.hs = env.waveHeight;
+    this.baked.bearing = env.windBearing;
+    this.baked.swell = env.swellBearing;
+    this.baked.chop = env.choppiness;
+
+    this.params = solveSpectrum(env, this.layouts);
+    for (const c of this.cascades) c.bake(world.renderer, this.params);
+    this.cpu.setParams(this.params);
+
+    const slopeVar = this.material.uniforms.uCascadeSlopeVar.value as number[];
+    for (let i = 0; i < this.layouts.length; i++) {
+      slopeVar[i] = cascadeSlopeVariance(this.params, this.layouts[i]);
+    }
+    this.material.uniforms.uSlopeRms.value = this.params.slopeRms;
+    this.material.uniforms.uWaveHeight.value = this.params.hs;
+    // Monahan: whitecap coverage grows as U^3.4. Below a fresh breeze there
+    // simply are no whitecaps, and the fold mask must not invent any.
+    const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(env.windSpeed, 0.5), 3.41) * 24);
+    this.material.uniforms.uFoamAmount.value = 0.15 + 1.5 * cover;
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  frame
+   * ------------------------------------------------------------------ */
+
+  update(world: World): void {
+    const dt = world.time.dt;
+    this.simTime += dt;
+    this.sinceRebake += dt;
+
+    // Reduce the floating-origin offset onto the coarsest tile. Every finer
+    // tile size divides it, so no cascade's phase changes.
+    const w = this.tileWrap;
+    this.originWrap.set(
+      ((world.origin.x % w) + w) % w,
+      ((world.origin.z % w) + w) % w,
+    );
+    this.cpu.setOrigin(this.originWrap.x, this.originWrap.y);
+
+    this.solve(world, false);
+
+    for (const c of this.cascades) c.update(world.renderer, this.simTime);
+    this.cpu.update(this.simTime);
+
+    const cam = world.camera.position;
+    this.foam.update(
+      world.renderer,
+      cam.x + this.originWrap.x,
+      cam.z + this.originWrap.y,
+      dt,
+      this.params,
+      world.env.windSpeed * world.env.gust,
+    );
+    this.material.uniforms.uFoam.value = this.foam.texture;
+
+    this.updateClipmap(cam.x, cam.z);
+    this.updateWake(world);
+
+    const u = this.material.uniforms;
+    (u.uResolution.value as THREE.Vector2).set(world.size.width, world.size.height);
+    // World metres per pixel per metre of distance — drives every "can this
+    // still be resolved" decision in the fragment shader.
+    u.uPixelAngle.value =
+      (2 * Math.tan((world.camera.fov * Math.PI) / 360)) / Math.max(world.size.height, 1);
+
+    world.stats['ocean.hs'] = this.params.hs;
+  }
+
+  /**
+   * Snap each clipmap level to its own grid. The snap must be to two cells, not
+   * one, or the CDLOD morph flips parity as the camera moves and the surface
+   * shimmers along every level boundary.
+   */
+  private updateClipmap(camX: number, camZ: number): void {
+    for (const lv of this.mesh.levels) {
+      const cell = lv.cell;
+      const snap = cell * 2;
+      const x = Math.round(camX / snap) * snap;
+      const z = Math.round(camZ / snap) * snap;
+      const m = lv.mesh.matrixWorld;
+      m.makeScale(cell, 1, cell);
+      m.elements[12] = x;
+      m.elements[14] = z;
+      lv.mesh.matrix.copy(m);
+    }
+  }
+
+  /**
+   * The VFX agent may publish a wake field on `world.ext.vfx`. Its documented
+   * shape is a torus-mapped RGBA16F where R = persistent foam, G = wake height
+   * in metres, BA = the world-space slope of that height, addressed by
+   * `uv = fract(matrix * vec3(worldX, worldZ, 1))`. Everything here is
+   * optional and null-checked; the ocean must render identically without it.
+   */
+  private updateWake(world: World): void {
+    const ext = world.ext.vfx as
+      | { wakeTexture?: THREE.Texture; wakeMatrix?: THREE.Matrix3; wakeStrength?: number }
+      | undefined;
+    const tex = ext?.wakeTexture ?? null;
+    const mat = ext?.wakeMatrix ?? null;
+    const present = !!(tex && mat);
+    if (present !== this.hasWake) {
+      this.hasWake = present;
+      this.rebuildMaterial(world);
+    }
+    if (!present) return;
+    const u = this.material.uniforms;
+    u.uWake.value = tex;
+    (u.uWakeMatrix.value as THREE.Matrix3).copy(mat as THREE.Matrix3);
+    u.uWakeStrength.value = ext?.wakeStrength ?? 1;
+  }
+
+  private rebuildMaterial(world: World): void {
+    const next = this.makeMaterial(world);
+    const old = this.material;
+    this.material = next;
+    for (const lv of this.mesh.levels) lv.mesh.material = next;
+    this.solve(world, true);
+    old.dispose();
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  IOcean
+   * ------------------------------------------------------------------ */
+
   sampleHeight(x: number, z: number): number {
-    return Math.sin(x * 0.03 + this.t * 0.9) * 0.55 + Math.cos(z * 0.021 - this.t * 0.7) * 0.4;
+    return this.cpu.height(x, z);
   }
 
   sample(x: number, z: number, out: WaveSample): WaveSample {
-    const e = 0.5;
-    out.height = this.sampleHeight(x, z);
-    out.dx = 0;
-    out.dz = 0;
-    const hx = this.sampleHeight(x + e, z) - this.sampleHeight(x - e, z);
-    const hz = this.sampleHeight(x, z + e) - this.sampleHeight(x, z - e);
-    out.normal.set(-hx / (2 * e), 1, -hz / (2 * e)).normalize();
-    out.velocity.set(0, 0, 0);
-    return out;
+    return this.cpu.sample(x, z, out);
+  }
+
+  addFoamSource(source: FoamSource): void {
+    this.foam.addSource(source);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  lifecycle
+   * ------------------------------------------------------------------ */
+
+  resize(world: World): void {
+    // Engine.applyResize() runs before init(), so this fires once with nothing
+    // built yet.
+    if (!this.material) return;
+    (this.material.uniforms.uResolution.value as THREE.Vector2).set(
+      world.size.width,
+      world.size.height,
+    );
+  }
+
+  applySettings(world: World): void {
+    if (!this.material) return;
+    const s = world.settings;
+    const layouts = buildCascades(s.oceanCascades, s.oceanResolution);
+    const sameCascades =
+      layouts.length === this.layouts.length &&
+      layouts.every((l, i) => l.size === this.layouts[i].size && l.n === this.layouts[i].n);
+    const grid = GRID_BY_TIER[s.quality] ?? 128;
+    if (sameCascades && grid === this.gridM) {
+      this.solve(world, true);
+      return;
+    }
+    this.teardown(world);
+    this.build(world);
+  }
+
+  private teardown(world: World): void {
+    world.scene.remove(this.mesh.group);
+    this.mesh.dispose();
+    this.material.dispose();
+    for (const c of this.cascades) c.dispose();
+    this.foam.dispose();
+    this.cascades = [];
+  }
+
+  dispose(): void {
+    this.teardown(this.world);
+    this.noise.dispose();
+    this.foamDetail.dispose();
+    this.stub.dispose();
+    this.compareRt?.dispose();
+    this.compareMat?.dispose();
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  published handle
+   * ------------------------------------------------------------------ */
+
+  private publish(world: World): void {
+    const oceanRef = this;
+    const ext: OceanExt = {
+      hasSunGlitter: true,
+      foamTexture: this.foam.texture,
+      foamWindow: this.foam.window,
+      displacementTexture: this.cascades[this.cascades.length - 1].displacement.texture,
+      displacementTextures: this.cascades.map((c) => c.displacement.texture),
+      derivativeTextures: this.cascades.map((c) => c.derivatives.texture),
+      cascadeScales: this.layouts.map((l) => 1 / l.size),
+      cascadeHalfTexels: this.layouts.map((l) => 0.5 / l.n),
+      cascadeSizes: this.layouts.map((l) => l.size),
+      originWrap: this.originWrap,
+      get waveHeight() {
+        return oceanRef.params.hs;
+      },
+      get slopeRms() {
+        return oceanRef.params.slopeRms;
+      },
+      get peakDir() {
+        return oceanRef.tmpVec2.set(oceanRef.params.windDirX, oceanRef.params.windDirZ);
+      },
+      get peakOmega() {
+        return oceanRef.params.peakOmega;
+      },
+      maxHeight: () => this.cpu.maxHeight(),
+      foamAt: (x, z) => this.cpu.foamAt(x, z),
+      addFoamSource: (s) => this.foam.addSource(s),
+      debugCompare: (count) => this.debugCompare(count),
+    };
+    world.ext.ocean = ext;
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  verification
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Read the GPU displacement back and compare it with what `sample()` returns
+   * at the same points. Synchronous and slow — a debug tool, never called from
+   * `update()`.
+   */
+  debugCompare(count = 4096): CompareReport {
+    const renderer = this.world.renderer;
+    if (!this.compareMat) {
+      this.compareMat = new THREE.ShaderMaterial({
+        uniforms: { uSrc: { value: null } },
+        vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader:
+          'precision highp float; uniform sampler2D uSrc; void main(){ gl_FragColor = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0); }',
+        depthTest: false,
+        depthWrite: false,
+      });
+    }
+
+    // Pull every cascade into float buffers first.
+    const disp: Float32Array[] = [];
+    const deriv: Float32Array[] = [];
+    for (const c of this.cascades) {
+      const n = c.layout.n;
+      if (!this.compareRt || this.compareRt.width !== n) {
+        this.compareRt?.dispose();
+        this.compareRt = new THREE.WebGLRenderTarget(n, n, {
+          type: THREE.FloatType,
+          format: THREE.RGBAFormat,
+          colorSpace: THREE.NoColorSpace,
+          minFilter: THREE.NearestFilter,
+          magFilter: THREE.NearestFilter,
+          depthBuffer: false,
+          stencilBuffer: false,
+          generateMipmaps: false,
+        });
+      }
+      const rt = this.compareRt;
+      const buf = new Float32Array(n * n * 4);
+      this.compareMat.uniforms.uSrc.value = c.displacement.texture;
+      renderFullscreen(renderer, this.compareMat, rt);
+      renderer.readRenderTargetPixels(rt, 0, 0, n, n, buf);
+      disp.push(buf);
+      const buf2 = new Float32Array(n * n * 4);
+      this.compareMat.uniforms.uSrc.value = c.derivatives.texture;
+      renderFullscreen(renderer, this.compareMat, rt);
+      renderer.readRenderTargetPixels(rt, 0, 0, n, n, buf2);
+      deriv.push(buf2);
+    }
+
+    const sample: WaveSample = createWaveSample();
+    let sumH = 0;
+    let maxH = 0;
+    let sumS = 0;
+    const side = Math.max(2, Math.round(Math.sqrt(count)));
+    const span = this.layouts[0].size;
+    for (let j = 0; j < side; j++) {
+      for (let i = 0; i < side; i++) {
+        const x = (i / side) * span;
+        const z = (j / side) * span;
+        let gy = 0;
+        let gsx = 0;
+        let gsz = 0;
+        for (let ci = 0; ci < this.cascades.length; ci++) {
+          const l = this.layouts[ci];
+          const d = bilinear(disp[ci], l.n, x / l.size, z / l.size);
+          const e = bilinear(deriv[ci], l.n, x / l.size, z / l.size);
+          gy += d[0];
+          gsx += d[3];
+          gsz += e[0];
+        }
+        // The CPU sampler works in wrapped-absolute space too, so undo the wrap.
+        this.cpu.sample(x - this.originWrap.x, z - this.originWrap.y, sample);
+        const dh = sample.height - gy;
+        sumH += dh * dh;
+        if (Math.abs(dh) > maxH) maxH = Math.abs(dh);
+        // Reconstruct the CPU's slope from its normal.
+        const csx = -sample.normal.x / Math.max(sample.normal.y, 1e-3);
+        const csz = -sample.normal.z / Math.max(sample.normal.y, 1e-3);
+        sumS += (csx - gsx) * (csx - gsx) + (csz - gsz) * (csz - gsz);
+      }
+    }
+    const total = side * side;
+    return {
+      rmsHeight: Math.sqrt(sumH / total),
+      maxHeight: maxH,
+      rmsSlope: Math.sqrt(sumS / (2 * total)),
+      samples: total,
+      cascades: this.layouts.map((l, i) => ({
+        size: l.size,
+        gpu: l.n,
+        cpu: this.cpu.gridSize(i),
+        exact: this.cpu.gridSize(i) >= l.n,
+      })),
+    };
   }
 }
 
+/* ------------------------------------------------------------------ *
+ *  helpers
+ * ------------------------------------------------------------------ */
+
+const bilinearOut = new Float32Array(4);
+
+/** Same reconstruction the shader gets from a LinearFilter fetch. */
+function bilinear(buf: Float32Array, n: number, u: number, v: number): Float32Array {
+  // texel centres sit at (i + 0.5) / n, matching uCascadeHalfTexel.
+  const fx = u * n;
+  const fz = v * n;
+  let i0 = Math.floor(fx);
+  let j0 = Math.floor(fz);
+  const tx = fx - i0;
+  const tz = fz - j0;
+  i0 = ((i0 % n) + n) % n;
+  j0 = ((j0 % n) + n) % n;
+  const i1 = (i0 + 1) % n;
+  const j1 = (j0 + 1) % n;
+  const a = (j0 * n + i0) * 4;
+  const b = (j0 * n + i1) * 4;
+  const c = (j1 * n + i0) * 4;
+  const d = (j1 * n + i1) * 4;
+  const w00 = (1 - tx) * (1 - tz);
+  const w10 = tx * (1 - tz);
+  const w01 = (1 - tx) * tz;
+  const w11 = tx * tz;
+  for (let k = 0; k < 4; k++) {
+    bilinearOut[k] = buf[a + k] * w00 + buf[b + k] * w10 + buf[c + k] * w01 + buf[d + k] * w11;
+  }
+  return bilinearOut;
+}
+
+let fsScene: THREE.Scene | null = null;
+let fsMesh: THREE.Mesh | null = null;
+const fsCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+function renderFullscreen(
+  renderer: THREE.WebGLRenderer,
+  material: THREE.Material,
+  target: THREE.WebGLRenderTarget,
+): void {
+  if (!fsScene || !fsMesh) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3),
+    );
+    fsMesh = new THREE.Mesh(geo, material);
+    fsMesh.frustumCulled = false;
+    fsScene = new THREE.Scene();
+    fsScene.add(fsMesh);
+  }
+  fsMesh.material = material;
+  const prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(target);
+  renderer.render(fsScene, fsCamera);
+  renderer.setRenderTarget(prev);
+}
+
+/**
+ * Physics imports this to build its reusable sample struct. Keep the signature —
+ * `src/physics/ShipDynamics.ts` depends on it.
+ */
 export function createWaveSample(): WaveSample {
-  return { height: 0, dx: 0, dz: 0, normal: new THREE.Vector3(0, 1, 0), velocity: new THREE.Vector3() };
+  return {
+    height: 0,
+    dx: 0,
+    dz: 0,
+    normal: new THREE.Vector3(0, 1, 0),
+    velocity: new THREE.Vector3(),
+  };
 }

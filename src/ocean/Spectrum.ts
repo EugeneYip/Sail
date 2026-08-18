@@ -36,7 +36,7 @@ const ALPHA = 0.0081;
  */
 const HANDOVER_MODE = 5.0;
 /** Half-width of the crossfade, in octaves of k. */
-const HANDOVER_OCTAVES = 0.42;
+export const HANDOVER_OCTAVES = 0.42;
 
 /** Angular frequency from wavenumber, deep water plus the capillary term. */
 export function dispersion(k: number): number {

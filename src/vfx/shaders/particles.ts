@@ -8,6 +8,10 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
  *   T0  xyz = world position, w = age (seconds; < 0 means dead)
  *   T1  xyz = velocity m/s,   w = total lifetime
  *   T2  x = base size (m), y = kind, z = seed, w = wind drag coefficient
+ *
+ * Emission is a second, tiny pass: a `THREE.Points` draw straight into the same
+ * MRT, one point per new particle, at the destination texel. That keeps the
+ * whole system to two passes plus one draw, whatever the particle count.
  */
 
 export const KIND = {
@@ -19,6 +23,7 @@ export const KIND = {
   FLASH: 5,
   MOTE: 6,
   GLITTER: 7,
+  SMOKE: 8,
 } as const;
 
 const probe = /* glsl */ `
@@ -54,6 +59,7 @@ uniform float uDt;
 uniform float uTime;
 uniform vec3  uAir;        // air velocity, m/s
 uniform float uTurb;       // gust turbulence amplitude
+uniform vec3  uShift;      // floating-origin correction applied this frame
 layout(location = 0) out vec4 oPos;
 layout(location = 1) out vec4 oVel;
 layout(location = 2) out vec4 oPar;
@@ -70,7 +76,7 @@ void main(){
   if (age >= V.w){ oPos = vec4(P.xyz, -1.0); oVel = V; return; }
 
   float kind = A.y;
-  vec3 pos = P.xyz;
+  vec3 pos = P.xyz + uShift;
   vec3 vel = V.xyz;
   float dt = uDt;
 
@@ -82,6 +88,7 @@ void main(){
   else if (kind > 3.5 && kind < 4.5) gScale = 0.0;  // FLECK, rides the surface
   else if (kind > 4.5 && kind < 5.5) gScale = -0.4; // FLASH, rises
   else if (kind > 5.5 && kind < 6.5) gScale = 0.02; // MOTE
+  else if (kind > 7.5) gScale = -0.16;              // SMOKE, hot and buoyant
   else if (kind > 6.5) gScale = 0.0;                // GLITTER
   else if (kind > 0.5) gScale = 0.72;               // SHEET
   vel.y -= 9.81 * gScale * dt;
@@ -91,7 +98,7 @@ void main(){
   vec3 rel = uAir - vel;
   vel += rel * min(A.w * dt, 0.95);
 
-  if (uTurb > 0.001 && kind > 1.5 && kind < 6.5){
+  if (uTurb > 0.001 && kind > 1.5){
     vec3 q = pos * 0.055 + vec3(0.0, uTime * 0.35, uTime * 0.13);
     vec3 turb = vec3(snoise3(q), snoise3(q + 31.7) * 0.6, snoise3(q + 71.3));
     vel += turb * uTurb * dt;
@@ -111,10 +118,27 @@ void main(){
     vel.y *= -0.12;
     vel.xz *= 0.55;
     age = max(age, V.w - 0.14);
+  } else if (kind > 7.5 && pos.y < wy + 0.4){
+    // Smoke rolls along the surface rather than sinking through it.
+    pos.y = wy + 0.4;
+    vel.y = max(vel.y, 0.0);
   }
 
   oPos = vec4(pos, age);
   oVel = vec4(vel, V.w);
+}
+`;
+
+/** Kill every slot. A float render target cannot be cleared to age = -1. */
+export const killFrag = /* glsl */ `
+precision highp float;
+layout(location = 0) out vec4 oPos;
+layout(location = 1) out vec4 oVel;
+layout(location = 2) out vec4 oPar;
+void main(){
+  oPos = vec4(0.0, 0.0, 0.0, -1.0);
+  oVel = vec4(0.0);
+  oPar = vec4(0.0);
 }
 `;
 
@@ -157,6 +181,8 @@ export const drawVert = /* glsl */ `
 precision highp float;
 ${GLSL.common}
 ${SHARED_UNIFORM_DECL}
+uniform mat4 viewMatrix;
+uniform mat4 projectionMatrix;
 attribute vec3 position;
 attribute float aId;
 uniform sampler2D tPos;
@@ -166,10 +192,9 @@ uniform sampler2D tProbe;
 uniform mat3 uProbeMat;
 uniform float uTexSize;
 uniform float uStretch;
-uniform float uPixelScale;
 
 varying vec2  vUv;
-varying vec4  vCol;
+varying float vAlpha;
 varying float vKind;
 varying float vSeed;
 varying float vLt;
@@ -201,12 +226,14 @@ void main(){
   else if (kind > 0.5 && kind < 1.5) grow = 0.5 + 1.5 * pow(lt, 0.6);
   else if (kind > 2.5 && kind < 3.5) grow = 0.6 + 1.5 * lt;
   else if (kind > 4.5 && kind < 5.5) grow = 0.6 + 2.2 * lt;
+  else if (kind > 7.5) grow = 0.30 + 2.9 * pow(lt, 0.5);
   float size = A.x * grow;
 
   // Opacity lifecycle: quick in, slow out, plus a per-kind ceiling.
   float fadeIn = smoothstep(0.0, 0.06, lt);
   float fadeOut = 1.0 - smoothstep(0.62, 1.0, lt);
   if (kind > 1.5 && kind < 2.5) fadeOut = 1.0 - smoothstep(0.25, 1.0, lt);
+  else if (kind > 7.5) { fadeIn = smoothstep(0.0, 0.09, lt); fadeOut = 1.0 - smoothstep(0.18, 1.0, lt); }
   float alpha = fadeIn * fadeOut;
 
   vec3 wpos = P.xyz;
@@ -215,7 +242,7 @@ void main(){
 
   vec4 mv = viewMatrix * vec4(wpos, 1.0);
   vViewZ = -mv.z;
-  vec3 vv = (viewMatrix * vec4(V.xyz, 0.0)).xyz;
+  vec3 vv = mat3(viewMatrix) * V.xyz;
 
   // Motion stretch along the screen-space velocity.
   vec2 d = vv.xy;
@@ -234,7 +261,7 @@ void main(){
   // How much of the sun is coming at us through the drop.
   vec3 view = normalize(uCameraPos - wpos);
   vFacing = dot(view, -uSunDirection);
-  vCol = vec4(1.0, 1.0, 1.0, alpha);
+  vAlpha = alpha;
 }
 `;
 
@@ -245,11 +272,17 @@ ${GLSL.fog}
 ${SHARED_UNIFORM_DECL}
 uniform sampler2D tDroplet;
 uniform sampler2D tMist;
+uniform sampler2D tSmoke;
 uniform float uSoftY;
 uniform float uOpacity;
+#ifdef VFX_DEPTH_SOFT
+uniform sampler2D tDepth;
+uniform vec2  uInvRes;
+uniform vec2  uNearFar;
+#endif
 
 varying vec2  vUv;
-varying vec4  vCol;
+varying float vAlpha;
 varying float vKind;
 varying float vSeed;
 varying float vLt;
@@ -260,12 +293,14 @@ varying float vFacing;
 
 void main(){
   float kind = vKind;
-  bool hard = kind < 1.5 || (kind > 3.5 && kind < 4.5) || kind > 5.5;
-  vec4 tx = hard ? texture2D(tDroplet, vUv) : texture2D(tMist, vUv);
+  bool hard = kind < 1.5 || (kind > 3.5 && kind < 4.5) || (kind > 5.5 && kind < 7.5);
+  bool smoke = kind > 7.5;
+  vec4 tx = smoke ? texture2D(tSmoke, vUv)
+                  : (hard ? texture2D(tDroplet, vUv) : texture2D(tMist, vUv));
   float cover = tx.a;
   if (cover < 0.004) discard;
 
-  float thick = hard ? tx.r : tx.b;
+  float thick = (hard && !smoke) ? tx.r : tx.b;
   float rim = hard ? tx.g : 0.0;
   float pip = hard ? tx.b : 0.0;
 
@@ -280,39 +315,49 @@ void main(){
   vec3 spectral = vec3(1.0) + vec3(-0.16, 0.03, 0.24) * (pow(fwd, 9.0) - pow(fwd, 40.0)) * 2.2;
 
   vec3 col;
-  float a = cover * vCol.a * uOpacity;
+  float a = cover * vAlpha * uOpacity;
 
   if (kind > 4.5 && kind < 5.5) {
-    // Muzzle flash: pure emission, no shading.
-    col = vec3(7.0, 4.2, 1.7) * (1.0 - vLt) * (0.4 + cover);
-    a *= 0.0;                       // additive
-    gl_FragColor = vec4(col * cover * vCol.a, 0.0);
+    // Muzzle flash: pure emission, no shading, additive.
+    col = vec3(9.0, 5.0, 1.9) * (1.0 - vLt) * (0.4 + cover);
+    gl_FragColor = vec4(col * cover * vAlpha, 0.0);
     return;
   }
-  if (kind > 6.5) {
+  if (kind > 6.5 && kind < 7.5) {
     // Sun glitter: a tiny specular chip on the surface.
     float g = pow(saturate1(vFacing), 2.0);
     col = sun * (0.045 + 0.5 * g) * (0.5 + pip);
-    gl_FragColor = vec4(col * cover * vCol.a, 0.0);
+    gl_FragColor = vec4(col * cover * vAlpha, 0.0);
     return;
   }
 
-  if (hard) {
+  if (smoke) {
+    // Powder smoke: dense, self-shadowing, strongly forward scattering. It
+    // greys out and thins as it entrains air.
+    float dens = 1.0 - 0.55 * vLt;
+    float ss = pow(fwd, 2.2) * 0.55 + 0.16;
+    vec3 albedo = mix(vec3(0.90, 0.89, 0.86), vec3(0.42, 0.43, 0.47), vLt * 0.7);
+    col = albedo * (sun * INV_PI * (0.10 + 0.55 * ss * (1.0 - thick * 0.6))
+                    + sky * (0.55 + 0.35 * (1.0 - thick)));
+    col += uMoonColor * uMoonIntensity * 0.05;
+    a *= dens * 0.85;
+  } else if (hard) {
     float wrap = 0.42 + 0.58 * saturate1(uSunDirection.y * 1.6 + 0.15);
     col = sun * INV_PI * wrap * (0.55 + 0.9 * thick) * spectral;
     col += sun * lobe * thick * 0.10 * spectral;
     col += sky * (0.7 + 0.9 * rim);
     col += sun * pip * 0.35;
     if (kind > 3.5 && kind < 4.5) col = mix(col, sky * 1.1 + sun * INV_PI * 0.8, 0.5);
+    col += uMoonColor * uMoonIntensity * 0.08;
   } else {
     // Mist / torn sheet: an optically thin scattering slab.
     float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.3 + 0.25);
     col = sun * INV_PI * wrap * (0.4 + 0.6 * thick) * spectral;
     col += sun * lobe * 0.14 * (1.0 - thick * 0.5) * spectral;
     col += sky * 1.05;
+    col += uMoonColor * uMoonIntensity * 0.08;
     a *= 0.62;
   }
-  col += uMoonColor * uMoonIntensity * 0.08;
 
   // Soft against the water: fade as the sprite approaches the real surface, so
   // spray dissolves into foam instead of showing a cut line.
@@ -320,6 +365,14 @@ void main(){
   a *= smoothstep(-0.25, uSoftY, above);
   // Soft against the near plane so particles do not pop through the camera.
   a *= smoothstep(0.4, 1.6, vViewZ);
+
+#ifdef VFX_DEPTH_SOFT
+  // Soft against everything else, when the post stack hands us a depth buffer.
+  float dz = texture2D(tDepth, gl_FragCoord.xy * uInvRes).r;
+  float n = uNearFar.x, f = uNearFar.y;
+  float sceneZ = (2.0 * n * f) / (f + n - (dz * 2.0 - 1.0) * (f - n));
+  a *= saturate1((sceneZ - vViewZ) / (smoke ? 3.0 : 1.2));
+#endif
 
   vec3 view = normalize(vWorld - uCameraPos);
   col = applyAerial(col, vViewZ, view, uSunDirection, uFogColor, uSunColor,

@@ -46,12 +46,18 @@ varying vec3 vShipWP;
 ${PARTS_DECL}
 `;
 
+/**
+ * GLSL.common names its helper lwLuminance precisely so it cannot collide with
+ * the `float luminance(const in vec3)` three emits in its fragment prefix.
+ */
+export const GLSL_COMMON_SAFE = GLSL.common;
+
 const FRAG_HEAD = /* glsl */ `
 varying vec3 vShipWN;
 varying vec3 vShipWP;
 uniform float uGrime;
 uniform float uEnvAmount;
-${GLSL.common}
+${GLSL_COMMON_SAFE}
 ${GLSL.brdf}
 `;
 

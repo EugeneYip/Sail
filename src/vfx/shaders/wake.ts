@@ -343,10 +343,15 @@ void main(){
   // Only the annulus behind the expanding front carries waves.
   float band = exp(-sq((dist - front) / max(front * 0.55 + lambda * 0.9, 0.4)));
   float decay = exp(-age * 2.2) / (1.0 + dist * 1.4);
-  float h = sin(k * (dist - front) - age * 5.0) * band * decay * vR.w;
+  float phase = k * (dist - front) - age * 5.0;
+  float env = band * decay * vR.w;
+  float h = sin(phase) * env;
   // The impact point itself is briefly a bright dimple of aerated water.
   float splash = exp(-sq(dist / (lambda * 0.5))) * exp(-age * 6.0) * vR.w;
   float foam = (splash * 1.6 + abs(h) * 0.5) * (vP.z > 0.5 ? 1.8 : 1.0);
-  gl_FragColor = vec4(h - splash * 0.35, saturate1(foam), 0.0, 1.0);
+  // Radial slope. The envelope derivative is small next to k, so ignore it.
+  float dhdr = k * cos(phase) * env;
+  vec2 dir = r > 1e-4 ? vLocal / r : vec2(0.0);
+  gl_FragColor = vec4(saturate1(foam), h - splash * 0.35, dhdr * dir.x, dhdr * dir.y);
 }
 `;

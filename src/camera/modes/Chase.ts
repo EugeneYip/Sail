@@ -63,6 +63,11 @@ export class ChaseMode implements CameraMode {
   readonly lookYawLimit = 1.05;
   readonly lookPitchMin = -0.32;
   readonly lookPitchMax = 0.42;
+  /** Drifts back to the composed frame a few seconds after you let go. Slow
+   *  enough (a ~2 s time constant) that it reads as the camera settling rather
+   *  than as the game taking the controls off you. */
+  readonly lookRecentreRate = 0.5;
+  readonly distanceRange = [CHASE_MIN_DISTANCE, CHASE_MAX_DISTANCE] as const;
 
   private dist = 76;
   private vDist = { v: 0 };
@@ -121,6 +126,11 @@ export class ChaseMode implements CameraMode {
     out.avoidHull = true;
     out.avoidRig = true;
     out.waterClearance = 3.2;
+    // The eye is already smooth (everything above it is spring filtered); the
+    // TARGET gets nearly twice the smooth time, which is what lets the hull rise
+    // and fall inside the frame over a swell instead of being pinned to it.
+    out.posSmoothTime = 0.34;
+    out.targetSmoothTime = 0.62;
     out.shot = '';
   }
 }

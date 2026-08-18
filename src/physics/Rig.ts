@@ -117,27 +117,33 @@ export interface Coefficients {
 }
 
 /**
- * Lift and drag for a thin cambered membrane at absolute angle of attack
- * `alpha` (radians, 0..PI/2 measured from the chord).
+ * Lift and drag for a thin lifting surface at absolute angle of attack `alpha`
+ * (radians, 0..PI/2 measured from the chord).
  *
  * Attached flow uses a lifting-line lift slope 2*PI*AR/(AR+2) with induced drag
  * CL^2/(PI*AR*e); separated flow uses a flat-plate normal force resolved into
  * lift and drag. The two are blended across the stall so the curve is smooth
  * and behaves correctly all the way to 90 degrees, where CL goes to zero and CD
  * to the separated normal force. Writes into `out` — no allocation.
+ *
+ * `camber` is the incidence the section carries at zero geometric angle,
+ * `cnSep` its fully separated normal force, `cd0` its parasitic drag. A sail
+ * and a rudder are the same equation with different numbers in those three.
  */
-export function sailCoefficients(
+export function foilCoefficients(
   alpha: number,
   ar: number,
-  triangular: boolean,
+  camber: number,
+  cnSep: number,
+  cd0: number,
   out: Coefficients,
 ): Coefficients {
   const a = Math.abs(alpha);
   const slope = (2 * Math.PI * ar) / (ar + 2);
-  const clAtt = slope * (a + camberIncidence(triangular));
+  const clAtt = slope * (a + camber);
   const cdInduced = (clAtt * clAtt) / (Math.PI * ar * OSWALD);
 
-  const cn = separatedCN(triangular) * Math.sin(a);
+  const cn = cnSep * Math.sin(a);
   const clSep = cn * Math.cos(a);
   const cdSep = cn * Math.sin(a);
 
@@ -147,8 +153,24 @@ export function sailCoefficients(
   out.cl = (1 - sigma) * clAtt + sigma * clSep;
   // Keep a floor of the separated drag below the stall too, otherwise CD dips
   // unphysically at moderate incidence.
-  out.cd = CD_PROFILE + (1 - sigma) * Math.max(cdInduced, cdSep * 0.35) + sigma * cdSep;
+  out.cd = cd0 + (1 - sigma) * Math.max(cdInduced, cdSep * 0.35) + sigma * cdSep;
   return out;
+}
+
+export function sailCoefficients(
+  alpha: number,
+  ar: number,
+  triangular: boolean,
+  out: Coefficients,
+): Coefficients {
+  return foilCoefficients(
+    alpha,
+    ar,
+    camberIncidence(triangular),
+    separatedCN(triangular),
+    CD_PROFILE,
+    out,
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -189,14 +211,15 @@ export function targetIncidence(ar: number): number {
  * Brace angle that puts a square sail at `target` incidence to an apparent wind
  * travelling in direction (wx, wz) in the ship frame.
  *
- * With the yard along (cos b, 0, sin b) the sail normal is (-sin b, 0, cos b),
- * so sin(alpha) = wz*cos b - wx*sin b = cos(b + psi) where psi = atan2(wx, wz).
- * Hence b = +/-(PI/2 - target) - psi. Both roots are legal braces on opposite
+ * The ship module rotates a yard about +Y by `brace`, so the sail normal is
+ * R_y(b) applied to (0,0,1) = (sin b, 0, cos b) — square yards face aft. Then
+ * sin(alpha) = w.n = wx*sin b + wz*cos b = cos(b - psi) with psi = atan2(wx, wz),
+ * hence b = psi +/- (PI/2 - target). Both roots are legal braces on opposite
  * tacks; the caller picks whichever drives the ship forward.
  */
 export function braceSolutions(wx: number, wz: number, target: number, out: THREE.Vector2): THREE.Vector2 {
   const psi = Math.atan2(wx, wz);
   const k = Math.PI / 2 - target;
-  out.set(k - psi, -k - psi);
+  out.set(psi + k, psi - k);
   return out;
 }

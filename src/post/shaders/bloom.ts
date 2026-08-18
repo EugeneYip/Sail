@@ -18,7 +18,7 @@ uniform sampler2D tSource;
 uniform vec2 uSourceTexel;
 varying vec2 vUv;
 
-float karisWeight(vec3 c) { return 1.0 / (1.0 + luminance(c)); }
+float karisWeight(vec3 c) { return 1.0 / (1.0 + lwLuminance(c)); }
 
 void main() {
   vec2 t = uSourceTexel;
@@ -69,6 +69,7 @@ precision highp float;
 uniform sampler2D tSource;
 uniform vec2 uSourceTexel;
 uniform float uRadius;
+uniform float uBlend;
 varying vec2 vUv;
 
 void main() {
@@ -82,6 +83,11 @@ void main() {
   sum += texture2D(tSource, vUv + vec2( t.x, -t.y)).rgb;
   sum += texture2D(tSource, vUv + vec2(-t.x,  t.y)).rgb;
   sum += texture2D(tSource, vUv + vec2( t.x,  t.y)).rgb;
-  gl_FragColor = vec4(sum * 0.0625, 1.0);
+  // Alpha carries the blend weight: the pass is drawn with SrcAlpha/1-SrcAlpha
+  // so the accumulate is mix(finer, tent(coarser), uBlend) *in place*. A plain
+  // additive chain multiplies total energy by the level count and then needs an
+  // arbitrary normalisation; this keeps mean brightness equal to the source's,
+  // which is what makes a 5% mix a genuine 5% of the frame's light.
+  gl_FragColor = vec4(sum * 0.0625, uBlend);
 }
 `;

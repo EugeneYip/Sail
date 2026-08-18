@@ -39,6 +39,10 @@ uniform float uFeedbackMax;
 uniform float uVarianceGamma;
 uniform float uFilterWidth;
 uniform float uReset;
+// Exposure is applied before AA, so the history was written at the *previous*
+// frame's exposure. One scalar rescales it into this frame's space; without it
+// a fast adaptation drags a stale brightness behind every edge.
+uniform float uHistoryScale;
 varying vec2 vUv;
 
 vec3 clipAabb(vec3 lo, vec3 hi, vec3 mean, vec3 q) {
@@ -97,7 +101,7 @@ void main() {
   vec3 hi = min(mean + gamma * sigma, boxMax);
 
   // --- 3. history
-  vec3 histRgb = sampleCatmullRom(tHistory, histUv, uResolution);
+  vec3 histRgb = sampleCatmullRom(tHistory, histUv, uResolution) * uHistoryScale;
   vec3 hist = rgbToYCoCg(tmap(histRgb));
   hist = clipAabb(lo, hi, mean, hist);
 

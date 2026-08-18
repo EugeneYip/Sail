@@ -6,7 +6,8 @@
  * behaviour of the real ship; the tuned ones say so and say what they match.
  *
  * Ship local frame: +X starboard, +Y up, -Z forward (bow). The hull origin is
- * at the waterline amidships, so all submerged geometry has y < 0.
+ * at the waterline amidships, so submerged geometry has y < 0 and the topsides
+ * y > 0.
  */
 
 export const RHO_WATER = 1025; // kg/m^3, seawater
@@ -28,6 +29,20 @@ export const DISPLACED_VOLUME = MASS / RHO_WATER; // 2146.3 m^3
 export const BLOCK_COEFF = DISPLACED_VOLUME / (LWL * BEAM * DRAUGHT); // 0.473
 
 /**
+ * Freeboard to the top of the bulwark amidships. The panel set is carried this
+ * far above the waterline and capped with a deck, which is what stops the ship
+ * submarining in a 6.5 m sea and what gives a sane righting arm past 25 deg of
+ * heel. Without reserve buoyancy above the waterline a pressure-integral hull
+ * capsizes at absurdly small angles.
+ */
+export const FREEBOARD = 6.6; // m
+
+/** Half-beam lost between the waterline and the rail. Frigates tumble home hard. */
+export const TUMBLEHOME = 0.12;
+/** How much the ends fill out above the waterline — reserve buoyancy forward. */
+export const TOPSIDE_FLARE = 0.35;
+
+/**
  * Wetted surface, Denny-Mumford: S ~= 1.7*L*T + V/T.
  * 1.7*53.3*6.4 + 2146/6.4 = 580 + 335 = 915 m^2.
  */
@@ -42,9 +57,7 @@ export const LATERAL_AREA = 0.9 * LWL * DRAUGHT; // 307 m^2
  * of top-hamper. KG = DRAUGHT + CG_Y = 5.66 m.
  *
  * This is the single knob that sets the metacentric height, and through it the
- * natural roll period. With the parametric hull in Hull.ts it measures
- * KB 4.22 + BM 2.39 - KG 5.66 = GM 0.950 m, giving a free-decay roll period of
- * 11.6 s. See the measured table in Hull.ts.
+ * natural roll period. See the measured table in Hull.ts.
  */
 export const CG_Y = -0.74; // m, below the waterline
 export const CG_Z = 0.4; // m, marginally aft of amidships
@@ -73,6 +86,21 @@ export const ADDED_INERTIA_PITCH = 0.85;
 export const ADDED_INERTIA_YAW = 0.6;
 
 /* ------------------------------------------------------------------ *
+ *  Wave pressure
+ * ------------------------------------------------------------------ */
+
+/**
+ * Depth over which wave-induced pressure decays (the Smith effect: the dynamic
+ * pressure under a wave falls off as exp(-2*pi*d/lambda)). 16 m corresponds to
+ * a ~100 m wave, which is what a fresh gale builds. Only the horizontal
+ * (Froude-Krylov) part of the buoyancy is attenuated — the vertical part is
+ * ordinary hydrostatics and must stay exact or she floats at the wrong depth.
+ */
+export const PRESSURE_DECAY = 16; // m
+/** Residual Froude-Krylov gain after the Smith attenuation over the draught. */
+export const FK_GAIN = Math.exp(-(0.45 * DRAUGHT) / PRESSURE_DECAY); // 0.83
+
+/* ------------------------------------------------------------------ *
  *  Resistance
  * ------------------------------------------------------------------ */
 
@@ -80,18 +108,27 @@ export const ADDED_INERTIA_YAW = 0.6;
 export const FORM_FACTOR = 1.25;
 
 /**
- * Wave-making resistance. The textbook hull-speed formula 1.34*sqrt(LWL_ft)
- * gives 17.7 kn for a 53.3 m waterline, but the Constitution's documented top
- * speed is 13 kn: she is power-limited, not purely wave-limited, and a Cb 0.47
- * displacement hull has a hard resistance hump well before Fn 0.4.
+ * Wave-making resistance:
  *
- * FN_HUMP is where the hump starts to bite and FN_WALL is the asymptote. At
- * Fn = V/sqrt(g*LWL), 12.5 kn = 6.43 m/s = Fn 0.281 and 13.5 kn = Fn 0.304.
+ *   Cw = CW_BASE * Fn^4 / (1 - (Fn/FN_WALL)^CW_WALL_POWER)
+ *
+ * The Fn^4 numerator is the classical low-speed wave-making law; the
+ * denominator is the hull-speed wall. The textbook 1.34*sqrt(LWL_ft) formula
+ * gives 17.7 kn for a 53.3 m waterline, but the Constitution's documented top
+ * speed is 13 kn — she is a Cb 0.47 displacement hull that hits a hard
+ * resistance rise well before Fn 0.4, and she is sail-power limited on top of
+ * that. FN_WALL 0.305 = 13.5 kn is the asymptote.
+ *
+ * The curve this produces (adding ITTC friction on 915 m^2 of wetted surface):
+ *   8 kn   Fn 0.180    41 kN     easy
+ *  10 kn   Fn 0.225    59 kN     still cheap
+ *  12 kn   Fn 0.270   176 kN     leaning on it
+ *  13 kn   Fn 0.293   551 kN     the wall
+ *  13.5 kn Fn 0.305     inf      unreachable
  */
-export const FN_HUMP = 0.20;
-export const FN_WALL = 0.305; // 13.5 kn — unreachable in practice
-export const CW_BASE = 0.9; // scales the Fn^4 low-speed wave-making term
-export const CW_HUMP = 34; // scales the steep near-hump rise
+export const FN_WALL = 0.305;
+export const CW_BASE = 0.9;
+export const CW_WALL_POWER = 8;
 
 /**
  * Lateral force coefficients for the hull treated as a very low aspect-ratio
@@ -106,17 +143,38 @@ export const CY_CROSS = 1.25;
 /** Centre of lateral resistance, ship-local. Forward of amidships and deep. */
 export const CLR_Y = -0.45 * DRAUGHT; // -2.88 m
 export const CLR_Z = -1.8; // m, slightly forward of amidships
+/**
+ * The centre of lateral pressure walks forward as the drift angle grows — the
+ * circulation is generated at the leading edge. Metres of travel per radian of
+ * drift; at 6 deg of leeway the CLR is 2.6 m further forward, which is a large
+ * part of where weather helm comes from.
+ */
+export const CLR_DRIFT_SHIFT = 25;
+
+/**
+ * Yaw moment produced by a heeled hull, per radian of heel per (m/s)^2 of
+ * speed. A heeled hull is asymmetric: the immersed lee bow and the emerged
+ * weather quarter make her carve to windward. This is a real manoeuvring
+ * derivative (N_phi), not a scripted assist, and it is the second half of
+ * weather helm — the first half is the sail plan's centre of effort moving aft
+ * of the CLR, which falls out of the per-sail force sum on its own.
+ */
+export const YAW_FROM_HEEL = 1.1e5; // N*m per rad per (m/s)^2
 
 /**
  * Roll damping: linear (wave radiation) + quadratic (eddy shedding off the
  * bilges). The Constitution has no bilge keels, so she is lightly damped and
- * keeps rolling — deliberately, it makes her feel alive.
+ * keeps rolling — deliberately, it makes her feel alive. These are on top of
+ * the per-panel normal drag, which supplies roughly half the total.
  */
-export const ROLL_DAMP_LIN = 3.2e7; // N*m per rad/s
-export const ROLL_DAMP_QUAD = 9.0e7; // N*m per (rad/s)^2
-export const PITCH_DAMP_LIN = 5.5e8;
-export const PITCH_DAMP_QUAD = 6.0e8;
-export const HEAVE_DAMP = 7.0e5; // N per m/s
+export const ROLL_DAMP_LIN = 1.6e7; // N*m per rad/s
+export const ROLL_DAMP_QUAD = 4.5e7; // N*m per (rad/s)^2
+export const PITCH_DAMP_LIN = 2.4e8;
+export const PITCH_DAMP_QUAD = 3.0e8;
+export const HEAVE_DAMP = 2.0e5; // N per m/s
+
+/** Normal-direction drag coefficient on a wetted hull panel. */
+export const CD_PANEL_NORMAL = 0.45;
 
 /**
  * Yaw damping, per m/s of forward speed. This is what fights the rudder and
@@ -150,9 +208,18 @@ export const BRACE_MAX = 60 * (Math.PI / 180);
 export const BRACE_SLEW_TIME = 12;
 /** Seconds for the topmen to set or furl one sail. */
 export const SAIL_SLEW_TIME = 9;
+/** Seconds to go from bare poles to a full press of sail, all hands. */
+export const SAIL_LEVEL_TIME = 18;
 /** Max sheeting angle of a fore-and-aft sail off the centreline. */
 export const SHEET_MAX = 78 * (Math.PI / 180);
+/** Seconds to sheet a fore-and-aft sail from centreline to hard out. */
 export const SHEET_SLEW_TIME = 6;
+/**
+ * The ship module swings a boom or gaff to `sail.brace * 2.35`, so a
+ * fore-and-aft sail stores its sheet angle divided by this. Physics multiplies
+ * it back out; the two must agree or the cloth points the wrong way.
+ */
+export const SHEET_GAIN = 2.35;
 
 /**
  * Wind boundary layer over open water, power law V(h) = V10 * (h/10)^ALPHA.
@@ -169,6 +236,15 @@ export const WINDAGE_LATERAL = 430; // m^2
 export const WINDAGE_FRONTAL = 95; // m^2
 export const WINDAGE_CD = 0.85;
 export const WINDAGE_Y = 6.5; // m, centroid above the waterline
+
+/**
+ * Heel at which the crew start letting fly, and the angle at which they do it
+ * as fast as the halyards will run. A ship is not sailed to her capsize angle;
+ * shortening sail when she is over-pressed is what the watch is for, and it is
+ * why the gale scene stays on her feet instead of being knocked flat.
+ */
+export const REEF_HEEL = 26 * (Math.PI / 180);
+export const REEF_PANIC_HEEL = 40 * (Math.PI / 180);
 
 /* ------------------------------------------------------------------ *
  *  Solver

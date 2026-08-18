@@ -81,10 +81,7 @@ export class Rig {
     this.wildlife = new Wildlife(tones, impacts, wood);
     this.music = new Music(nodes, b.music, this.mixer);
 
-    for (const m of opts.mute ?? []) {
-      b[m].level.snap(0);
-      b[m].send.snap(0);
-    }
+    for (const m of opts.mute ?? []) this.mixer.mute(m);
 
     // Listener: AudioParams where available (everything current), the deprecated
     // setters otherwise.
@@ -124,6 +121,16 @@ export class Rig {
     this.weather.update(sim, now);
     this.wildlife.update(sim, now);
     this.music.update(sim, now);
+  }
+
+  /** True when the rigging bank is the per-sample worklet, not the biquad fallback. */
+  get usesWorklet(): boolean {
+    return this.wind.rigging.usesWorklet;
+  }
+
+  /** Fade out/in from outside the frame loop — see `Mixer.hush`. */
+  hush(on: boolean, now: number): void {
+    this.mixer.hush(on, now);
   }
 
   lightning(distanceMetres: number, now: number): void {

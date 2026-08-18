@@ -32,7 +32,7 @@ void main() {
       vec2 f = (vec2(float(i), float(j)) + 0.5) * 0.25 - 0.5;
       vec2 uv = vUv + f * uFootprint * uSceneTexel;
       vec3 c = max(texture2D(tScene, uv).rgb, vec3(0.0));
-      sum += log2(max(luminance(c), 1e-6));
+      sum += log2(max(lwLuminance(c), 1e-6));
     }
   }
   gl_FragColor = vec4(sum / 16.0, 0.0, 0.0, 1.0);

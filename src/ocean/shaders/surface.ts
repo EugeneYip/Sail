@@ -4,18 +4,22 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
 /**
  * The ocean surface material.
  *
- * Vertex: CDLOD-morphed clipmap, displaced by the cascades. A cascade only
- * displaces geometry while the local cell size can still resolve it, so far
- * water is geometrically smooth and the horizon is a straight line. The detail
- * that is dropped comes back through the normal map, and the *variance* of what
- * even the normal map can no longer resolve is folded into roughness — that
- * conversion is what stops distant water from sparkling.
+ * Vertex: CDLOD-morphed clipmap, displaced by the cascades. A cascade is sampled
+ * at the mip level its local cell size can carry, so the geometry is a
+ * band-limited version of the wave field rather than a point-sampled one — no
+ * displacement aliasing, and no energy lost at the low end either. The detail
+ * that geometry drops comes back through the normal map, and the *variance* of
+ * what even the normal map can no longer resolve is folded into roughness. That
+ * last conversion is what stops distant water from sparkling.
  *
  * Fragment: Fresnel + a single GGX lobe whose width and normal crossfade from
  * "resolved microfacet" near the camera to "statistical slope distribution" far
  * away (the sun-glitter path), Beer–Lambert transmission through wave crests for
  * the jade backlight, a deep-ocean body colour, Jacobian-driven foam, and aerial
  * perspective into the sky's own horizon colour.
+ *
+ * All wave-field lookups use *wrapped-absolute* XZ (`uOceanOrigin`), see
+ * `Ocean.ts` for why.
  */
 
 function cascadeDecls(n: number): string {
@@ -26,15 +30,10 @@ function cascadeDecls(n: number): string {
   return s;
 }
 
-/** uv for cascade i, with the half-texel offset that aligns texel 0 with x = 0. */
-function uvFor(i: number): string {
-  return `vAbs * uCascadeScale[${i}] + uCascadeHalfTexel[${i}]`;
-}
-
-export function surfaceShaders(cascades: number): {
-  vertexShader: string;
-  fragmentShader: string;
-} {
+export function surfaceShaders(
+  cascades: number,
+  hasWake = false,
+): { vertexShader: string; fragmentShader: string } {
   let vertDisp = '';
   for (let i = 0; i < cascades; i++) {
     vertDisp += `
@@ -42,7 +41,10 @@ export function surfaceShaders(cascades: number): {
     float w = 1.0 - smoothstep(uCascadeCellFade[${i}].x, uCascadeCellFade[${i}].y, effCell);
     if (w > 0.002) {
       vec2 uv = absXZ * uCascadeScale[${i}] + uCascadeHalfTexel[${i}];
-      vec4 d = textureLod(uDisp${i}, uv, 0.0);
+      // Mipping a displacement map low-passes the wave field, so a cell never
+      // tries to carry a wave shorter than itself.
+      float lod = max(0.0, log2(effCell * uCascadeTexels[${i}]));
+      vec4 d = textureLod(uDisp${i}, uv, lod);
       disp += w * vec3(d.y, d.x, d.z);
     }
   }`;
@@ -52,7 +54,7 @@ export function surfaceShaders(cascades: number): {
   for (let i = 0; i < cascades; i++) {
     fragSample += `
   {
-    vec2 uv = ${uvFor(i)};
+    vec2 uv = vAbs * uCascadeScale[${i}] + uCascadeHalfTexel[${i}];
     vec4 d0 = texture2D(uDisp${i}, uv);
     vec4 d1 = texture2D(uDeriv${i}, uv);
     slope += vec2(d0.w, d1.x);
@@ -64,13 +66,42 @@ ${i === 0 ? '    lowSlope = vec2(d0.w, d1.x);\n' : ''}    // Slope variance the 
   }`;
   }
 
+  const wakeDecl = hasWake
+    ? `uniform sampler2D uWake;
+uniform mat3 uWakeMatrix;
+uniform float uWakeStrength;`
+    : '';
+
+  // The wake field is a torus: uv = fract(matrix * vec3(worldX, worldZ, 1)).
+  // R = persistent foam, G = height in metres, BA = world-space slope of it.
+  const wakeVert = hasWake
+    ? `
+  {
+    vec2 wuv = fract((uWakeMatrix * vec3(world, 1.0)).xy);
+    disp.y += textureLod(uWake, wuv, 0.0).g * uWakeStrength;
+  }`
+    : '';
+
+  const wakeFrag = hasWake
+    ? `
+  {
+    vec2 wuv = fract((uWakeMatrix * vec3(P.xz, 1.0)).xy);
+    vec4 wk = texture2D(uWake, wuv);
+    slope += wk.ba * uWakeStrength;
+    wakeFoam = wk.r * uWakeStrength;
+  }`
+    : '';
+
   const vertexShader = /* glsl */ `
 precision highp float;
 ${SHARED_UNIFORM_DECL}
 ${cascadeDecls(cascades)}
+${wakeDecl}
 attribute vec2 aMeta;
+uniform vec2  uOceanOrigin;
 uniform float uCascadeScale[${cascades}];
 uniform float uCascadeHalfTexel[${cascades}];
+uniform float uCascadeTexels[${cascades}];
 uniform vec2  uCascadeCellFade[${cascades}];
 uniform float uGridM;
 uniform float uMorphStart;
@@ -93,7 +124,7 @@ void main(){
   float cell = modelMatrix[0][0];
   vec4 wp = modelMatrix * vec4(g.x, 0.0, g.z, 1.0);
   vec2 world = wp.xz;
-  vec2 absXZ = world + uOrigin.xz;
+  vec2 absXZ = world + uOceanOrigin;
 
   // Chebyshev radius from the camera, because the clipmap rings are square: at
   // radius R the level in charge has cell size 2R/M, so deriving the cascade
@@ -106,6 +137,7 @@ void main(){
 
   vec3 disp = vec3(0.0);
   ${vertDisp}
+  ${wakeVert}
 
   // The horizon skirt rises to eye height so the water silhouette lands exactly
   // on the eye-level horizon line with no sliver of sky beneath it.
@@ -128,6 +160,7 @@ ${GLSL.brdf}
 ${GLSL.noise2d}
 ${SHARED_UNIFORM_DECL}
 ${cascadeDecls(cascades)}
+${wakeDecl}
 uniform float uCascadeScale[${cascades}];
 uniform float uCascadeHalfTexel[${cascades}];
 uniform float uCascadeSlopeVar[${cascades}];
@@ -136,7 +169,7 @@ uniform vec2  uCascadePxFade[${cascades}];
 uniform sampler2D uFoam;
 uniform sampler2D uFoamDetail;
 uniform sampler2D uReflection;
-uniform vec4  uFoamWindow;      // (originX, originZ, 1/size, blendRadius)
+uniform vec4  uFoamWindow;      // (originX, originZ, 1/size, unused)
 uniform vec2  uResolution;
 uniform float uPixelAngle;      // world metres per pixel, per metre of distance
 uniform float uSlopeRms;
@@ -208,7 +241,9 @@ void main(){
   vec2 lowSlope = vec2(0.0);
   vec3 jac = vec3(0.0);
   float lostVar = 0.0;
+  float wakeFoam = 0.0;
   ${fragSample}
+  ${wakeFrag}
 
   if (isSkirt > 0.5) { slope = vec2(0.0); jac = vec3(0.0); lostVar = uSlopeRms * uSlopeRms; }
 
@@ -228,13 +263,17 @@ void main(){
   float fold = jxx * jzz - jxz * jxz;
 
   /* ---- foam -------------------------------------------------------- */
-  vec2 fw = (P.xz - uFoamWindow.xy) * uFoamWindow.z + 0.5;
-  float inWindow = step(0.0, fw.x) * step(fw.x, 1.0) * step(0.0, fw.y) * step(fw.y, 1.0);
-  float persistent = texture2D(uFoam, fw).r * inWindow;
-  // Outside the persistent window (and behind it, blended) foam is derived
-  // straight from the fold so distant whitecaps still appear.
+  // Persistent foam lives in a camera-following window; outside it (and across
+  // its edge) fall back to the instantaneous fold mask so distant whitecaps
+  // still appear. Feathering the edge is what keeps the window from reading as
+  // a square on the water.
+  vec2 fw = (vAbs - uFoamWindow.xy) * uFoamWindow.z + 0.5;
+  vec2 fe = min(fw, 1.0 - fw);
+  float inWindow = smoothstep(0.0, 0.05, min(fe.x, fe.y));
+  float persistent = texture2D(uFoam, clamp(fw, 0.0, 1.0)).r;
   float instant = saturate1((0.68 - fold) * 2.2) * uFoamAmount;
-  float foam = max(persistent, instant * (1.0 - inWindow * 0.55));
+  float foam = mix(instant, max(persistent, instant * 0.45), inWindow);
+  foam = max(foam, wakeFoam);
 
   vec3 fd = texture2D(uFoamDetail, vAbs * 0.16).rgb;
   vec3 fd2 = texture2D(uFoamDetail, vAbs * 0.041 + 0.37).rgb;

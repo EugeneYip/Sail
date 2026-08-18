@@ -57,6 +57,9 @@ export class Mixer {
   private readonly freqBuf: Float32Array<ArrayBuffer>;
   /** Extra ducking applied by thunder / big slams. */
   private duckUntil = 0;
+  /** 0 while the tab is hidden, so a backgrounded game fades instead of cutting. */
+  private hushed = 0;
+  private lastVolume = 0;
 
   constructor(
     private readonly nodes: Nodes,
@@ -134,9 +137,33 @@ export class Mixer {
     this.buses.ship.send.set(0.3 + 0.35 * (1 - sim.exposure), now);
     this.buses.wildlife.send.set(0.55 + 0.35 * Math.min(1, 400 / Math.max(80, sim.landDistance)), now);
 
-    this.masterLevel.set(Math.max(0.0001, sim.masterVolume), now);
+    this.lastVolume = sim.masterVolume;
+    this.masterLevel.set(Math.max(0.0001, sim.masterVolume * (1 - this.hushed)), now);
     this.musicVerbWet.set(0.9 * duck, now);
     this.reverb.update(sim, now);
+  }
+
+  /**
+   * Fade the whole rig out (and back) outside the frame loop — `update()` stops
+   * being called the moment the tab is hidden, so this cannot wait for a frame.
+   */
+  hush(on: boolean, now: number): void {
+    this.hushed = on ? 1 : 0;
+    this.masterLevel.tau = on ? 0.06 : 0.25;
+    this.masterLevel.set(Math.max(0.0001, this.lastVolume * (1 - this.hushed)), now);
+  }
+
+  /**
+   * Permanently detach a family. Used only by the offline probe to isolate one
+   * variable; disconnecting rather than zeroing a gain means the per-frame trim
+   * in `update()` cannot quietly undo it.
+   */
+  mute(name: BusName): void {
+    try {
+      this.buses[name].in.disconnect();
+    } catch {
+      /* already detached */
+    }
   }
 
   /** Momentary dip on the music bus so thunder and slams have room. */

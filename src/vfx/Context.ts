@@ -27,6 +27,13 @@ export interface ShipExt {
   /** Ship-local gun muzzle positions, port and starboard. */
   gunPortsLocal?: THREE.Vector3[];
   gunStarboardLocal?: THREE.Vector3[];
+  /** Deck-level anatomy the rain uses to place splashes and rigging drips. */
+  deckY?: number;
+  bulwarkY?: number;
+  mainMastZ?: number;
+  mainYardY?: number;
+  mainYardHalfSpan?: number;
+  mastheadY?: number;
 }
 
 /** Shape we hope the ocean agent publishes on `world.ext.ocean`. All optional. */

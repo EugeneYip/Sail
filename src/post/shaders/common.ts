@@ -9,7 +9,7 @@ export const POST_COMMON = /* glsl */ `
 // invertible so nothing is lost.
 vec3 tmap(vec3 c)   { return c / (1.0 + max(max(c.r, c.g), c.b)); }
 vec3 tunmap(vec3 c) { return c / max(1e-4, 1.0 - max(max(c.r, c.g), c.b)); }
-float tmapW(vec3 c) { return 1.0 / (1.0 + luminance(c)); }
+float tmapW(vec3 c) { return 1.0 / (1.0 + lwLuminance(c)); }
 
 // --- YCoCg ----------------------------------------------------------------
 // TAA clamping in YCoCg is what stops a bright specular glint from dragging a

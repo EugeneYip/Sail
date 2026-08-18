@@ -101,7 +101,6 @@ uniform sampler2D tHalf;
 uniform sampler2D tNearMax;
 uniform vec2 uHalfTexel;
 uniform float uMaxCoc;
-uniform float uAspect;
 uniform float uFrame;
 varying vec2 vUv;
 
@@ -142,7 +141,7 @@ void main() {
     float fk = (float(k) + 0.5) / float(DOF_TAPS);
     float r = sqrt(fk) * searchPx;
     float a = float(k) * GOLDEN + rot;
-    vec2 off = apertureOffset(a, r) * uHalfTexel * vec2(1.0, uAspect);
+    vec2 off = apertureOffset(a, r) * uHalfTexel;
     vec4 s = texture2D(tHalf, uv + off);
     float sCoc = s.a * uMaxCoc * 0.5;
 #ifdef DOF_NEAR

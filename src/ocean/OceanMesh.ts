@@ -41,15 +41,22 @@ export interface ClipmapLevel {
   level: number;
 }
 
-function gridGeometry(m: number, hollow: boolean): THREE.BufferGeometry {
+function gridGeometry(m: number, hollow: boolean, isSkirt = false): THREE.BufferGeometry {
   const side = m + 1;
   const pos = new Float32Array(side * side * 3);
+  // (half extent in grid units, skirt flag). Constant per geometry, but the
+  // vertex shader needs both and a geometry is shared by many meshes, so an
+  // attribute is the cheapest place to put them.
+  const meta = new Float32Array(side * side * 2);
   for (let j = 0; j <= m; j++) {
     for (let i = 0; i <= m; i++) {
       const o = (j * side + i) * 3;
       pos[o] = i - m / 2;
       pos[o + 1] = 0;
       pos[o + 2] = j - m / 2;
+      const q = (j * side + i) * 2;
+      meta[q] = m / 2;
+      meta[q + 1] = isSkirt ? 1 : 0;
     }
   }
   const hole = m / 4; // quarter of the side on each axis from the centre
@@ -71,6 +78,7 @@ function gridGeometry(m: number, hollow: boolean): THREE.BufferGeometry {
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aMeta', new THREE.BufferAttribute(meta, 2));
   geo.setIndex(idx);
   // Bounds are meaningless for a shader-displaced camera-centred mesh.
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
@@ -88,7 +96,7 @@ export class OceanMesh {
     this.solid = gridGeometry(m, false);
     this.ring = gridGeometry(m, true);
     // The skirt carries no detail; 16 cells a side is plenty.
-    this.horizon = gridGeometry(16, true);
+    this.horizon = gridGeometry(16, true, true);
 
     this.group.name = 'ocean';
     this.group.frustumCulled = false;
@@ -100,7 +108,10 @@ export class OceanMesh {
       mesh.frustumCulled = false;
       mesh.castShadow = false;
       mesh.receiveShadow = false;
+      // Ocean.updateClipmap writes matrixWorld directly every frame; letting
+      // three recompute it would just undo that.
       mesh.matrixAutoUpdate = false;
+      mesh.matrixWorldAutoUpdate = false;
       this.group.add(mesh);
       this.levels.push({ mesh, cell: (2 * halfExtent) / m, halfExtent, level: k });
     }
@@ -110,6 +121,7 @@ export class OceanMesh {
     skirt.castShadow = false;
     skirt.receiveShadow = false;
     skirt.matrixAutoUpdate = false;
+    skirt.matrixWorldAutoUpdate = false;
     this.group.add(skirt);
     this.levels.push({
       mesh: skirt,

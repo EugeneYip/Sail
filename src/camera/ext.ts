@@ -21,7 +21,12 @@ export interface CameraExt {
   /** True on the single frame a cinematic cut or mode change happened. Post
    *  should reset TAA/motion-blur history when this is true. */
   cut: boolean;
-  /** Metres the eye is below the ocean surface. <= 0 means above water. */
+  /**
+   * Metres the eye is below the ocean (or terrain) surface at the eye's own XZ.
+   * <= 0 means above water. Only the shots that ask for it ever go positive —
+   * `waterClearance` on every other mode keeps the lens clear — so a positive
+   * value is always deliberate, not an accident to be papered over.
+   */
   submersion: number;
   /** 0..1 blend for the underwater look; reaches 1 at 0.35 m below. */
   underwater: number;
@@ -45,6 +50,13 @@ export interface CameraExt {
   focusDistance: number;
   /** True while the rig holds a deterministic pose for a screenshot. */
   captureHold: boolean;
+  /**
+   * INPUT, not output. Set to a cinematic shot id before (or with) a
+   * `capture:scene` to pin the director to that shot for the capture:
+   * 'waterline' | 'crane' | 'longlens' | 'bowdrop' | 'yard'. Empty means the
+   * capture default, which is 'waterline'. Ignored outside a capture hold.
+   */
+  requestShot: string;
   /** DEBUG ONLY — set true from the console to bypass every jitter filter and
    *  follow the raw ship transform. Used to measure the filters' rejection. */
   bypassFilter: boolean;
@@ -67,6 +79,7 @@ export function createCameraExt(): CameraExt {
     aperture: 4,
     focusDistance: 80,
     captureHold: false,
+    requestShot: '',
     bypassFilter: false,
   };
 }

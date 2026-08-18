@@ -32,6 +32,11 @@ export function createSharedUniforms(): SharedUniforms {
     uWindSpeed: { value: 7 },
     uExposure: { value: 1 },
     uWetness: { value: 0 },
+    // TAA sub-pixel jitter currently baked into the projection matrix, NDC.
+    // (0,0) whenever TAA is off. Any shader that reprojects during the scene
+    // pass must subtract this from its NDC before using a previous-frame
+    // matrix; see the contract in post/Pipeline.ts.
+    uJitter: { value: new THREE.Vector2() },
   };
 }
 
@@ -56,4 +61,5 @@ uniform vec3  uWind;
 uniform float uWindSpeed;
 uniform float uExposure;
 uniform float uWetness;
+uniform vec2  uJitter;
 `;

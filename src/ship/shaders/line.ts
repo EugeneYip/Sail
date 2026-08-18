@@ -19,9 +19,8 @@
  */
 
 import * as THREE from 'three';
-import { GLSL } from '../../util/glsl';
 import { PARTS_DECL } from './parts';
-import type { PartUniforms } from '../materials/materials';
+import { GLSL_COMMON_SAFE, type PartUniforms } from '../materials/materials';
 import type { SharedUniforms } from '../../types';
 import type { TexSet } from '../materials/textures';
 
@@ -90,7 +89,7 @@ export function makeLineMaterial(
     shader.uniforms.uTime = shared.uTime;
 
     shader.vertexShader = /* glsl */ `
-      ${GLSL.common}
+      ${GLSL_COMMON_SAFE}
       ${COMMON}
       ${shader.vertexShader
         .replace('#include <common>', '#include <common>')
@@ -155,7 +154,7 @@ export function makeLineMaterial(
     `;
 
     shader.fragmentShader = /* glsl */ `
-      ${GLSL.common}
+      ${GLSL_COMMON_SAFE}
       varying float vSide;
       varying float vFade;
       varying vec3 vRightL;

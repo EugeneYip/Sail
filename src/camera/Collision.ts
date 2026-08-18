@@ -25,7 +25,14 @@ const DEFAULT_BULWARK_Y = 7.6;
 const HULL_PAD_XZ = 0.8;
 const HULL_PAD_Z = 2.4;
 
+/**
+ * Whatever the world module publishes on `world.ext.world`. The real contract
+ * is `WorldExt.sampleTerrainHeight` (see `src/world/api.ts`); the other two
+ * names are accepted so a rename over there cannot silently drop the camera
+ * through an island.
+ */
 export interface TerrainProbe {
+  sampleTerrainHeight?(x: number, z: number): number;
   sampleHeight?(x: number, z: number): number;
   terrainHeight?(x: number, z: number): number;
 }
@@ -135,7 +142,7 @@ export class CameraCollider {
     const submersion = surface > -1e5 ? surface - eye.y : -1e6;
 
     if (terrain) {
-      const fn = terrain.sampleHeight ?? terrain.terrainHeight;
+      const fn = terrain.sampleTerrainHeight ?? terrain.sampleHeight ?? terrain.terrainHeight;
       if (fn) {
         const th = fn.call(terrain, eye.x, eye.z);
         if (Number.isFinite(th) && th > surface) surface = th;
@@ -172,10 +179,20 @@ export class CameraCollider {
   /**
    * Slab test of the segment p -> p+d against the hull box. Returns the
    * parameter the eye should be moved to, or NO_HIT.
+   *
+   * Three cases, and getting them wrong is the difference between a camera
+   * that never clips and one that teleports:
+   *   - the volume lies strictly BETWEEN pivot and eye -> occlusion, pull the
+   *     eye in to just short of the entry face;
+   *   - both endpoints are inside -> the eye is buried, push it out past the
+   *     exit face;
+   *   - only the PIVOT is inside (the normal case: the whisker starts at a
+   *     point in the middle of the hull) -> nothing is between them, no hit.
+   *     Treating this as a push-out is what yanks a 76 m chase camera to 22 m.
    */
   private segmentBox(p: THREE.Vector3, d: THREE.Vector3, marginT: number): number {
-    let t0 = 0;
-    let t1 = 1;
+    let t0 = -Infinity;
+    let t1 = Infinity;
     for (let a = 0; a < 3; a++) {
       const pa = a === 0 ? p.x : a === 1 ? p.y : p.z;
       const da = a === 0 ? d.x : a === 1 ? d.y : d.z;
@@ -196,12 +213,10 @@ export class CameraCollider {
       if (tb < t1) t1 = tb;
       if (t0 > t1) return NO_HIT;
     }
-    if (t1 <= 0) return NO_HIT;
-    // Pivot outside the box: pull the eye in short of the entry point.
+    if (t1 <= 0 || t0 >= 1) return NO_HIT;
     if (t0 > 1e-4) return Math.max(0.1, t0 - marginT);
-    // Pivot inside the box (a look target buried in the hull): the only escape
-    // is outward past the exit face.
-    return t1 + marginT;
+    if (t1 >= 1) return t1 + marginT;
+    return NO_HIT;
   }
 
   /** Segment vs. vertical cylinder about (0, rigZ) with a finite y range. */
@@ -215,20 +230,21 @@ export class CameraCollider {
     const disc = b * b - 4 * a * c;
     if (disc <= 0) return NO_HIT;
     const sq = Math.sqrt(disc);
-    let t0 = (-b - sq) / (2 * a);
-    let t1 = (-b + sq) / (2 * a);
+    const t0 = (-b - sq) / (2 * a);
+    const t1 = (-b + sq) / (2 * a);
     if (t1 <= 0 || t0 >= 1) return NO_HIT;
 
-    // Reject if the crossing point is above or below the cylinder's y range.
-    if (t0 > 0) {
+    // Same three cases as the box. The y range makes the "reject" answer far
+    // more common here: most whiskers cross the mast circle well above or below
+    // the sail plan.
+    if (t0 > 1e-4) {
       const y = p.y + d.y * t0;
       if (y < this.rigY0 || y > this.rigY1) return NO_HIT;
       return Math.max(0.1, t0 - marginT);
     }
-    if (t1 < 1) {
-      const y = p.y + d.y * t1;
-      if (y < this.rigY0 || y > this.rigY1) return NO_HIT;
-    }
+    if (t1 < 1) return NO_HIT;
+    const y = p.y + d.y;
+    if (y < this.rigY0 || y > this.rigY1) return NO_HIT;
     return t1 + marginT;
   }
 }
