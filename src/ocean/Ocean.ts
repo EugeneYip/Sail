@@ -116,6 +116,11 @@ export interface CompareReport {
   maxHeight: number;
   /** Dimensionless slope. */
   rmsSlope: number;
+  /** RMS elevation of each field on its own, m. Equal means equal energy. */
+  rmsGpuField: number;
+  rmsCpuField: number;
+  /** Pearson correlation of the two elevation fields. 1 means same field. */
+  correlation: number;
   samples: number;
   /** Per cascade: CPU grid vs GPU grid, and whether the band is fully covered. */
   cascades: { size: number; gpu: number; cpu: number; exact: boolean }[];
@@ -202,20 +207,24 @@ export class Ocean implements Module, IOcean {
       uFoam: { value: this.foam.texture },
       uFoamDetail: { value: this.foamDetail },
       uReflection: { value: this.stub },
+      uEnvMap: { value: this.stub },
+      uHasEnv: { value: 0 },
       uFoamWindow: { value: this.foam.window },
       uResolution: { value: new THREE.Vector2(world.size.width, world.size.height) },
       uPixelAngle: { value: 0.002 },
       uSlopeRms: { value: 0.1 },
+      uSlopeVarTail: { value: 0 },
       uWaveHeight: { value: 1 },
       uHasReflection: { value: 0 },
       uFoamAmount: { value: 1 },
       uWake: { value: this.stub },
       uWakeMatrix: { value: new THREE.Matrix3() },
       uWakeStrength: { value: 0 },
+      uWakeAnchor: { value: new THREE.Vector3(0, 0, 400) },
     };
     for (let i = 0; i < n; i++) {
-      uniforms[`uDisp${i}`] = { value: this.cascades[i].displacement.texture };
-      uniforms[`uDeriv${i}`] = { value: this.cascades[i].derivatives.texture };
+      uniforms[`uDisp${i}`] = { value: this.cascades[i].dispTex };
+      uniforms[`uDeriv${i}`] = { value: this.cascades[i].derivTex };
     }
 
     const mat = new THREE.ShaderMaterial({
@@ -281,11 +290,12 @@ export class Ocean implements Module, IOcean {
       slopeVar[i] = cascadeSlopeVariance(this.params, this.layouts[i]);
     }
     this.material.uniforms.uSlopeRms.value = this.params.slopeRms;
+    this.material.uniforms.uSlopeVarTail.value = this.params.slopeVarTail;
     this.material.uniforms.uWaveHeight.value = this.params.hs;
     // Monahan: whitecap coverage grows as U^3.4. Below a fresh breeze there
     // simply are no whitecaps, and the fold mask must not invent any.
     const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(env.windSpeed, 0.5), 3.41) * 24);
-    this.material.uniforms.uFoamAmount.value = 0.15 + 1.5 * cover;
+    this.material.uniforms.uFoamAmount.value = 0.18 + 1.9 * cover;
   }
 
   /* ------------------------------------------------------------------ *
@@ -317,7 +327,9 @@ export class Ocean implements Module, IOcean {
       t0 = t;
     }
 
+    FullScreenPass.begin(world.renderer);
     for (const c of this.cascades) c.update(world.renderer, this.simTime);
+    FullScreenPass.end(world.renderer);
     if (prof) {
       const t = performance.now();
       stats['ocean:gpu'] = t - t0;
@@ -349,6 +361,7 @@ export class Ocean implements Module, IOcean {
 
     this.updateClipmap(cam.x, cam.z);
     this.updateWake(world);
+    this.updateSky(world);
 
     const u = this.material.uniforms;
     (u.uResolution.value as THREE.Vector2).set(world.size.width, world.size.height);
@@ -392,7 +405,12 @@ export class Ocean implements Module, IOcean {
    */
   private updateWake(world: World): void {
     const ext = world.ext.vfx as
-      | { wakeTexture?: THREE.Texture; wakeMatrix?: THREE.Matrix3; wakeStrength?: number }
+      | {
+          wakeTexture?: THREE.Texture;
+          wakeMatrix?: THREE.Matrix3;
+          wakeStrength?: number;
+          wakeWorldSize?: number;
+        }
       | undefined;
     const tex = ext?.wakeTexture ?? null;
     const mat = ext?.wakeMatrix ?? null;
@@ -406,6 +424,30 @@ export class Ocean implements Module, IOcean {
     u.uWake.value = tex;
     (u.uWakeMatrix.value as THREE.Matrix3).copy(mat as THREE.Matrix3);
     u.uWakeStrength.value = ext?.wakeStrength ?? 1;
+    // The field wraps at wakeWorldSize, so anything past about half of that is
+    // the wake showing through from the far side. Fade it before then.
+    const p = world.ship.position;
+    (u.uWakeAnchor.value as THREE.Vector3).set(p.x, p.z, (ext?.wakeWorldSize ?? 1024) * 0.45);
+  }
+
+  /**
+   * The sky's own radiance probe, if it has published one. This is the single
+   * biggest quality lever the ocean has: reflecting the real sky, clouds
+   * included, is what stops water reading as a tinted plane. Optional and
+   * null-checked — the sea falls back to the analytic gradient without it.
+   *
+   * Cloud shadows need no plumbing: they are shared uniforms the sky writes
+   * every frame, sampled through `lwCloudShadow()`.
+   *
+   * The aerial-perspective froxel volume is deliberately NOT sampled; see the
+   * note in the aerial-perspective block of `shaders/surface.ts`.
+   */
+  private updateSky(world: World): void {
+    const sky = world.ext.sky as { envMap?: THREE.Texture } | undefined;
+    const env = sky?.envMap ?? null;
+    const u = this.material.uniforms;
+    u.uEnvMap.value = env ?? this.stub;
+    u.uHasEnv.value = env ? 1 : 0;
   }
 
   private rebuildMaterial(world: World): void {
@@ -491,9 +533,9 @@ export class Ocean implements Module, IOcean {
       hasSunGlitter: true,
       foamTexture: this.foam.texture,
       foamWindow: this.foam.window,
-      displacementTexture: this.cascades[this.cascades.length - 1].displacement.texture,
-      displacementTextures: this.cascades.map((c) => c.displacement.texture),
-      derivativeTextures: this.cascades.map((c) => c.derivatives.texture),
+      displacementTexture: this.cascades[this.cascades.length - 1].dispTex,
+      displacementTextures: this.cascades.map((c) => c.dispTex),
+      derivativeTextures: this.cascades.map((c) => c.derivTex),
       cascadeScales: this.layouts.map((l) => 1 / l.size),
       cascadeHalfTexels: this.layouts.map((l) => 0.5 / l.n),
       cascadeSizes: this.layouts.map((l) => l.size),
@@ -566,34 +608,44 @@ export class Ocean implements Module, IOcean {
       const rt = this.compareRt;
       const buf = new Float32Array(n * n * 4);
       this.compareMat.uniforms.uN.value = n;
-      this.compareMat.uniforms.uSrc.value = c.displacement.texture;
+      this.compareMat.uniforms.uSrc.value = c.dispTex;
       renderFullscreen(renderer, this.compareMat, rt);
       renderer.readRenderTargetPixels(rt, 0, 0, n, n, buf);
       disp.push(buf);
       const buf2 = new Float32Array(n * n * 4);
-      this.compareMat.uniforms.uSrc.value = c.derivatives.texture;
+      this.compareMat.uniforms.uSrc.value = c.derivTex;
       renderFullscreen(renderer, this.compareMat, rt);
       renderer.readRenderTargetPixels(rt, 0, 0, n, n, buf2);
       deriv.push(buf2);
     }
 
     const sample: WaveSample = createWaveSample();
+    const dispTap = new Float32Array(4);
+    const derivTap = new Float32Array(4);
     let sumH = 0;
     let maxH = 0;
     let sumS = 0;
+    let sumG = 0;
+    let sumC = 0;
+    let sumGG = 0;
+    let sumCC = 0;
+    let sumGC = 0;
     const side = Math.max(2, Math.round(Math.sqrt(count)));
     const span = this.layouts[0].size;
     for (let j = 0; j < side; j++) {
       for (let i = 0; i < side; i++) {
-        const x = (i / side) * span;
-        const z = (j / side) * span;
+        // Irrational offsets: a grid aligned to the coarsest tile lands on texel
+        // centres of every finer cascade at once and hides exactly the
+        // interpolation error this is meant to find.
+        const x = ((i + 0.3183) / side) * span;
+        const z = ((j + 0.7071) / side) * span;
         let gy = 0;
         let gsx = 0;
         let gsz = 0;
         for (let ci = 0; ci < this.cascades.length; ci++) {
           const l = this.layouts[ci];
-          const d = bilinear(disp[ci], l.n, x / l.size, z / l.size);
-          const e = bilinear(deriv[ci], l.n, x / l.size, z / l.size);
+          const d = bilinear(disp[ci], l.n, x / l.size, z / l.size, dispTap);
+          const e = bilinear(deriv[ci], l.n, x / l.size, z / l.size, derivTap);
           gy += d[0];
           gsx += d[3];
           gsz += e[0];
@@ -603,6 +655,11 @@ export class Ocean implements Module, IOcean {
         const dh = sample.height - gy;
         sumH += dh * dh;
         if (Math.abs(dh) > maxH) maxH = Math.abs(dh);
+        sumG += gy;
+        sumC += sample.height;
+        sumGG += gy * gy;
+        sumCC += sample.height * sample.height;
+        sumGC += gy * sample.height;
         // Reconstruct the CPU's slope from its normal.
         const csx = -sample.normal.x / Math.max(sample.normal.y, 1e-3);
         const csz = -sample.normal.z / Math.max(sample.normal.y, 1e-3);
@@ -610,10 +667,16 @@ export class Ocean implements Module, IOcean {
       }
     }
     const total = side * side;
+    const varG = sumGG / total - (sumG / total) ** 2;
+    const varC = sumCC / total - (sumC / total) ** 2;
+    const cov = sumGC / total - (sumG / total) * (sumC / total);
     return {
       rmsHeight: Math.sqrt(sumH / total),
       maxHeight: maxH,
       rmsSlope: Math.sqrt(sumS / (2 * total)),
+      rmsGpuField: Math.sqrt(Math.max(varG, 0)),
+      rmsCpuField: Math.sqrt(Math.max(varC, 0)),
+      correlation: cov / Math.sqrt(Math.max(varG * varC, 1e-12)),
       samples: total,
       cascades: this.layouts.map((l, i) => ({
         size: l.size,
@@ -629,10 +692,20 @@ export class Ocean implements Module, IOcean {
  *  helpers
  * ------------------------------------------------------------------ */
 
-const bilinearOut = new Float32Array(4);
-
-/** Same reconstruction the shader gets from a LinearFilter fetch. */
-function bilinear(buf: Float32Array, n: number, u: number, v: number): Float32Array {
+/**
+ * Same reconstruction the shader gets from a LinearFilter fetch, written into a
+ * caller-owned `out`. It used to return a single shared scratch array, which
+ * meant two live samples aliased each other: the displacement read turned into
+ * the derivative read and `debugCompare` reported a 46 cm CPU-vs-GPU
+ * disagreement that did not exist.
+ */
+function bilinear(
+  buf: Float32Array,
+  n: number,
+  u: number,
+  v: number,
+  out: Float32Array,
+): Float32Array {
   // texel centres sit at (i + 0.5) / n, matching uCascadeHalfTexel.
   const fx = u * n;
   const fz = v * n;
@@ -653,9 +726,9 @@ function bilinear(buf: Float32Array, n: number, u: number, v: number): Float32Ar
   const w01 = (1 - tx) * tz;
   const w11 = tx * tz;
   for (let k = 0; k < 4; k++) {
-    bilinearOut[k] = buf[a + k] * w00 + buf[b + k] * w10 + buf[c + k] * w01 + buf[d + k] * w11;
+    out[k] = buf[a + k] * w00 + buf[b + k] * w10 + buf[c + k] * w01 + buf[d + k] * w11;
   }
-  return bilinearOut;
+  return out;
 }
 
 let fsScene: THREE.Scene | null = null;

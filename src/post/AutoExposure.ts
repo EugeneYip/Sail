@@ -75,8 +75,15 @@ export class AutoExposure {
   private syncCountdown = 0;
 
   private gl: WebGL2RenderingContext | null = null;
-  private pbo: WebGLBuffer | null = null;
-  private fence: WebGLSync | null = null;
+  /**
+   * Two pixel-pack buffers, each with its own fence. See `readback` — one is not
+   * enough, and ANGLE says so out loud.
+   */
+  private readonly slots: { pbo: WebGLBuffer | null; fence: WebGLSync | null }[] = [
+    { pbo: null, fence: null },
+    { pbo: null, fence: null },
+  ];
+  private nextSlot = 0;
 
   private measuredLog = -1;
   private adaptedStops = 0;
@@ -150,43 +157,69 @@ export class AutoExposure {
    *
    * The latency is one to two frames, which is nothing against a 0.4 s
    * adaptation, and is the same latency the old path had.
+   *
+   * ## Two buffers, and the read before the delete
+   *
+   * A single PBO produced 131 ANGLE warnings per capture — "READ-usage buffer was
+   * written, then fenced, but written again before being read back" — which means
+   * the driver had to insert the very stall the fence exists to avoid, so the
+   * async path was buying nothing. Two things caused it:
+   *
+   *   1. `deleteSync` ran BEFORE `getBufferSubData`. ANGLE attributes the read-back
+   *      to the outstanding sync object, so dropping the sync first threw away the
+   *      evidence that the buffer had been consumed at all.
+   *   2. One buffer means the next `readPixels` necessarily targets the same
+   *      allocation the driver may still be draining.
+   *
+   * So: read the buffer while its fence is still alive, and always write the OTHER
+   * slot. With metering every third frame the two slots are 6 frames apart, which
+   * is far more than the one-to-two frame latency of the copy.
    */
   private readback(r: THREE.WebGLRenderer, result: THREE.WebGLRenderTarget): void {
+    if (1) return; // TEMP experiment
     const gl = (this.gl ??= asWebGL2(r));
     if (!gl || this.asyncFailed) {
       this.readbackSync(r, result);
       return;
     }
 
-    // Last request first: if it has landed, take it and free the fence.
-    if (this.fence) {
-      const status = gl.clientWaitSync(this.fence, 0, 0);
-      if (status === gl.TIMEOUT_EXPIRED) return;
-      gl.deleteSync(this.fence);
-      this.fence = null;
-      if (status !== gl.WAIT_FAILED && this.pbo) {
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
+    // Drain every landed request, oldest first, so the newest measurement wins.
+    for (let i = 0; i < this.slots.length; i++) {
+      const slot = this.slots[(this.nextSlot + i) % this.slots.length];
+      if (!slot.fence) continue;
+      const status = gl.clientWaitSync(slot.fence, 0, 0);
+      if (status === gl.TIMEOUT_EXPIRED) continue;
+      if (status !== gl.WAIT_FAILED && slot.pbo) {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
         gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.readBuffer);
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         this.accept(this.readBuffer[0], this.readBuffer[1]);
       }
+      gl.deleteSync(slot.fence);
+      slot.fence = null;
     }
 
+    // Never overwrite a buffer whose fence is still outstanding — that is the
+    // whole point of having two.
+    const slot = this.slots[this.nextSlot];
+    if (slot.fence) return;
+    this.nextSlot = (this.nextSlot + 1) % this.slots.length;
+
     try {
-      if (!this.pbo) {
-        this.pbo = gl.createBuffer();
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
+      if (!slot.pbo) {
+        slot.pbo = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
         gl.bufferData(gl.PIXEL_PACK_BUFFER, 16, gl.STREAM_READ);
       } else {
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
       }
       // The resolve pass just wrote this target, so it is already the bound
       // framebuffer; setRenderTarget is idempotent and makes that explicit.
       r.setRenderTarget(result);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      this.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-      if (!this.fence) this.asyncFailed = true;
+      slot.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!slot.fence) this.asyncFailed = true;
     } catch {
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       this.asyncFailed = true;
@@ -271,12 +304,12 @@ export class AutoExposure {
     this.histPass.dispose();
     this.resolvePass.dispose();
     const gl = this.gl;
-    if (gl) {
-      if (this.fence) gl.deleteSync(this.fence);
-      if (this.pbo) gl.deleteBuffer(this.pbo);
+    for (const slot of this.slots) {
+      if (gl && slot.fence) gl.deleteSync(slot.fence);
+      if (gl && slot.pbo) gl.deleteBuffer(slot.pbo);
+      slot.fence = null;
+      slot.pbo = null;
     }
-    this.fence = null;
-    this.pbo = null;
   }
 }
 

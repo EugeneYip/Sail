@@ -47,9 +47,25 @@ export interface YardFrame {
   pivot: THREE.Vector3;
 }
 
+/**
+ * One headsail stay. The stay is standing rigging and the sail is hanked to it,
+ * so both are generated from this single record — a jib whose luff is not
+ * exactly on its stay is the first thing that reads as wrong.
+ */
+export interface HeadStay {
+  /** Tack: where the sail's lower corner is hooked, out on the head spars. */
+  tack: THREE.Vector3;
+  /** Head: where the stay lands on the foremast. */
+  head: THREE.Vector3;
+  /** Unit vector up the stay, tack -> head. Also the sheeting rotation axis. */
+  dir: THREE.Vector3;
+}
+
 export interface RigFrame {
   masts: MastFrame[];
   yards: YardFrame[];
+  /** The four headsail stays, inboard to outboard — see `JIB_IDS` for order. */
+  headStays: HeadStay[];
   bowsprit: {
     heel: THREE.Vector3;
     cap: THREE.Vector3;
@@ -121,7 +137,42 @@ export function buildMasts(bins: Bins, quality: number): RigFrame {
 
   buildMastCoats(bins, masts);
 
-  return { masts, yards, bowsprit, spanker };
+  return { masts, yards, headStays: buildHeadStays(masts[0], bowsprit), bowsprit, spanker };
+}
+
+/** How far out along the bowsprit the fore staysail is tacked, metres. */
+const FORE_STAYSAIL_TACK = 4.6;
+
+/**
+ * Fore staysail on the fore stay, fore topmast staysail and jib on the topmast
+ * head, flying jib on the topgallant head — the historical arrangement, and the
+ * reason the headsails form a nested fan rather than a stack.
+ */
+function buildHeadStays(fore: MastFrame, bowsprit: RigFrame['bowsprit']): HeadStay[] {
+  const s = fore.spec;
+  const tacks = [
+    bowsprit.heel.clone().addScaledVector(bowsprit.dir, FORE_STAYSAIL_TACK),
+    bowsprit.cap.clone(),
+    bowsprit.jibboomEnd.clone(),
+    bowsprit.flyingEnd.clone(),
+  ];
+  const heads = [
+    fore.lower(s.lowerTop - 1.6),
+    fore.top(s.topmastTop - 2.6),
+    fore.top(s.topmastTop - 0.9),
+    fore.tg(s.tgTop - 1.4),
+  ];
+  const out: HeadStay[] = [];
+  for (let i = 0; i < 4; i++) {
+    // The stay is set up on the fore side of the mast, clear of the doublings.
+    heads[i].z -= (i === 0 ? s.lowerRadius : i === 3 ? s.tgRadius : s.topRadius) + 0.07;
+    out.push({
+      tack: tacks[i],
+      head: heads[i],
+      dir: new THREE.Vector3().subVectors(heads[i], tacks[i]).normalize(),
+    });
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ *

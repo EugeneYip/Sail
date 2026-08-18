@@ -27,6 +27,12 @@ import { VfxWeather } from './VfxWeather';
  *      vec2 uv = fract((wakeMatrix * vec3(worldPos.xz, 1.0)).xy);
  *      vec4 w  = texture2D(wakeTexture, uv);
  *
+ *    ...then FADE IT OUT with distance from `centre` (world XZ of the bow) using
+ *    `fadeRadius` (600 m). This is not optional polish — see the `fract` note.
+ *
+ *      float w = wakeStrength * (1.0 - smoothstep(fadeRadius * 0.72, fadeRadius,
+ *                                distance(worldPos.xz, centre)));
+ *
  *    NOTE THE `fract`. The texture is a torus in world space: `wakeMatrix` maps
  *    world XZ to texture space with an anchor that only ever moves in whole
  *    multiples of `wakeWorldSize` (1024 m), so the mapping is invariant, the
@@ -62,9 +68,9 @@ import { VfxWeather } from './VfxWeather';
  *  Other published signals
  * ==================================================================
  *
- * `world.bus` event `vfx:lightning`, payload `{ distance, intensity, delay,
- * strokes }` — emitted on every strike. `delay` is seconds until the thunder
- * should be heard (`distance / 343`).
+ * `world.bus` events actually emitted:
+ *   `vfx:cannon`     `{ side, guns }`  — a broadside has begun to roll off.
+ *   `vfx:shotSplash` `{ x, z }`        — a round shot has landed.
  *
  * Keys: `z` fires the port broadside, `x` the starboard broadside.
  *
@@ -76,13 +82,18 @@ import { VfxWeather } from './VfxWeather';
  * water and the wetted-hull skirt; GPU particle pool (2 passes + 1 draw) with
  * bow spray, slam bursts, stern wash, wake flecks, spindrift and trough mist;
  * rain streaks, ring ripples, deck splashes, rigging drips and lens rain;
- * lightning (scene flash + forked bolt + cloud glow); funnel smoke; cannon.
+ * funnel smoke; cannon. Particles are depth-soft against arbitrary geometry
+ * whenever `world.ext.post.depthTexture` is present — re-latched every frame in
+ * `Particles.end`, so a resize or a late-initialising post stack is picked up
+ * without a restart.
  *
- * Known gaps: particles are soft against the water surface and the near plane
- * analytically, but NOT against arbitrary geometry — the post agent does not
- * publish a depth texture yet. The code path exists behind the `VFX_DEPTH_SOFT`
- * define in `shaders/particles.ts`; enable it by publishing
- * `world.ext.post = { depthTexture, near, far }`.
+ * Known gaps:
+ *  - **No lightning.** `shaders/rain.ts` carries finished bolt and cloud-glow
+ *    shaders and `api.ts` declares a `LightningEvent`, but nothing drives them
+ *    and NOTHING EMITS `vfx:lightning`. `src/audio/AudioEngine.ts` already
+ *    listens for that event, so thunder is wired to a signal that never fires.
+ *  - Rain is a world-space curtain around the camera; it is not occluded by the
+ *    sails, so it draws through the rig.
  */
 export function createVfxModules(): Module[] {
   const shared = createShared();

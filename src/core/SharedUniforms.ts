@@ -37,7 +37,20 @@ export function createSharedUniforms(): SharedUniforms {
     // pass must subtract this from its NDC before using a previous-frame
     // matrix; see the contract in post/Pipeline.ts.
     uJitter: { value: new THREE.Vector2() },
+    // Cloud shadows. Written by the sky module every frame; sample them with
+    // lwCloudShadow() below rather than by hand. Defaults are "no clouds", so a
+    // material can use them unconditionally even before the sky module is up.
+    uCloudShadowMap: { value: whitePixel() },
+    uCloudShadowMatrix: { value: new THREE.Matrix4() },
+    uCloudShadowStrength: { value: 0 },
   };
+}
+
+/** 1x1 white — the "nothing is shadowed" default for `uCloudShadowMap`. */
+function whitePixel(): THREE.DataTexture {
+  const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  t.needsUpdate = true;
+  return t;
 }
 
 /** GLSL that every custom material can `#include` by string concatenation. */
@@ -62,4 +75,29 @@ uniform float uWindSpeed;
 uniform float uExposure;
 uniform float uWetness;
 uniform vec2  uJitter;
+uniform sampler2D uCloudShadowMap;
+uniform mat4  uCloudShadowMatrix;
+uniform float uCloudShadowStrength;
+
+/**
+ * Fraction of DIRECT sunlight that reaches a world-space point through the cloud
+ * deck. 1.0 outside the map, and 1.0 whenever there are no clouds.
+ *
+ * Multiply your direct sun term by this and nothing else. In particular do not
+ * also scale the ambient or the fog: 'uSunIntensity' already carries the deck's
+ * MEAN attenuation, and 'uCloudShadowStrength' is published as that same mean so
+ * that mix(1, T, strength) cannot count the deck twice — at solid overcast the
+ * mean has done the work and the strength tapers with it, while at broken cover
+ * the strength is near 1 and shadows land at full contrast.
+ *
+ * One texture fetch. The map is a sea-level slice, so a receiver well above the
+ * water drifts by 'altitude / tan(sunElevation)'; at a masthead that is metres
+ * against a 50 m shadow feature and not worth correcting.
+ */
+float lwCloudShadow(vec3 worldPos){
+  if (uCloudShadowStrength <= 0.0) return 1.0;
+  vec2 uv = (uCloudShadowMatrix * vec4(worldPos, 1.0)).xy;
+  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
+  return mix(1.0, texture2D(uCloudShadowMap, uv).r, uCloudShadowStrength);
+}
 `;

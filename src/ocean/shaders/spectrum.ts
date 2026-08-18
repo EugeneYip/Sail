@@ -69,7 +69,8 @@ void main(){
 
 /**
  * Time propagation plus the packing that lets one RGBA FFT chain carry four real
- * output fields.
+ * output fields. Both chains are written in one pass, as two colour attachments,
+ * because the phase rotation they share is most of the pass's work.
  *
  *   chain 0 -> (Dy, Dx, Dz, dDy/dx)
  *   chain 1 -> (dDy/dz, dDx/dx, dDz/dz, dDx/dz)
@@ -89,7 +90,8 @@ uniform float uN;
 uniform float uSize;
 uniform float uTime;
 uniform float uLambda;
-uniform float uChain;
+
+layout(location = 1) out highp vec4 oChainB;
 
 vec2 cmul(vec2 a, vec2 b){ return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
 
@@ -100,7 +102,7 @@ void main(){
   float dk = OC_TAU / uSize;
   vec2 kv = mode * dk;
   float k = length(kv);
-  if (k < 1e-6) { gl_FragColor = vec4(0.0); return; }
+  if (k < 1e-6) { gl_FragColor = vec4(0.0); oChainB = vec4(0.0); return; }
 
   vec4 h0 = texelFetch(uH0, ip, 0);
   float ph = ocDispersion(k) * uTime;
@@ -111,15 +113,12 @@ void main(){
 
   float invK = 1.0 / k;
   float lam = uLambda;
-  vec2 A, B;
-  if (uChain < 0.5) {
-    A = h * (1.0 + lam * kv.x * invK);
-    B = cmul(h, vec2(-kv.x, -lam * kv.y * invK));
-  } else {
-    A = cmul(h, vec2(0.0, kv.y + lam * kv.x * kv.x * invK));
-    B = cmul(h, vec2(lam * kv.y * kv.y * invK, lam * kv.x * kv.y * invK));
-  }
-  gl_FragColor = vec4(A, B);
+  gl_FragColor = vec4(
+    h * (1.0 + lam * kv.x * invK),
+    cmul(h, vec2(-kv.x, -lam * kv.y * invK)));
+  oChainB = vec4(
+    cmul(h, vec2(0.0, kv.y + lam * kv.x * kv.x * invK)),
+    cmul(h, vec2(lam * kv.y * kv.y * invK, lam * kv.x * kv.y * invK)));
 }
 `,
 };

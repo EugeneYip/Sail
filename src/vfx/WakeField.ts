@@ -17,6 +17,12 @@ import {
 export const WAKE_WORLD_SIZE = 1024;
 /** Arc length of the track we keep, metres. Must stay well under WAKE_WORLD_SIZE. */
 const TRACK_LENGTH = 520;
+/**
+ * Radius, metres, beyond which a consumer MUST fade the field to zero. Set just
+ * inside the track length: past this there is nothing real in the buffer, and
+ * because the buffer is a torus a further tap wraps onto the near-field wake.
+ */
+export const WAKE_FADE_RADIUS = 600;
 const TRACK_SPACING = 2.5;
 const TRACK_ROWS = Math.round(TRACK_LENGTH / TRACK_SPACING); // 208
 const RIB_VERTS = 41;
@@ -72,6 +78,8 @@ export class WakeField {
   readonly matrix = new THREE.Matrix3();
   readonly interactionMatrix = new THREE.Matrix3();
   readonly anchor = new THREE.Vector2();
+  /** World XZ of the newest track sample. Published so consumers can fade by distance. */
+  readonly centre = new THREE.Vector2();
   readonly interactionCentre = new THREE.Vector2();
   readonly interactionWorldSize = INTERACTION_WORLD_SIZE;
 
@@ -456,6 +464,7 @@ export class WakeField {
     // --- anchor moves only in whole texture periods, so fract() is invariant.
     const bx = ctx.bow.x;
     const bz = ctx.bow.z;
+    this.centre.set(bx, bz);
     this.anchor.x += WAKE_WORLD_SIZE * Math.floor((bx - this.anchor.x) / WAKE_WORLD_SIZE);
     this.anchor.y += WAKE_WORLD_SIZE * Math.floor((bz - this.anchor.y) / WAKE_WORLD_SIZE);
     const inv = 1 / WAKE_WORLD_SIZE;

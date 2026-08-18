@@ -29,6 +29,25 @@ export interface VfxExt {
    * the taps entirely. Read it every frame; it is a plain number, not a box.
    */
   wakeStrength: number;
+  /**
+   * World XZ of the newest end of the track (the bow). Mutated in place.
+   *
+   * REQUIRED FOR CORRECTNESS, not a convenience. The buffer is a torus, so a
+   * point further than `wakeWorldSize` from the track aliases onto it and will
+   * sample somebody else's wake — and because the trail is up to ~520 m long and
+   * the ribbon up to ~480 m wide, the footprint genuinely does wrap onto the
+   * opposite edge of the texture. Fade your contribution out with distance from
+   * this point, e.g.
+   *
+   *     float w = 1.0 - smoothstep(fadeRadius * 0.72, fadeRadius,
+   *                                distance(worldPos.xz, centre));
+   *
+   * Without that fade you get a hard stripe of wake on open water half a
+   * kilometre away from the ship.
+   */
+  centre: THREE.Vector2;
+  /** Metres from `centre` beyond which the field must be faded to zero. */
+  fadeRadius: number;
 
   /* ---- fine, single-frame interaction field ---- */
 

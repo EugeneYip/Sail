@@ -82,6 +82,13 @@ float cloudLightDepth(vec3 p, vec3 lightDir){
 vec3 cloudScatteredRadiance(float tauLight, float cosView, float hFrac){
   float powderMix = saturate1(-cosView * 0.5 + 0.5);
 
+  // Multiple scattering needs optical depth to happen in. A sample at a wispy
+  // edge, and the whole of a tau-0.5 cirrus slab, scatter essentially once — so
+  // the octaves have to fade out with tau or they hand thin cloud five times the
+  // radiance it has any right to. That was a large part of why edges and high
+  // cloud read as a bright haze rather than as cloud.
+  float ms = 1.0 - exp(-tauLight * 0.75);
+
   float sun = 0.0;
   float a = 1.0;   // scattering weight
   float b = 1.0;   // extinction weight
@@ -95,7 +102,7 @@ vec3 cloudScatteredRadiance(float tauLight, float cosView, float hFrac){
     // nimbostratus a black underside instead of the flat grey it really has.
     float trans = n == 0 ? exp(-tau) : 1.0 / (1.0 + CLOUD_DIFFUSION_K * tau);
     float powder = 1.0 - exp(-2.0 * tau);
-    float gain = n == 0 ? 1.0 : CLOUD_MS_GAIN;
+    float gain = n == 0 ? 1.0 : CLOUD_MS_GAIN * ms;
     sun += a * gain * cloudPhase(cosView, c) * trans * mix(1.0, 2.0 * powder, powderMix);
     a *= 0.5;
     b *= 0.5;
@@ -115,27 +122,33 @@ vec3 cloudScatteredRadiance(float tauLight, float cosView, float hFrac){
  *
  * The sky-view LUT is baked without clouds, so the air below an overcast deck
  * comes out of it far too bright. This march measures how much of the near
- * column actually sees the sun and returns the correction as
+ * column actually sees the sun and returns a MULTIPLIER on the sky radiance
+ * behind the clouds.
  *
- *   .x  multiplier on the sky radiance behind the clouds  (the shadow)
- *   .y  extra Mie forward-scatter from the lit part       (the shaft)
+ * Multiplicative and nothing else, deliberately. An earlier version also ADDED a
+ * Mie forward-scatter term for the lit part of the column, which is inscatter
+ * the LUT already carries: it fired at full strength with zero cloud cover, so
+ * every clear sky got an extra unconditional haze layer around the sun. God rays
+ * do not need an additive term — a per-pixel shadow on a Mie-bright column is
+ * already a bright shaft against a darker background, which is what one is.
  *
- * The shadow is weighted by how much of the ray's scattering column lies below
- * the deck: looking straight up almost none of it does, so the zenith is
- * untouched; looking toward the horizon nearly all of it does, which is what
- * makes a storm horizon go properly leaden.
+ * The shadow is weighted two ways. By how much of the ray's scattering column
+ * lies inside the marched segment: looking straight up almost none of it does,
+ * so the zenith is untouched, while looking toward the horizon nearly all of it
+ * does, which is what makes a storm horizon go properly leaden. And by the Mie
+ * phase toward the sun, because the inscatter being shadowed is concentrated in
+ * the forward lobe — that is what gives the shafts their contrast.
  */
-vec2 cloudAirShadow(vec3 pos, vec3 dir, float tEnd, vec3 sunDir, sampler2D shadowMap,
-                    mat4 shadowMatrix, float jitter){
-  if (sunDir.y < 0.02) return vec2(1.0, 0.0);
+float cloudAirShadow(vec3 pos, vec3 dir, float tEnd, vec3 sunDir, sampler2D shadowMap,
+                     mat4 shadowMatrix, float jitter){
+  if (sunDir.y < 0.02) return 1.0;
   float tMax = min(tEnd, CLOUD_SHAFT_RANGE_KM);
-  if (tMax <= 0.05) return vec2(1.0, 0.0);
+  if (tMax <= 0.05) return 1.0;
 
   float dt = tMax / float(CLOUD_SHAFT_STEPS);
   float t = dt * jitter;
   float lit = 0.0;
   float wsum = 0.0;
-  float glow = 0.0;
   float slant = 1.0 / max(sunDir.y, 0.02);
 
   for (int i = 0; i < CLOUD_SHAFT_STEPS; i++) {
@@ -152,14 +165,14 @@ vec2 cloudAirShadow(vec3 pos, vec3 dir, float tEnd, vec3 sunDir, sampler2D shado
       : 1.0;
     lit += s * w;
     wsum += w;
-    glow += s * w * dt;
     t += dt;
   }
 
   float litFrac = wsum > 1e-4 ? lit / wsum : 1.0;
   // Fraction of the Rayleigh column that lies inside the marched segment.
   float colFrac = 1.0 - exp(-tMax / 8.0);
-  return vec2(1.0 - CLOUD_AIR_SHADOW * colFrac * (1.0 - litFrac), glow);
+  float fwd = 0.55 + 0.45 * saturate1(dot(dir, sunDir) * 0.5 + 0.5);
+  return 1.0 - CLOUD_AIR_SHADOW * fwd * colFrac * (1.0 - litFrac);
 }
 
 /**
@@ -176,8 +189,8 @@ vec2 cloudAirShadow(vec3 pos, vec3 dir, float tEnd, vec3 sunDir, sampler2D shado
 vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
                 sampler2D transLut, bool detail,
                 sampler2D shadowMap, mat4 shadowMatrix, bool shafts){
-  float rB = RG + uLayerBottom * 0.001;
-  float rT = RG + uLayerTop * 0.001;
+  float rB, rT;
+  cloudShells(rB, rT);
 
   vec3 L = vec3(0.0);
   float T = 1.0;
@@ -252,18 +265,13 @@ vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
     L *= seg;
   }
 
-  vec2 air = vec2(1.0, 0.0);
-  if (shafts) {
+  float air = 1.0;
+  if (shafts && uCoverage > 0.002) {
     float tEnd = hit ? t0 : CLOUD_SHAFT_RANGE_KM;
     air = cloudAirShadow(pos, dir, tEnd, sunDir, shadowMap, shadowMatrix, jitter);
-    // The shaft term is the Mie forward lobe of the LIT air, which the coarse
-    // sky-view LUT cannot resolve. Sun colour comes from the same irradiance
-    // the clouds are lit by, so it warms correctly as the sun drops.
-    float mie = phaseMie(dot(dir, sunDir), MIE_G);
-    L += uCloudLightIrradiance * (mie * BETA_M_S * air.y * uMieMul);
   }
 
-  float alpha = (T + (1.0 - T) * (1.0 - Ta)) * air.x;
+  float alpha = (T + (1.0 - T) * (1.0 - Ta)) * air;
   return vec4(max(L, vec3(0.0)), clamp(alpha, 0.0, 1.0));
 }
 #endif

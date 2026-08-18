@@ -102,8 +102,8 @@ export class FoamSim {
       uReset: { value: 1 },
     };
     for (let i = 0; i < n; i++) {
-      uniforms[`uDisp${i}`] = { value: cascades[i].displacement.texture };
-      uniforms[`uDeriv${i}`] = { value: cascades[i].derivatives.texture };
+      uniforms[`uDisp${i}`] = { value: cascades[i].dispTex };
+      uniforms[`uDeriv${i}`] = { value: cascades[i].derivTex };
     }
 
     this.material = new THREE.ShaderMaterial({
@@ -193,8 +193,8 @@ void main(){
     // and a gale must be covered. Bias the fold threshold rather than scaling
     // the output, so what foam there is stays physically placed.
     const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(windSpeed, 0.5), 3.41) * 24);
-    u.uThreshold.value = 0.42 + 0.5 * cover;
-    u.uInject.value = 0.6 + 2.2 * cover;
+    u.uThreshold.value = 0.54 + 0.44 * cover;
+    u.uInject.value = 0.8 + 2.4 * cover;
 
     for (let i = 0; i < MAX_SOURCES; i++) {
       const s = this.sources[i];
@@ -216,8 +216,8 @@ void main(){
   rebind(cascades: WaveCascade[]): void {
     const u = this.material.uniforms;
     for (let i = 0; i < cascades.length; i++) {
-      if (u[`uDisp${i}`]) u[`uDisp${i}`].value = cascades[i].displacement.texture;
-      if (u[`uDeriv${i}`]) u[`uDeriv${i}`].value = cascades[i].derivatives.texture;
+      if (u[`uDisp${i}`]) u[`uDisp${i}`].value = cascades[i].dispTex;
+      if (u[`uDeriv${i}`]) u[`uDeriv${i}`].value = cascades[i].derivTex;
     }
   }
 

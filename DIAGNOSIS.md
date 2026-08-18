@@ -195,3 +195,52 @@ cost is CPU in `update()`, not geometry, batching or fill.
   is not actually saving the readback.
 - 5 x `THREE.Material: parameter 'defines' has value of undefined` from
   `src/vfx/Particles.ts` and `src/vfx/WakeField.ts`.
+
+## 9. State 2026-08-18 late — sails and clouds are in
+
+Clean run: **zero GLSL errors, zero failing materials**, no feedback loop, no
+program-link failures. `npm run typecheck` (which now runs `check-glsl`) passes.
+
+| scene | fps | draw calls | tris |
+|---|---|---|---|
+| noon | 23 | 63 | 0.58 M |
+| golden | 18 | 69 | 0.60 M |
+| orbit | 18 | 70 | 0.59 M |
+| storm | 21 | 91 | 0.60 M |
+
+**fps up from ~14 to 18-23** — the ocean/vfx CPU work partially landed before the
+agents were interrupted. Still well short of 60.
+
+**Landed and visible:** the full sail plan renders (square sails on all three
+masts, jibs, spanker, with camber); volumetric clouds render with real volume and
+shading; the hull reads dark with its gunport stripe and stern gallery; the wake
+trails; the ocean has wave structure and a sun-glitter path.
+
+### Verified NOT a bug — do not chase this
+
+The ship *looks* heeled far more than the HUD's reported angle. It is not. Probed
+live (`.tmp/heel.mjs`):
+
+```
+physics_heel_deg    10.03   ->  shipRoot_roll_deg   -10.03
+physics_pitch_deg   -0.99   ->  shipRoot_pitch_deg   -0.99
+ship.quaternion == shipRoot.quaternion  (identical to 4dp)
+```
+
+The transform is exact. The apparent tilt is a 31 deg yaw relative to the chase
+camera plus 67 m masts exaggerating a modest heel in perspective. **Measure before
+dispatching** — this looked like a doubled-rotation bug and was not.
+
+### Remaining, ranked
+
+1. **Foam and spray are far too bright** and dominate the frame — the missing
+   `INV_PI` from section 6.2 is still unfixed (the VFX agent was interrupted
+   mid-fix). This is the largest remaining visual defect.
+2. **Still washed out / low contrast** overall, though much improved.
+3. **18-23 fps against 60.** CPU `update()` in ocean and vfx remains the blocker.
+4. **Camera framing** — the ship sits off-centre and clipped at the right frame
+   edge in `noon`. Composition axis of RUBRIC.md is not being served.
+5. Sails read as blown-out white rather than off-white weathered flax; may resolve
+   once (1) and (2) are fixed.
+6. 11x `THREE.Material: parameter 'defines' has value of undefined` and 12x
+   `GL_INVALID_VALUE: glGetProgramiv` remain in the console.

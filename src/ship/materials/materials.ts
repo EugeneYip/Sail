@@ -143,15 +143,21 @@ export function makeShipMaterial(
       .replace(
         '#include <lights_fragment_end>',
         `#include <lights_fragment_end>
+        #ifndef USE_ENVMAP
         {
-          // Analytic two-lobe sky reflection. Stands in for an environment map,
-          // and is what stops the copper and the ironwork reading as black.
+          // Analytic two-lobe sky reflection, ONLY when there is no environment
+          // map. With one bound, three's 'lights_fragment_maps' already supplies
+          // specular IBL from the same sky and adding this doubles it — which is
+          // exactly what over-brightened every ship surface once the radiometry
+          // units fix made uSkyColor the right magnitude. uSkyColor and
+          // uGroundColor are RADIANCE, so no 1/PI here (see sky/constants.ts).
           vec3 V = normalize(vViewPosition);
           float NoV = clamp(dot(normal, V), 0.001, 1.0);
           vec3 amb = mix(uGroundColor, uSkyColor, clamp(vShipWN.y * 0.5 + 0.5, 0.0, 1.0));
           reflectedLight.indirectSpecular +=
             amb * lwEnvBRDF(material.specularColor, material.roughness, NoV) * uEnvAmount;
-        }`,
+        }
+        #endif`,
       );
   };
   m.customProgramCacheKey = () => 'ship-std';

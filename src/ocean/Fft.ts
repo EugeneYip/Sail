@@ -3,24 +3,42 @@ import { FullScreenPass } from './Pass';
 
 /**
  * GPU inverse FFT, radix-2 Cooley–Tukey driven by a precomputed butterfly
- * texture. Two complex fields ride in one RGBA texel (xy and zw), so a single
- * chain of 2·log2(N) passes transforms four real output fields at once.
+ * texture. Two complex fields ride in one RGBA texel (xy and zw) and both of a
+ * cascade's chains ride in one pass as two colour attachments, so 2·log2(N)
+ * passes transform all eight of a cascade's real output fields.
+ *
+ * Doing both chains in one pass rather than two is worth exactly half the ocean
+ * sim's pass count (112 -> 56 at four cascades). These are tiny render targets —
+ * 64x64 for three of the four — so the cost is per-pass fixed overhead on both
+ * the CPU and the GPU, not fill. Sharing the butterfly fetch and the index
+ * arithmetic between the two chains is free on top.
  *
  * Convention: no 1/N normalisation and a +i twiddle, i.e. this computes
  *   f(x_j) = sum_n  h_n exp(+2*pi*i*n*j/N)
  * which is exactly what the wave sum needs with k_n = 2*pi*n/L and x_j = j*L/N.
  * The CPU mirror in `CpuFft.ts` uses the same convention.
+ *
+ * three always compiles ShaderMaterial as GLSL ES 3.00 and declares its own
+ * 'layout(location = 0) out vec4 pc_fragColor' aliased to 'gl_FragColor', so the
+ * second attachment only needs its own declaration at location 1.
  */
 
 const FFT_SHADER = /* glsl */ `
 precision highp float;
 precision highp sampler2D;
-uniform sampler2D uSrc;
+uniform sampler2D uSrcA;
+uniform sampler2D uSrcB;
 uniform sampler2D uButterfly;
 uniform float uStage;
 uniform float uVertical;
 
+layout(location = 1) out highp vec4 oChainB;
+
 vec2 cmul(vec2 a, vec2 b){ return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+
+vec4 butterfly(vec4 a, vec4 b, vec2 w){
+  return vec4(a.xy + cmul(w, b.xy), a.zw + cmul(w, b.zw));
+}
 
 void main(){
   ivec2 p = ivec2(gl_FragCoord.xy);
@@ -30,9 +48,8 @@ void main(){
   int ib = int(bf.w);
   ivec2 pa = uVertical > 0.5 ? ivec2(p.x, ia) : ivec2(ia, p.y);
   ivec2 pb = uVertical > 0.5 ? ivec2(p.x, ib) : ivec2(ib, p.y);
-  vec4 a = texelFetch(uSrc, pa, 0);
-  vec4 b = texelFetch(uSrc, pb, 0);
-  gl_FragColor = vec4(a.xy + cmul(bf.xy, b.xy), a.zw + cmul(bf.xy, b.zw));
+  gl_FragColor = butterfly(texelFetch(uSrcA, pa, 0), texelFetch(uSrcA, pb, 0), bf.xy);
+  oChainB      = butterfly(texelFetch(uSrcB, pa, 0), texelFetch(uSrcB, pb, 0), bf.xy);
 }
 `;
 
@@ -103,7 +120,8 @@ export class GpuFft {
 
     this.material = new THREE.ShaderMaterial({
       uniforms: {
-        uSrc: { value: null },
+        uSrcA: { value: null },
+        uSrcB: { value: null },
         uButterfly: { value: this.butterfly },
         uStage: { value: 0 },
         uVertical: { value: 0 },
@@ -118,6 +136,7 @@ export class GpuFft {
   /**
    * Transform the contents of `a` through the ping-pong pair, landing the last
    * pass directly in `out` so the mipmapped sampling target is written once.
+   * All three targets carry two colour attachments — one per chain.
    */
   run(
     renderer: THREE.WebGLRenderer,
@@ -129,10 +148,12 @@ export class GpuFft {
     let dst = b;
     const u = this.material.uniforms;
     const total = this.stages * 2;
+    FullScreenPass.begin(renderer);
     for (let i = 0; i < total; i++) {
       u.uVertical.value = i < this.stages ? 0 : 1;
       u.uStage.value = i % this.stages;
-      u.uSrc.value = src.texture;
+      u.uSrcA.value = src.textures[0];
+      u.uSrcB.value = src.textures[1];
       const last = i === total - 1;
       FullScreenPass.run(renderer, this.material, last ? out : dst);
       if (!last) {
@@ -141,6 +162,7 @@ export class GpuFft {
         dst = t;
       }
     }
+    FullScreenPass.end(renderer);
   }
 
   dispose(): void {

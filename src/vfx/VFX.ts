@@ -6,7 +6,7 @@ import { Particles } from './Particles';
 import type { VfxShared } from './shared';
 import { Spray } from './Spray';
 import { createVfxTextures } from './textures';
-import { WAKE_WORLD_SIZE, WakeField } from './WakeField';
+import { WAKE_FADE_RADIUS, WAKE_WORLD_SIZE, WakeField } from './WakeField';
 import { WaterProbe } from './WaterProbe';
 
 /** Probe grid resolution per tier. Each cell costs one `ocean.sampleHeight`. */
@@ -53,6 +53,8 @@ export class VFX implements Module {
       wakeMatrix: wake.matrix,
       wakeWorldSize: WAKE_WORLD_SIZE,
       wakeStrength: 0,
+      centre: wake.centre,
+      fadeRadius: WAKE_FADE_RADIUS,
       interactionTexture: wake.interaction.texture,
       interactionMatrix: wake.interactionMatrix,
       interactionWorldSize: wake.interactionWorldSize,

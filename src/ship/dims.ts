@@ -488,8 +488,55 @@ export const PART = {
 } as const;
 export const PART_COUNT = 24;
 
-/** The four headsail stays, outboard to inboard, in `PART.JIB0 + i` order. */
+/** The four headsail stays, inboard to outboard, in `PART.JIB0 + i` order. */
 export const JIB_IDS = ['fore-staysail', 'inner-jib', 'outer-jib', 'flying-jib'] as const;
+
+/**
+ * How a square sail is cut, metres, relative to its yard.
+ *
+ * The proportions are what make a square rig legible at a distance: a topsail's
+ * clews sheet out to the yardarms of the course below it, so its foot is far
+ * wider than its head and the sail is a broad trapezoid. A course has nothing
+ * below it and is cut almost square.
+ */
+export interface SquareCut {
+  headHalf: number;
+  footHalf: number;
+  /** Hoist from the jackstay to the clews. */
+  drop: number;
+  /** Metres the middle of the foot is cut up, to clear the stays below. */
+  roach: number;
+}
+
+export function squareCut(y: YardSpec): SquareCut {
+  const headHalf = y.half * 0.965;
+  const below = YARDS.find((v) => v.mast === y.mast && v.tier === y.tier - 1);
+  const footHalf = below ? Math.max(headHalf * 1.02, below.half * 0.9) : headHalf * 0.95;
+  return {
+    headHalf,
+    footHalf,
+    drop: y.sailDrop,
+    roach: y.sailDrop * (y.tier === 0 ? 0.085 : 0.05),
+  };
+}
+
+/** Every yard that actually carries canvas. */
+export const SAIL_YARDS: readonly YardSpec[] = YARDS.filter((y) => y.sailDrop > 0);
+
+/**
+ * Headsail cut, in `JIB_IDS` order. The clew is `foot` metres from the tack
+ * along a line running aft and rising `rise` metres per metre of run; the foot
+ * lengths are the aerodynamic chords the rig solver already assumes.
+ */
+export const JIB_CUT: readonly { foot: number; rise: number }[] = [
+  { foot: 8.4, rise: 0.16 },
+  { foot: 12.8, rise: 0.15 },
+  { foot: 11.8, rise: 0.14 },
+  { foot: 9.2, rise: 0.12 },
+];
+
+/** Fraction of the boom the spanker's clew is hauled out to. */
+export const SPANKER_CLEW = 0.97;
 
 /** Spanker boom and gaff, on the mizzen. */
 export const SPANKER = {

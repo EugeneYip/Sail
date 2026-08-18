@@ -153,8 +153,10 @@ export class CloudField {
 
     // Cirrus is not the same phenomenon as the low deck and does not follow its
     // cover: high cloud is common on an otherwise clear day and is hidden, not
-    // removed, once the low deck closes over.
-    u.uCirrusAmount.value = (0.28 + 0.62 * cover) * (1 - 0.75 * clamp01(cover * 1.3 - 0.45));
+    // removed, once the low deck closes over. This is now the FRACTION OF SKY the
+    // cirrus band covers, and it is deliberately modest — the value that reads as
+    // "a few high streaks" is a quarter of the sky, not half of it.
+    u.uCirrusAmount.value = (0.1 + 0.48 * cover) * (1 - 0.8 * clamp01(cover * 1.3 - 0.45));
 
     // Deck slab optical depth along the vertical, for the CPU radiometry mirror.
     const tauVertical =

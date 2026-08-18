@@ -72,7 +72,7 @@ export class Ship implements Module {
     const hull = buildHull(bins, q);
     const frame = buildMasts(bins, q);
     const deck = buildDeckFurniture(bins, hull, frame, q);
-    this.rig.build(world.ship.sails);
+    this.rig.build(world.ship.sails, frame);
     this.rig.setWheel(deck.wheelPivot);
     this.rig.setCapstan(deck.capstanPivot);
 

@@ -1,0 +1,232 @@
+/**
+ * The sail deformation, done entirely in the vertex shader.
+ *
+ * Every sail is the same unit (u, v) grid, instanced once per sail. The shape
+ * comes from four corner uniforms per sail, so the whole suit of canvas is one
+ * draw call plus one shadow draw call — and, more usefully, any sail can be
+ * evaluated at any (u, v), which is what lets the normal be taken by difference
+ * of the *final* deformed surface instead of being interpolated from the flat
+ * cut. Camber, folds and the furled bundle therefore all shade correctly.
+ *
+ * (u, v) is (chord, span): u = 0 at the port leech of a square sail or at the
+ * luff of a fore-and-aft sail, v = 0 at the head. Internally the pair is
+ * swapped into (p, q), where p runs ALONG the spar the sail furls to and q runs
+ * ACROSS it — so one piece of code furls a square sail to its yard and a jib to
+ * its stay.
+ *
+ * Four things are stacked on the flat cut, in this order:
+ *
+ *   1. FURL. The first (1 - set) of q is rolled into a bundle lashed to the
+ *      spar and the remaining cloth is compressed into the hoist that is left.
+ *      set = 1 leaves the sail alone, set = 0 puts every vertex in the roll, and
+ *      the values between read as reef bands. Nothing is ever scaled to zero.
+ *   2. CAMBER. A membrane aerofoil: draft deepest ~40% aft of the luff, flatter
+ *      at head and foot where the bolt ropes hold it, driven by the signed
+ *      'camber' the rig solver writes every frame.
+ *   3. SHIVER. As 'luff' rises the circulation has collapsed, so the camber goes
+ *      with it while folds travel aft from the luff and the cloth bags and
+ *      drops. Physics supplies a hysteretic signal, so it is smooth both ways.
+ *   4. BREATHING. A tiny slow ripple even on a full sail, so a drawing rig is
+ *      never a static shell.
+ */
+
+import { lwFloat } from '../../util/glsl';
+
+/** Draft position along the chord: sin(PI * c^k) peaks at the k-th root of 1/2. */
+const DRAFT_AT = 0.4;
+const DRAFT_EXP = Math.log(0.5) / Math.log(DRAFT_AT);
+/** Belly depth as a fraction of the chord at camber = 1. */
+const CAMBER_GAIN = 0.42;
+/** Radius of a fully gathered bundle as a fraction of the sail's hoist. */
+const BUNDLE_R = 0.1;
+/** Turns of canvas in a fully gathered bundle. */
+const BUNDLE_TURNS = 2.2;
+/** Gaskets across the spar that pinch the bundle in. */
+const GASKETS = 4;
+/**
+ * Folds in a shivering sail, in cycles across the chord. Fixed in CHORD
+ * fractions rather than metres so the grid always resolves them: at a
+ * wavelength of a few metres a 25-vertex row aliases the folds into a flat
+ * shimmer, which is exactly how a luffing sail ends up looking like nothing at
+ * all happened.
+ */
+const FOLD_CYCLES = 2.4;
+const FOLD_CYCLES_FINE = 5.3;
+
+/**
+ * Uniforms and `lwSailPoint`, shared by the sail material and its depth
+ * material so the shadow is cast by the shape you can actually see.
+ * Depends on: GLSL.common (for PI).
+ */
+export function sailDecl(count: number): string {
+  const n = Math.max(1, count);
+  return /* glsl */ `
+#ifndef SHIP_SAIL_DECL
+#define SHIP_SAIL_DECL
+#define SAIL_N ${n}
+
+uniform vec3 uSailA[SAIL_N];
+uniform vec3 uSailB[SAIL_N];
+uniform vec3 uSailC[SAIL_N];
+uniform vec3 uSailD[SAIL_N];
+// set, luff, camber, flip (1 = the starboard leech is the luff on this tack)
+uniform vec4 uSailState[SAIL_N];
+// animated-part slot, fore-and-aft flag, roach in metres, phase seed
+uniform vec4 uSailInfo[SAIL_N];
+uniform vec2 uSailStep;
+uniform float uSailTime;
+
+attribute float iSail;
+
+/**
+ * One point on a sail.
+ *   aux = (chord from the port leech, span from the head, depth into the
+ *          furled bundle, luff)
+ *   met = (seam-space u, panel-space v, metres from the nearer chord edge,
+ *          metres from the nearer span edge)
+ */
+vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
+  vec3 A = uSailA[si];
+  vec3 B = uSailB[si];
+  vec3 C = uSailC[si];
+  vec3 D = uSailD[si];
+  vec4 st = uSailState[si];
+  vec4 nf = uSailInfo[si];
+
+  float setv  = clamp(st.x, 0.0, 1.0);
+  float luffv = clamp(st.y, 0.0, 1.0);
+  float camb  = st.z;
+  float flip  = st.w;
+  float fa    = nf.y;
+  float roach = nf.z;
+  float seed  = nf.w;
+
+  float u = clamp(uv.x, 0.0, 1.0);
+  float v = clamp(uv.y, 0.0, 1.0);
+
+  // p along the spar the sail gathers to, q across it.
+  float p = mix(u, v, fa);
+  float q = mix(v, u, fa);
+  vec3 E00 = A;
+  vec3 E10 = mix(B, D, fa);
+  vec3 E01 = mix(D, B, fa);
+  vec3 E11 = C;
+
+  float gath = 1.0 - setv;
+  float qs = clamp((q - gath) / max(1.0 - gath, 1e-4), 0.0, 1.0);
+  float qg = qs * setv;
+  float rollT = clamp((gath - q) / max(gath, 1e-4), 0.0, 1.0);
+
+  vec3 r0 = mix(E00, E10, p);
+  vec3 r1 = mix(E01, E11, p);
+  vec3 s0 = mix(E00, E01, qg);
+  vec3 s1 = mix(E10, E11, qg);
+  vec3 P  = mix(s0, s1, p);
+
+  float qLen = max(length(r1 - r0), 1e-3);
+  float pLen = max(length(s1 - s0), 1e-3);
+  float chordLen = mix(pLen, qLen, fa);
+  float spanLen  = mix(qLen, pLen, fa);
+
+  vec3 pDir = normalize(s1 - s0 + vec3(1e-5, 0.0, 0.0));
+  vec3 qDir = normalize(r1 - r0 + vec3(0.0, -1e-5, 0.0));
+  // Square sail: p is port to starboard and q is head to foot, so this comes out
+  // +Z — the sail normal the rig solver uses at zero brace. Fore-and-aft: p is
+  // head to foot and q is luff to leech, giving +X, again what the solver uses.
+  // Getting this wrong points the cloth one way and the force the other.
+  vec3 nrm = normalize(cross(qDir, pDir));
+
+  // The foot is cut up in the middle so the sail clears the stay below it.
+  P.y += roach * sin(PI * p) * pow(qg, 1.4);
+
+  float cDraw = mix(p, qs, fa);
+  float sDraw = mix(qs, p, fa);
+  float cl = mix(cDraw, 1.0 - cDraw, flip);
+  float cm = cl * chordLen;
+
+  // Membrane aerofoil. Flat at the head where it is bent to the jackstay, still
+  // fairly flat at the foot where the bolt rope and the sheets hold it.
+  float chordProf = sin(PI * pow(clamp(cl, 0.0, 1.0), ${lwFloat(DRAFT_EXP)}));
+  float spanProf = pow(smoothstep(0.0, 0.38, sDraw), 0.85)
+                 * (1.0 - 0.3 * smoothstep(0.55, 1.0, sDraw));
+  float draft = camb * chordLen * ${lwFloat(CAMBER_GAIN)} * chordProf * spanProf;
+  // The free leech curls instead of being pinned flat by the profile.
+  draft += camb * chordLen * 0.05 * pow(cl, 3.0) * spanProf;
+  P += nrm * draft;
+
+  // Shivering: folds run aft from the luff, and the cloth stops carrying load.
+  float ph1 = cl * ${lwFloat(FOLD_CYCLES)} * 6.2831853 - uSailTime * 5.4 + seed * 6.2831853;
+  float ph2 = cl * ${lwFloat(FOLD_CYCLES_FINE)} * 6.2831853 - uSailTime * 9.1
+            + seed * 2.7 + sDraw * 2.4;
+  float grow = smoothstep(0.0, 0.22, cl) * spanProf;
+  float shake = sin(ph1) * 0.68 + sin(ph2) * 0.32 * smoothstep(0.3, 0.9, cl);
+  P += nrm * shake * grow * luffv * chordLen * 0.085;
+  P.y -= luffv * spanLen * 0.06 * grow;
+
+  // A full sail still breathes.
+  P += nrm * sin(cl * 7.5 + uSailTime * 1.7 + seed * 5.1)
+           * (1.0 - luffv) * chordLen * 0.008 * spanProf;
+
+  // The gathered cloth: a roll of canvas, fat in the bunt and pinched at each
+  // gasket, spiralling outward so the last cloth taken in lies on top.
+  float bunt = 0.55 + 0.45 * pow(max(sin(PI * p), 0.0), 0.6);
+  float gask = 1.0 - 0.36 * pow(abs(cos(p * PI * ${lwFloat(GASKETS)})), 16.0);
+  float R = spanLen * ${lwFloat(BUNDLE_R)} * gath * bunt * gask;
+  float rr = 0.30 + 0.70 * (1.0 - rollT);
+  float ang = rollT * 6.2831853 * ${lwFloat(BUNDLE_TURNS)};
+  vec3 rollP = r0 + qDir * (R - R * rr * cos(ang)) + nrm * (R * rr * sin(ang));
+  P = mix(P, rollP, step(q, gath) * step(1e-4, gath));
+
+  aux = vec4(cDraw, sDraw, rollT, luffv);
+  // In METRES: (span from the head, chord from the luff, distance to the nearer
+  // leech, hoist of the cloth still drawing). The fragment shader wants real
+  // distances so seams, bolt ropes and reef points hold a fixed physical size
+  // at any range.
+  float hoistM = spanLen * setv;
+  met = vec4(sDraw * hoistM, cm, min(cDraw, 1.0 - cDraw) * chordLen, hoistM);
+  return P;
+}
+#endif
+`;
+}
+
+/**
+ * Vertex body. Evaluates the sail three times for an exact normal, then pushes
+ * position and normal through the animated-part transform so a braced yard
+ * carries its sail round and a sheeted jib swings about its own stay.
+ * Requires the varyings `vSail` / `vCloth` and the locals `vPosL` / `vNormalL`
+ * / `vSailUv` to be declared, and `shipPart` from PARTS_DECL.
+ */
+export const SAIL_VERT_BODY = /* glsl */ `
+  int lwSi = int(iSail + 0.5);
+  vec4 lwAux;
+  vec4 lwMet;
+  vec4 lwJunk;
+  vec4 lwJunk2;
+  vec2 lwUv = position.xy;
+  // lwSailPoint clamps its parameter, so at the leech and the foot a forward
+  // difference would be zero and the normal would collapse. Step inward there
+  // instead and put the sign back on the cross product.
+  float lwSx = lwUv.x + uSailStep.x > 1.0 ? -1.0 : 1.0;
+  float lwSy = lwUv.y + uSailStep.y > 1.0 ? -1.0 : 1.0;
+  vec3 lwP  = lwSailPoint(lwSi, lwUv, lwAux, lwMet);
+  vec3 lwPu = lwSailPoint(lwSi, lwUv + vec2(lwSx * uSailStep.x, 0.0), lwJunk, lwJunk2);
+  vec3 lwPv = lwSailPoint(lwSi, lwUv + vec2(0.0, lwSy * uSailStep.y), lwJunk, lwJunk2);
+  vec3 lwN = cross(lwPv - lwP, lwPu - lwP) * (lwSx * lwSy);
+  float lwNl = length(lwN);
+  lwN = lwNl > 1e-9 ? lwN / lwNl : vec3(0.0, 0.0, 1.0);
+
+  float lwPart = uSailInfo[lwSi].x;
+  vPosL = shipPart(lwP, lwPart);
+  vNormalL = shipPartN(lwN, lwPart);
+  vSailUv = lwMet.xy;
+  vSail = lwAux;
+  vCloth = vec4(lwMet.z, lwMet.w, uSailInfo[lwSi].y, 0.0);
+  vSailWP = (modelMatrix * vec4(vPosL, 1.0)).xyz;
+`;
+
+/** Metres of sailcloth per texture tile, along the seams and across them. */
+export const SEAM_TILE_M = 2.6;
+export const PANEL_TILE_M = 2.44;
+/** Width of one cloth in a sail, metres. Two-foot canvas, seamed and roped. */
+export const PANEL_WIDTH_M = 0.61;

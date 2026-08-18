@@ -25,7 +25,7 @@ import type { HullResult } from './hull';
 import { CHANNELS } from './hull';
 import type { MastFrame, RigFrame, YardFrame } from './masts';
 import {
-  BOWSPRIT, MASTS, PART, SPANKER, Station, YARDS, deckSideY, sheerY, tAtZ, DECK_CAMBER,
+  BOWSPRIT, MASTS, PART, SPANKER, Station, YARDS, deckSideY, sheerY, squareCut, tAtZ, DECK_CAMBER,
 } from '../dims';
 
 export interface RiggingResult {
@@ -277,12 +277,17 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
 function stays(L: LineSet, frame: RigFrame): void {
   const [fore, main, miz] = frame.masts;
 
-  // Fore stays go down to the bowsprit and the stem.
+  // The four head stays come straight from `frame.headStays`, which is also
+  // where the headsails get their luffs — a jib whose luff is not exactly on
+  // its stay is the first thing that reads as wrong.
+  for (let i = 0; i < frame.headStays.length; i++) {
+    const st = frame.headStays[i];
+    // Hanked sails hold a stay much straighter than a bare one hangs.
+    L.add(st.head, st.tack, 0.22 + i * 0.06, i === 0 ? 0.05 : 0.036, TAR);
+  }
+  // Fore preventer stay, inboard of the fore stay proper.
   const B = frame.bowsprit;
-  addStay(L, fore, fore.spec.lowerTop - 1.2, B.heel.clone().addScaledVector(B.dir, 4.2), 0.42, 0.05);
-  addStay(L, fore, fore.spec.lowerTop - 2.0, B.heel.clone().addScaledVector(B.dir, 1.2), 0.34, 0.042);
-  addStayTop(L, fore, fore.spec.topmastTop - 1.4, B.cap.clone(), 0.5, 0.038);
-  addStayTg(L, fore, fore.spec.tgTop - 1.2, B.jibboomEnd.clone(), 0.55, 0.03);
+  addStay(L, fore, fore.spec.lowerTop - 2.4, B.heel.clone().addScaledVector(B.dir, 1.2), 0.34, 0.042);
 
   // Main and mizzen stays lead forward and down to the deck at the next mast.
   const stayTo = (m: MastFrame, target: MastFrame, dz: number) => {
@@ -412,14 +417,16 @@ function running(L: LineSet, frame: RigFrame, quality: number): void {
       L.add(tip, _c, 0.55 + yf.spec.tier * 0.1, 0.023, MANILA, 0, part, 0);
     }
 
-    // Clewlines and buntlines: from the yard down to where the sail's foot
-    // will be, then in to the mast. Even furled they are visible.
+    // Clewlines and buntlines: from the yard down to the sail's own foot and
+    // clews, taken from the same cut the sail is built from so they land on it.
     const drop = yf.spec.sailDrop;
     if (drop > 0) {
+      const cut = squareCut(yf.spec);
       for (const f of quality >= 2 ? [-0.62, -0.24, 0.24, 0.62] : [-0.5, 0.5]) {
         _c.copy(yf.centre);
-        _c.x += f * yf.spec.half;
+        _c.x += f * cut.headHalf;
         _d.copy(_c);
+        _d.x = f * cut.footHalf;
         _d.y -= drop * 0.94;
         _d.z += 0.35;
         L.add(_c, _d, 0.1, 0.019, MANILA, 0, part, part);
@@ -430,8 +437,9 @@ function running(L: LineSet, frame: RigFrame, quality: number): void {
       );
       for (const [tip, sgn] of [[yf.stbd, 1], [yf.port, -1]] as const) {
         _c.copy(tip);
-        _c.y -= drop * 0.9;
-        _c.x -= sgn * yf.spec.half * 0.1;
+        _c.x = sgn * cut.footHalf;
+        _c.y = yf.centre.y - drop;
+        _c.z = yf.centre.z + drop * 0.03;
         if (below) {
           _d.copy(sgn > 0 ? below.stbd : below.port);
           _d.x -= sgn * 0.5;

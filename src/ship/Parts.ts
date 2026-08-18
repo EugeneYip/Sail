@@ -15,8 +15,17 @@
 import * as THREE from 'three';
 import { damp } from '../util/math';
 import type { SailState, ShipState } from '../types';
-import { MASTS, PART, SPANKER, YARDS } from './dims';
+import { JIB_IDS, MASTS, PART, SPANKER, YARDS } from './dims';
+import type { RigFrame } from './build/masts';
 import type { PartUniforms } from './materials/materials';
+
+/**
+ * How much further a fore-and-aft sail swings than a square yard for the same
+ * trim command. Must match `SHEET_GAIN` in physics/constants.ts: physics builds
+ * the sail's normal from the same product, so a mismatch points the cloth one
+ * way and sends the force the other.
+ */
+const SHEET_GAIN = 2.35;
 
 interface Joint {
   slot: number;
@@ -35,6 +44,8 @@ export class PartRig {
   private joints: Joint[] = [];
   /** Yard slot -> index into `world.ship.sails`, or -1. */
   private yardSail: number[] = [];
+  /** Headsail slot -> index into `world.ship.sails`, or -1. */
+  private jibSail: number[] = [];
   private uniforms: PartUniforms;
   private wheelAngle = 0;
   private capstanAngle = 0;
@@ -48,7 +59,7 @@ export class PartRig {
     return out.set(0, 1, Math.tan(MASTS[mast].rake)).normalize();
   }
 
-  build(sails: SailState[]): void {
+  build(sails: SailState[], frame: RigFrame): void {
     const axis = new THREE.Vector3();
 
     for (const y of YARDS) {
@@ -94,6 +105,25 @@ export class PartRig {
       });
     }
 
+    // A headsail is hanked to its stay, so sheeting one is a rotation of the
+    // whole sail about the stay itself — the same kind of joint as a braced
+    // yard rather than a special case in the sail shader. Rotating the sail
+    // (which lies in the centreline plane when unsheeted) about a stay that
+    // leans aft is what makes the clew swing out AND lift, the way a real jib
+    // does when the sheet is eased.
+    for (let i = 0; i < JIB_IDS.length; i++) {
+      const stay = frame.headStays[i];
+      this.joints.push({
+        slot: PART.JIB0 + i,
+        pivot: stay.tack.clone(),
+        axis: stay.dir.clone(),
+        angle: 0,
+        target: 0,
+        rate: 1.35,
+      });
+      this.jibSail[PART.JIB0 + i] = sails.findIndex((s) => s.id === JIB_IDS[i]);
+    }
+
     this.joints.push({
       slot: PART.RUDDER,
       pivot: new THREE.Vector3(0, 0, 26.2),
@@ -127,8 +157,10 @@ export class PartRig {
         j.target = si >= 0 ? sails[si].brace : 0;
       } else if (j.slot === PART.BOOM || j.slot === PART.GAFF) {
         const sp = sails.find((s) => s.id === 'spanker');
-        // A fore-and-aft sail swings much further than a square yard.
-        j.target = sp ? sp.brace * 2.35 : 0;
+        j.target = sp ? sp.brace * SHEET_GAIN : 0;
+      } else if (j.slot >= PART.JIB0) {
+        const si = this.jibSail[j.slot];
+        j.target = si >= 0 ? sails[si].brace * SHEET_GAIN : 0;
       } else if (j.slot === PART.RUDDER || j.slot === PART.TILLER) {
         // The tiller lies forward of the rudder head, so it swings the other way.
         j.target = j.slot === PART.RUDDER ? ship.rudder : -ship.rudder;

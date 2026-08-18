@@ -210,6 +210,21 @@ void main(){
   vec2 slopeW = (-tang) * slopeLocal.x + nrm * slopeLocal.y;
   slopeW += (-tang) * (-hollow * 2.0 * xi / sq(uLwl * 1.5)) * vFade;
 
+  // NEAR-FIELD WINDOW ON GEOMETRY ONLY.
+  //
+  // The consumer adds G to the surface displacement in its VERTEX shader and BA
+  // to the normal in its fragment shader. Far from the ship the ocean clipmap
+  // ring is tens of metres per vertex, so a coherent signal out there is not
+  // resolved as a wave — it is point-sampled into a hard-edged straight groove
+  // hundreds of metres long, which reads as a black scar ruled across the water.
+  // The transverse wavelength is lambda = TAU / k0, so confining the geometry to
+  // a few wavelengths astern keeps it inside the dense part of the mesh and
+  // scales correctly with speed. Foam (R) is deliberately NOT windowed: it is a
+  // screen-space-stable coverage term, it is what should carry the trail into the
+  // distance, and it costs the consumer nothing to resolve.
+  float lambda = TAU / max(k0, 1e-3);
+  float geoFade = 1.0 - smoothstep(3.0 * lambda, 7.0 * lambda, xi);
+
 #ifdef WAKE_PASS_FOAM
   float aeta = abs(eta);
 
@@ -282,7 +297,12 @@ void main(){
 
   gl_FragColor = vec4(foam, 0.0, 0.0, 0.0);
 #else
-  gl_FragColor = vec4(0.0, height, slopeW.x, slopeW.y);
+  // Measured channel range with this window in place: G in about -0.7 .. +0.1 m.
+  // The asymmetry is real and correct — it is the hull's own hollow, which is a
+  // genuine depression and is now confined to the near field where the mesh can
+  // resolve it. The Kelvin oscillation itself is only a few centimetres by the
+  // time it is a wavelength or two astern.
+  gl_FragColor = vec4(0.0, height * geoFade, slopeW.x * geoFade, slopeW.y * geoFade);
 #endif
 }
 `;

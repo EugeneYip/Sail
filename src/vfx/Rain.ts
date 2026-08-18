@@ -100,7 +100,12 @@ export class Rain {
         // the shared uniform block spread in above, and shadowing it here both
         // redeclared the GLSL uniform and stole the post stack's exposure.
         uShutter: { value: 0.085 },
-        uNearFrac: { value: 0.035 },
+        // Fraction of instances assigned to the out-of-focus near layer. These
+        // sit 0.3-1.6 m from the lens, so post's DoF turns each one into a large
+        // bokeh disc. At 0.035 (287 drops at ultra) the frame filled with evenly
+        // scattered soft circles and read as snow, not rain. A handful is all the
+        // foreground cue needs.
+        uNearFrac: { value: 0.018 },
         uIntensity: { value: 0 },
       },
       vertexShader: rainVert,

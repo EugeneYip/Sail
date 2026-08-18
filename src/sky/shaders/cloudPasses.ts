@@ -1,9 +1,5 @@
 import { GLSL } from '../../util/glsl';
-import {
-  CLOUD_LOW_BOTTOM_M,
-  CLOUD_LOW_TOP_M,
-  CLOUD_SHADOW_STEPS,
-} from '../constants';
+import { CLOUD_SHADOW_STEPS } from '../constants';
 import { ATMOSPHERE_GLSL } from './atmosphere';
 import { CLOUD_COMMON_GLSL } from './cloudCommon';
 import { CLOUD_LIGHTING_GLSL } from './cloudLighting';
@@ -167,8 +163,6 @@ uniform vec2  uShadowCentre;
 uniform float uShadowExtent;
 
 const int SHADOW_STEPS = ${CLOUD_SHADOW_STEPS};
-const float LAYER_BOTTOM_KM = ${f(CLOUD_LOW_BOTTOM_M / 1000)};
-const float LAYER_TOP_KM = ${f(CLOUD_LOW_TOP_M / 1000)};
 
 void main(){
   vec2 world = uShadowCentre + (vUv - 0.5) * uShadowExtent;
@@ -177,8 +171,8 @@ void main(){
 
   float tau = 0.0;
   if (uCoverage > 0.002 && dir.y > 0.004) {
-    float rB = RG + LAYER_BOTTOM_KM;
-    float rT = RG + LAYER_TOP_KM;
+    float rB, rT;
+    cloudShells(rB, rT);
     float t0, t1;
     if (layerSegment(pos, dir, rB, rT, t0, t1)) {
       float seg = min(t1 - t0, 40.0);

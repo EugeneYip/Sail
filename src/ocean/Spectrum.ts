@@ -158,8 +158,25 @@ export interface SpectrumParams {
   /** Dominant wavenumber and frequency — used for orbital velocity + foam flow. */
   peakK: number;
   peakOmega: number;
-  /** RMS surface slope of the whole spectrum. Drives glitter width. */
+  /** RMS surface slope of the REAL sea, capillaries included. Drives glitter. */
   slopeRms: number;
+  /**
+   * The part of `slopeRms^2` that lives above the finest cascade's Nyquist and
+   * therefore cannot be geometry or a normal map at any resolution. It has to
+   * become roughness instead; see `surface.ts`.
+   */
+  slopeVarTail: number;
+}
+
+/**
+ * Cox & Munk 1954, total mean-square surface slope of a clean sea against wind
+ * speed at 10 m. This is a measurement, and it is the honest total: a 256-mode
+ * cascade reaching 25 rad/m resolves less than a quarter of it, because slope
+ * variance is dominated by the centimetre ripple that no FFT grid will ever
+ * carry. Renderers that skip this are the ones whose water looks like plastic.
+ */
+export function coxMunkSlopeVariance(windSpeed10m: number): number {
+  return 0.003 + 0.00512 * Math.max(windSpeed10m, 0);
 }
 
 /** JONSWAP in angular frequency. */
@@ -243,14 +260,20 @@ export function solveSpectrum(
   const last = cascades[cascades.length - 1];
   const kHi = (Math.PI * last.n) / last.size;
 
-  const windInt = integrate(kLo, kHi, cascades, omegaPeakWind, GAMMA_WIND);
-  const swellInt = integrate(kLo, kHi, cascades, omegaPeakSwell, GAMMA_SWELL);
+  // The band-coverage weight depends only on the cascade layout, and both
+  // integrations walk the same k grid, so it is worth hoisting: it carries three
+  // transcendentals per cascade per step and it was most of the rebake's cost.
+  const grid = coverageGrid(kLo, kHi, cascades);
+  const windInt = integrate(grid, omegaPeakWind, GAMMA_WIND);
+  const swellInt = integrate(grid, omegaPeakSwell, GAMMA_SWELL);
 
   const targetM0 = (hs * hs) / 16;
   const varScaleWind = ((1 - swellFrac) * targetM0) / Math.max(windInt.m0, 1e-12);
   const varScaleSwell = (swellFrac * targetM0) / Math.max(swellInt.m0, 1e-12);
 
+  // Resolved slope variance, i.e. what the cascades can actually put on screen.
   const m2 = varScaleWind * windInt.m2 + varScaleSwell * swellInt.m2;
+  const m2Total = Math.max(m2, coxMunkSlopeVariance(env.windSpeed));
   const peakK = (omegaPeakWind * omegaPeakWind) / GRAVITY;
 
   const windDirX = -Math.sin(env.windBearing);
@@ -275,29 +298,45 @@ export function solveSpectrum(
   p.hs = hs;
   p.peakK = peakK;
   p.peakOmega = dispersion(peakK);
-  p.slopeRms = Math.sqrt(Math.max(m2, 1e-9));
+  p.slopeRms = Math.sqrt(Math.max(m2Total, 1e-9));
+  p.slopeVarTail = Math.max(m2Total - m2, 0);
   return p;
 }
 
+const INTEGRATE_STEPS = 192;
+
+interface CoverageGrid {
+  /** Sample wavenumbers, log spaced. */
+  k: Float64Array;
+  /** Sum of squared cascade weights at each k, times k*dLn. */
+  weight: Float64Array;
+  /** Number of entries actually used (those with non-zero coverage). */
+  count: number;
+}
+
+const coverage: CoverageGrid = {
+  k: new Float64Array(INTEGRATE_STEPS),
+  weight: new Float64Array(INTEGRATE_STEPS),
+  count: 0,
+};
+/** Layout signature the cached grid was built for. */
+let coverageKey = '';
+
 /**
- * ∫S k dk (variance, m0) and ∫S k^3 dk (slope variance, m2) over the union of
- * the cascade bands, weighted by the same crossfade the shader uses so the
- * renormalisation matches what actually gets rendered.
+ * Log-spaced k grid with the cascades' band coverage folded in. The coverage is
+ * a property of the cascade layout alone, so it survives every weather change
+ * and is only rebuilt when the layout is.
  */
-function integrate(
-  kLo: number,
-  kHi: number,
-  cascades: CascadeLayout[],
-  omegaPeak: number,
-  gamma: number,
-): { m0: number; m2: number } {
-  const steps = 192;
+function coverageGrid(kLo: number, kHi: number, cascades: CascadeLayout[]): CoverageGrid {
+  let key = `${kLo}|${kHi}`;
+  for (const c of cascades) key += `|${c.size},${c.n},${c.kMin},${c.kMax}`;
+  if (key === coverageKey) return coverage;
+  coverageKey = key;
+
+  const dLn = Math.log(kHi / kLo) / INTEGRATE_STEPS;
   const lnLo = Math.log(kLo);
-  const lnHi = Math.log(kHi);
-  const dLn = (lnHi - lnLo) / steps;
-  let m0 = 0;
-  let m2 = 0;
-  for (let i = 0; i < steps; i++) {
+  let count = 0;
+  for (let i = 0; i < INTEGRATE_STEPS; i++) {
     const k = Math.exp(lnLo + (i + 0.5) * dLn);
     // Sum of squared cascade weights — 1 inside a band, and 1 across a
     // crossfade by construction, but 0 outside the covered range.
@@ -308,9 +347,27 @@ function integrate(
       if (k <= (Math.PI * c.n) / c.size) wSum += w * w;
     }
     if (wSum <= 0) continue;
+    coverage.k[count] = k;
     // dk = k dLn; the 2π∫...dθ of the normalised spread is 1, so the
     // directional integral drops out and m0 = ∫S(k) dk.
-    const s = spectrumK(k, omegaPeak, gamma) * wSum * k * dLn;
+    coverage.weight[count] = wSum * k * dLn;
+    count++;
+  }
+  coverage.count = count;
+  return coverage;
+}
+
+/**
+ * ∫S k dk (variance, m0) and ∫S k^3 dk (slope variance, m2) over the union of
+ * the cascade bands, weighted by the same crossfade the shader uses so the
+ * renormalisation matches what actually gets rendered.
+ */
+function integrate(g: CoverageGrid, omegaPeak: number, gamma: number): { m0: number; m2: number } {
+  let m0 = 0;
+  let m2 = 0;
+  for (let i = 0; i < g.count; i++) {
+    const k = g.k[i];
+    const s = spectrumK(k, omegaPeak, gamma) * g.weight[i];
     m0 += s;
     m2 += s * k * k;
   }

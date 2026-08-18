@@ -318,6 +318,13 @@ export class Sky implements Module {
     const clouded = world.settings.volumetricClouds && env.cloudCover > 0.02;
     this.handshake.cloudShadowMap = this.clouds.shadowTexture;
     this.handshake.cloudShadowStrength = clouded ? this.clouds.field.beamTransmittance : 0;
+
+    // Same three values as shared uniforms, so any material can pick up moving
+    // cloud shadow with one call to lwCloudShadow() instead of reaching into
+    // world.ext.sky and building its own sampler.
+    u.uCloudShadowMap.value = this.handshake.cloudShadowMap;
+    (u.uCloudShadowMatrix.value as THREE.Matrix4).copy(this.clouds.shadowMatrix);
+    u.uCloudShadowStrength.value = this.handshake.cloudShadowStrength;
   }
 
   dispose(): void {

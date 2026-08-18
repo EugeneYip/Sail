@@ -69,11 +69,17 @@ export class Ordnance {
 
   private funnel(ctx: VfxCtx, p: Particles): void {
     // The galley stack is a small copper funnel just abaft the foremast.
+    //
+    // RATE. This is a cooking fire in a stove pipe, not a steamship. At 26/s
+    // with a 4-7 s life the pool held ~150 overlapping puffs in a tight tube and
+    // the plume rendered as an opaque white rope reaching clear across the
+    // frame. Emission is now low enough, and life short enough, that the plume
+    // dissipates within a few ship lengths, which is what a galley fire does.
     const deck = ctx.shipExt?.deckHeight ?? 5.6;
     _local.set(0.9, deck + 1.5, -6.2);
     ctx.toWorld(_local, _a);
 
-    this.accFunnel += 26 * ctx.density * ctx.dt;
+    this.accFunnel += 5 * ctx.density * ctx.dt;
     const n = Math.floor(this.accFunnel);
     this.accFunnel -= n;
 
@@ -90,8 +96,8 @@ export class Ordnance {
         _a.y + Math.random() * 0.3,
         _a.z + (Math.random() - 0.5) * 0.3,
         _b.x, _b.y, _b.z,
-        4.0 + Math.random() * 3.5,
-        0.34 + Math.random() * 0.3,
+        1.6 + Math.random() * 1.4,
+        0.22 + Math.random() * 0.2,
         KIND.SMOKE,
         1.3 + Math.random() * 0.8,
       );

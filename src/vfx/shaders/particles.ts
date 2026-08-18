@@ -355,7 +355,9 @@ void main(){
     col = albedo * (sun * (0.10 + 0.55 * ss * (1.0 - thick * 0.6))
                     + sky * (0.55 + 0.35 * (1.0 - thick)));
     col += moon * 0.16;
-    a *= dens * 0.85;
+    // Kept well below 1 so a plume builds density by overlapping many
+    // translucent puffs instead of each one alone saturating to white.
+    a *= dens * 0.5;
   } else if (hard) {
     float wrap = 0.42 + 0.58 * saturate1(uSunDirection.y * 1.6 + 0.15);
     col = sun * wrap * (0.55 + 0.9 * thick) * spectral;

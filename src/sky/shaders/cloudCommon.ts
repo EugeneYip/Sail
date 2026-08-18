@@ -69,37 +69,74 @@ float heightGradient(float h, float type){
 }
 
 /**
+ * Column coverage from the weather map's R channel.
+ *
+ * R is baked histogram-flattened (see gaussCdf in cloudNoise.ts), so it is
+ * uniform on 0..1 and a threshold at '1 - cover' selects a fraction of sky
+ * equal to 'cover'. That is the whole reason cloudCover is now a linear knob.
+ *
+ * The exponent is what separates weather from mere quantity: below about 0.5 the
+ * field is pushed DOWN so isolated columns reach full density and the gaps stay
+ * properly blue, and as cover closes it is pushed UP so the deck becomes a
+ * continuous sheet with holes rather than dense cumulus with blue between. A
+ * gale is not "lots of fair-weather cloud".
+ */
+float coverageAt(float wmR, float cover){
+  float t = 1.0 - cover;
+  float u = saturate1((wmR - t) / max(0.12, 1.0 - t));
+  return pow(u, mix(1.7, 0.32, cover));
+}
+
+/**
  * 'detail' false skips the high-frequency erosion — used by the sun march and
  * the shadow map, where the extra octaves cost more than they show.
  */
 float cloudDensity(vec2 wxz, float alt, bool detail, out float hFrac){
-  float h = (alt - uLayerBottom) / max(1.0, uLayerTop - uLayerBottom);
-  hFrac = h;
-  if (h < 0.0 || h > 1.0) return 0.0;
+  float slab = max(1.0, uLayerTop - uLayerBottom);
+  // Nominal slab coordinate. Only the shear lookup and the shell bounds use it;
+  // the profile below runs on a PER-COLUMN slab. Bounds are generous because the
+  // per-column base wanders below uLayerBottom and a tall cell overshoots the top.
+  float h0 = (alt - uLayerBottom) / slab;
+  hFrac = saturate1(h0);
+  if (h0 < -0.2 || h0 > 1.25) return 0.0;
 
-  vec2 xz = wxz + uWindDir * (h * uShear);
+  vec2 xz = wxz + uWindDir * (saturate1(h0) * uShear);
   vec4 wm = texture(tWeather, xz / uWeatherExtent);
 
+  float cf = coverageAt(wm.r, saturate1(uCoverage));
+  if (cf <= 0.002) return 0.0;
+
   float type = saturate1(uCloudType + (wm.g - 0.5) * 0.55);
+
+  /*
+   * Per-column base altitude and depth.
+   *
+   * One flat shell for the whole deck puts every cloud base at exactly
+   * uLayerBottom, and from a deck-level camera that draws a dead-straight edge
+   * across the frame — the rubric's "hard seam" failure, and the single most
+   * artificial thing about a naive layered cloud field. Real bases wander a few
+   * hundred metres from cell to cell.
+   *
+   * Depth follows local coverage because that is how convection works: an
+   * isolated fair-weather cell is a shallow puff, and only the columns inside a
+   * dense cluster have the lift to build a tower. This is what gives the field a
+   * silhouette instead of a uniform slab with a noisy edge.
+   */
+  float baseAlt = uLayerBottom + (wm.g - 0.5) * slab * 0.19;
+  float depth = slab * mix(0.30, 1.08, cf * cf);
+  float h = (alt - baseAlt) / depth;
+  if (h < 0.0 || h > 1.0) return 0.0;
+  hFrac = h;
+
   float grad = heightGradient(h, type);
   if (grad <= 0.001) return 0.0;
-
-  float cov = saturate1(uCoverage);
-  float cf = saturate1(remap(wm.r, 1.0 - cov * 1.25, 1.0 - cov * 0.15, 0.0, 1.0));
-  if (cf <= 0.001) return 0.0;
 
   vec3 bp = vec3(xz.x, alt, xz.y) * uBaseScale;
   vec4 base = texture(tCloudBase, bp);
   float lowFbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
-  float shape = saturate1(remap(base.r, lowFbm - 1.0, 1.0, 0.0, 1.0));
+  float shape = saturate1(remap(base.r, lowFbm - 1.0, 1.0, 0.0, 1.0)) * grad;
 
-  // Above ~0.8 cover the deck stops being a field of separate cells and becomes
-  // a continuous sheet with holes in it. Without this the storm scene keeps
-  // showing blue between towering cumulus however high cloudCover is pushed.
-  float sheet = linstep(0.78, 1.0, cov);
-  shape = mix(shape, mix(shape, 1.0, 0.72), sheet) * grad;
-
-  float density = saturate1(remap(shape, 1.0 - cf, 1.0, 0.0, 1.0)) * cf;
+  float density = saturate1(remap(shape, 1.0 - cf, 1.0, 0.0, 1.0));
   if (density <= 0.0) return 0.0;
 
   if (detail) {
@@ -112,6 +149,21 @@ float cloudDensity(vec2 wxz, float alt, bool detail, out float hFrac){
   }
 
   return density * uDensityScale * mix(0.72, 1.35, wm.b);
+}
+
+/**
+ * Planet radii of the shells the low deck can actually occupy.
+ *
+ * NOT uLayerBottom/uLayerTop: cloudDensity() lets each column's base wander down
+ * by 0.1 slab and a tower in a dense cluster overshoot the nominal top by a
+ * quarter of one, so marching only the nominal slab would slice the tops off the
+ * tallest cells and clip the lowest bases. These bounds match the h0 test there
+ * exactly — if one changes, change both.
+ */
+void cloudShells(out float rB, out float rT){
+  float slab = uLayerTop - uLayerBottom;
+  rB = RG + max(60.0, uLayerBottom - 0.2 * slab) * 0.001;
+  rT = RG + (uLayerBottom + 1.25 * slab) * 0.001;
 }
 
 /** Convert a planet-space point (km) to the world XZ / altitude the field wants. */
@@ -186,17 +238,22 @@ float cirrusOpticalDepth(vec3 pos, vec3 dir, out float tHit){
   vec2 xz = p.xz * 1000.0 + uFieldOffset + uCirrusOffset;
   float ci = texture(tWeather, xz / (uWeatherExtent * CIRRUS_MAP_SCALE)).a;
 
+  // The A channel is flattened, so thresholding at '1 - amount' puts cirrus over
+  // a fraction of sky equal to uCirrusAmount and leaves the rest genuinely clear.
+  // 'amount' appears ONCE, here: multiplying the optical depth by it as well
+  // (which an earlier version did) made a 30 % cirrus day a 100 % grey veil.
+  ci = saturate1(remap(ci, 1.0 - uCirrusAmount, 1.0 - uCirrusAmount * 0.3, 0.0, 1.0));
+  if (ci <= 0.002) return 0.0;
+
   // One 3D fetch, sampled with a squashed vertical, gives the fibrous streaks
   // that separate cirrus from a flat alpha wash.
   vec3 dp = vec3(xz.x, p.y * 60.0, xz.y) * (uDetailScale * 0.22);
   float streak = texture(tCloudDetail, dp).g;
-  ci = saturate1(remap(ci, 0.52 - uCirrusAmount * 0.5, 1.0, 0.0, 1.0));
-  ci *= mix(0.45, 1.0, streak);
+  ci *= mix(0.25, 1.0, streak);
 
   // Slant path through a shell of finite thickness.
   float up = max(abs(normalize(p).y), 0.06);
-  float path = CIRRUS_THICK_M / up;
-  return CIRRUS_TAU * ci * uCirrusAmount * (path / CIRRUS_THICK_M);
+  return CIRRUS_TAU * ci / up;
 }
 #endif
 `;

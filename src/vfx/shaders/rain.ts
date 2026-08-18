@@ -87,7 +87,9 @@ void main(){
   vec4 t = texture2D(tStreak, vUv);
   // The near layer is out of focus: throw away the core, keep only the halo.
   float cover = mix(t.a, t.g * 0.55, vNear);
-  float a = cover * vFade * uIntensity * mix(0.5, 0.16, vNear);
+  // The near layer is spread over a far larger screen area once DoF has blurred
+  // it, so it needs a much lower alpha to carry the same apparent density.
+  float a = cover * vFade * uIntensity * mix(0.62, 0.13, vNear);
   if (a < 0.003) discard;
 
   // A rain streak is a lens: it is mostly a smeared image of whatever is behind
@@ -96,7 +98,13 @@ void main(){
   // the old 1.25/0.65 pair was compensating for a sky that used to be 13x too
   // dark, and clips now that uFogColor really is horizon radiance (0.5..1.6 at
   // noon). uSunIntensity is irradiance and owes the 1/PI.
-  vec3 col = uSkyColor * 0.42 + uFogColor * 0.52;
+  // A drop is a lens, so it images the sky and the horizon — but it also
+  // CONCENTRATES them: a sphere focuses the bright part of the sky into the
+  // viewing direction, which is why rain is visible against a flat overcast at
+  // all. Weighting to exactly 1.0 made the streaks identical in radiance to the
+  // fog behind them and rain disappeared completely in the storm preset. A
+  // modest gain above 1 is both physical and necessary for the effect to read.
+  vec3 col = uSkyColor * 0.50 + uFogColor * 0.72;
   col += uSunColor * uSunIntensity * INV_PI * 0.30 * mix(t.r, 0.3, vNear);
   col += uMoonColor * uMoonIntensity * INV_PI * 0.4;
   gl_FragColor = vec4(col * a, a);
