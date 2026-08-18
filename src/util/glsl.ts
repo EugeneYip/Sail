@@ -7,6 +7,20 @@
  * every function is guarded so including a snippet twice is harmless.
  */
 
+/**
+ * A JS number as a GLSL *float* literal.
+ *
+ * `${7.0}` stringifies to `"7"`, which GLSL then types as an int — so any
+ * `#define` or inlined constant built that way silently becomes an integer and
+ * every call that passes it to a `float` parameter fails with "no matching
+ * overloaded function". Always wrap an interpolated number with this.
+ */
+export function lwFloat(x: number): string {
+  if (!Number.isFinite(x)) throw new Error(`lwFloat: ${x} is not a finite number`);
+  const s = String(x);
+  return /[.e]/i.test(s) ? s : `${s}.0`;
+}
+
 const common = /* glsl */ `
 #ifndef LEEWARD_COMMON
 #define LEEWARD_COMMON

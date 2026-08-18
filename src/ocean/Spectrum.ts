@@ -11,6 +11,7 @@
  */
 
 import type { Environment } from '../types';
+import { lwFloat } from '../util/glsl';
 
 export const GRAVITY = 9.81;
 /** Wavenumber where surface tension starts to matter, rad/m. */
@@ -371,11 +372,11 @@ export const SPECTRUM_GLSL = /* glsl */ `
 #define OC_G 9.81
 #define OC_TAU 6.283185307179586
 #define OC_KCAP 364.0
-#define OC_GAMMA_WIND ${GAMMA_WIND}
-#define OC_GAMMA_SWELL ${GAMMA_SWELL}
-#define OC_BETA_SWELL ${BETA_SWELL}
-#define OC_ALPHA ${ALPHA}
-#define OC_HANDOVER_OCT ${HANDOVER_OCTAVES}
+#define OC_GAMMA_WIND ${lwFloat(GAMMA_WIND)}
+#define OC_GAMMA_SWELL ${lwFloat(GAMMA_SWELL)}
+#define OC_BETA_SWELL ${lwFloat(BETA_SWELL)}
+#define OC_ALPHA ${lwFloat(ALPHA)}
+#define OC_HANDOVER_OCT ${lwFloat(HANDOVER_OCTAVES)}
 
 float ocDispersion(float k){
   return sqrt(OC_G * k * (1.0 + (k*k)/(OC_KCAP*OC_KCAP)));

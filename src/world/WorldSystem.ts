@@ -537,7 +537,6 @@ export class WorldSystem implements Module {
     const mats = [
       new THREE.ShaderMaterial({
         name: 'world-terrain',
-        glslVersion: THREE.GLSL3,
         uniforms: {
           ...world.uniforms,
           ...common,
@@ -552,7 +551,6 @@ export class WorldSystem implements Module {
       }),
       new THREE.ShaderMaterial({
         name: 'world-shore',
-        glslVersion: THREE.GLSL3,
         uniforms: { ...world.uniforms, ...common, uSeaY: { value: 0 }, uReef: { value: 0.5 } },
         vertexShader: shoreVert,
         fragmentShader: shoreFrag,

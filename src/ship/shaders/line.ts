@@ -95,8 +95,12 @@ export function makeLineMaterial(
         .replace('#include <common>', '#include <common>')
         .replace(
           '#include <uv_vertex>',
+          // Rope UV: distance along the line, so the lay of the rope stays the
+          // same physical size whatever the span. three has no single `vUv` any
+          // more — each map has its own varying — so both have to be set.
           `#include <uv_vertex>
-          vUv = vec2(vLineAlong, position.y * 0.5 + 0.5);`,
+          vMapUv = vec2(vLineAlong, position.y * 0.5 + 0.5);
+          vNormalMapUv = vMapUv;`,
         )
         .replace(
           '#include <beginnormal_vertex>',
@@ -171,7 +175,7 @@ export function makeLineMaterial(
             float c = clamp(vSide, -1.0, 1.0);
             vec3 nl = normalize(vRightL * c * 0.94 + vViewL * sqrt(max(0.04, 1.0 - c * c * 0.88)));
             normal = normalize((viewMatrix * vec4(nl, 0.0)).xyz);
-            geometryNormal = normal;
+            nonPerturbedNormal = normal;
           }`,
         )
         .replace(

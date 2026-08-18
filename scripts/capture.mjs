@@ -17,9 +17,38 @@
  */
 
 import { chromium } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import process from 'node:process';
+
+/**
+ * Screenshots are written to a staging directory OUTSIDE the project and copied
+ * to their final paths only after the browser closes.
+ *
+ * This is not tidiness. Writing a PNG under the Vite root makes the dev server
+ * reload the page, so every scene after the first used to be captured on a
+ * freshly booted, unsettled engine — wrong waves, wrong exposure, wrong
+ * everything, with nothing in the output to say so.
+ */
+const staging = await mkdtemp(join(tmpdir(), 'leeward-shots-'));
+/** [stagedPath, finalPath] pairs, flushed at exit. */
+const pending = [];
+
+function stage(finalRelPath) {
+  const final = resolve(finalRelPath);
+  const staged = join(staging, `${pending.length}-${basename(final)}`);
+  pending.push([staged, final]);
+  return staged;
+}
+
+async function flushStaged() {
+  for (const [staged, final] of pending) {
+    await mkdir(dirname(final), { recursive: true });
+    await copyFile(staged, final).catch(() => {});
+  }
+  await rm(staging, { recursive: true, force: true }).catch(() => {});
+}
 
 /* ------------------------------------------------------------------ *
  *  args
@@ -189,14 +218,40 @@ page.on('requestfailed', (r) => {
   }
 });
 
+// Hand Vite's HMR client a dead socket. Otherwise any concurrent edit to src/
+// reloads the page in the middle of a capture run and silently resets the sim.
+await page.addInitScript(() => {
+  const Real = window.WebSocket;
+  class Dead {
+    constructor() {
+      this.readyState = 3;
+      this.close = () => {};
+      this.send = () => {};
+      this.addEventListener = () => {};
+      this.removeEventListener = () => {};
+    }
+  }
+  window.WebSocket = function (url, protocols) {
+    if (protocols === 'vite-hmr') return new Dead();
+    return new Real(url, protocols);
+  };
+  window.WebSocket.prototype = Real.prototype;
+});
+
 await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: args.timeout });
+
+// A reload would reset the engine and invalidate every later scene, so fail
+// loudly rather than reporting a settled frame that never settled.
+let navigations = 0;
+page.on('framenavigated', (f) => {
+  if (f === page.mainFrame()) navigations++;
+});
 
 // Wait for the engine handle, i.e. boot() resolved.
 try {
   await page.waitForFunction(() => !!window.__leeward, null, { timeout: args.timeout });
 } catch {
-  const shot = resolve(`${args.out}-BOOTFAIL.png`);
-  await mkdir(dirname(shot), { recursive: true });
+  const shot = stage(`${args.out}-BOOTFAIL.png`);
   await page.screenshot({ path: shot });
   console.error('ENGINE NEVER BOOTED. Console:\n' + logs.slice(-60).join('\n'));
   await browser.close();
@@ -268,9 +323,7 @@ for (const name of sceneNames) {
   });
 
   const file = sceneNames.length > 1 ? `${args.out}-${name}.png` : `${args.out}.png`;
-  const path = resolve(file);
-  await mkdir(dirname(path), { recursive: true });
-  await page.screenshot({ path, animations: 'allow' });
+  await page.screenshot({ path: stage(file), animations: 'allow' });
 
   results.push({ name, label: scene.label, file, fps: lastFps ? Math.round(lastFps) : stats.fps, ...stats });
   console.log(
@@ -282,12 +335,22 @@ for (const name of sceneNames) {
 }
 
 if (args.console || errors.length) {
-  const logPath = resolve(`${args.out}-console.log`);
-  await mkdir(dirname(logPath), { recursive: true });
+  const logPath = join(staging, 'console.log');
+  pending.push([logPath, resolve(`${args.out}-console.log`)]);
   await writeFile(logPath, logs.join('\n'), 'utf8');
 }
 
 await browser.close();
+await flushStaged();
+
+if (navigations > 1) {
+  console.error(
+    `\nUNRELIABLE RUN: the page navigated ${navigations} times (expected 1).\n` +
+      'Scenes after the first were captured on a re-booted engine. Re-run when\n' +
+      'no other process is editing src/.',
+  );
+  process.exit(1);
+}
 
 console.log('\nGPU: ' + gpuInfo.renderer + (gpuInfo.float ? ' [float-rt ok]' : ' [NO FLOAT RT]'));
 if (errors.length) {

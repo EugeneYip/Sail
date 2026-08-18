@@ -91,3 +91,57 @@ to compile. All of our shared BRDF helpers are now `lw`-prefixed
 (`lwD_GGX`, `lwF_Schlick`, `lwF_SchlickF`, `lwV_SmithGGX`, `lwFd_Burley`,
 `lwEnvBRDF`, `lwFresnelWater`, `lwLuminance`) precisely so three's built-ins can
 never shadow them again. **Keep new helpers in `src/util/glsl.ts` prefixed.**
+
+## 6. Cross-subsystem radiometry follow-ups (from the units fix, 2026-08-18)
+
+The units contract landed: sun:sky ratio went **765:1 -> 59:1**, and night sky
+luminance went from **exactly 0** (custom materials had no sky fill at all after
+astronomical twilight) to 3.4e-4. Root cause was that `RADIANCE_SCALE` was applied
+to sun and moon irradiance but not to sky radiance, ambient SH, fog or ground
+bounce, while the GPU sky *was* scaled — so the sky you saw was 13x brighter than
+the sky every material was told about.
+
+**Convention, now documented at `src/sky/constants.ts`:** absolute scene-linear
+radiance, one scale, applied once. Irradiance uniforms (`uSunIntensity`,
+`uMoonIntensity`, `DirectionalLight.intensity`) owe the material a `1/PI`;
+radiance uniforms (`uSkyColor`, `uGroundColor`, `uFogColor`, SH, envMap,
+aerialLUT) do not. 1.0 game unit is about 1e4 cd/m^2.
+
+These consumers are now wrong *because* the uniforms are finally right:
+
+1. **`src/ship/materials/materials.ts`** adds `indirectSpecular += amb * lwEnvBRDF(...)`
+   while `scene.environment` is set, so three's `<lights_fragment_maps>` already
+   supplies specular IBL — a straight double count. It was invisible while
+   `uSkyColor` was 13x too dark; it will now over-brighten every ship surface.
+   Delete it or guard with `#ifndef USE_ENVMAP`.
+2. **`src/vfx/shaders/particles.ts`** — `vec3 sun = uSunColor * uSunIntensity;`
+   is missing `INV_PI`. Every other consumer divides. Spray and foam are
+   therefore PI x too bright and are the most blown-out thing in the frame.
+3. **`src/vfx/shaders/rain.ts`** and **`src/world/shaders/shore.ts`** — hand-tuned
+   `uSkyColor * 1.25/1.35` and `uFogColor * 0.65/0.35` coefficients. `uFogColor`
+   is horizon radiance (0.5-1.6 at noon), so these will clip. Re-check at true scale.
+
+## 7. The 60 fps blocker is CPU, not GPU
+
+Measured with `gl.finish()` at 1600x900 ultra. **GPU total is about 0.47 ms/frame** —
+16 ms of headroom. The deficit is entirely CPU `update()` cost:
+
+| module | ms/frame |
+|---|---|
+| `upd:ocean` | **18.9** |
+| `upd:vfx` | 4.3 |
+| `upd:vfx:weather` | 1.1 (observed spiking to 53.7) |
+| `upd:physics` | 0.6 |
+| `upd:sky` | 0.6 |
+| everything else | <0.2 each |
+
+This corrects the earlier guess in section 4 that `sky:passes` was the problem.
+Sky CPU was independently fixed (10.5 ms -> 0.30 ms: a quantised aerosol
+multiplier was re-baking a 2048-texel transmittance table nearly every frame),
+aerial froxel passes cut 34 -> 2 average, and the exposure readback went from
+2.3 ms to about zero via a fenced pixel-pack buffer. **`src/ocean` and `src/vfx`
+CPU cost is now the whole remaining deficit.**
+
+Note: wall-clock fps in this environment is not trustworthy while other agents
+run their own headless Chromium and `tsc`. Trust the per-pass GPU numbers and the
+`upd:*` CPU numbers, not the fps figure.

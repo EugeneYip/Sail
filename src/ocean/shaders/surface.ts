@@ -117,12 +117,12 @@ void main(){
   // CDLOD morph, in grid units so it is scale independent: in the outer band an
   // odd vertex slides onto its even neighbour, which is exactly the coarser
   // level's vertex, so the shared edge is identical from both sides.
-  float r = max(abs(g.x), abs(g.z)) / gridHalf;
+  float r = max(abs(g.x), abs(g.y)) / gridHalf;
   float morph = smoothstep(uMorphStart, 1.0, r) * (1.0 - isSkirt);
   g -= mod(g, 2.0) * morph;
 
   float cell = modelMatrix[0][0];
-  vec4 wp = modelMatrix * vec4(g.x, 0.0, g.z, 1.0);
+  vec4 wp = modelMatrix * vec4(g.x, 0.0, g.y, 1.0);
   vec2 world = wp.xz;
   vec2 absXZ = world + uOceanOrigin;
 
@@ -143,7 +143,7 @@ void main(){
   // on the eye-level horizon line with no sliver of sky beneath it.
   float skirtRise = isSkirt * smoothstep(0.80, 1.0, r) * max(uCameraPos.y, 0.0);
 
-  vec3 pos = vec3(world.x + disp.x, disp.y + skirtRise, world.z + disp.z);
+  vec3 pos = vec3(world.x + disp.x, disp.y + skirtRise, world.y + disp.z);
   float dist = length(pos - uCameraPos);
 
   vWorldDist = vec4(pos, dist);

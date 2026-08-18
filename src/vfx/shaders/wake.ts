@@ -73,13 +73,14 @@ void main(){
   // Half-width must always exceed the 19.47 deg cusp (tan = 0.3536) so the
   // caustic is never clipped, but must also stay inside the local turn radius
   // or the ribs fold over on the inside of a turn.
-  float half = min(7.0 + 0.42 * xi, t1.w);
+  // Named halfW because half is a reserved word in GLSL ES.
+  float halfW = min(7.0 + 0.42 * xi, t1.w);
   vec2 tang = t1.xy;
   vec2 perp = vec2(tang.y, -tang.x);
-  vec2 p = t0.xy + perp * (aSide * half);
+  vec2 p = t0.xy + perp * (aSide * halfW);
 
   vXi = xi;
-  vEta = aSide * half;
+  vEta = aSide * halfW;
   vTan = tang;
   vSpeed = t0.w;
   vHeel = t1.z;

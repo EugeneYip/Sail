@@ -183,7 +183,6 @@ export class Island {
     const detail = resources.detail;
     this.terrainMat = new THREE.ShaderMaterial({
       name: 'world-terrain',
-      glslVersion: THREE.GLSL3,
       uniforms: {
         ...world.uniforms,
         ...common,
@@ -200,7 +199,6 @@ export class Island {
 
     this.shoreMat = new THREE.ShaderMaterial({
       name: 'world-shore',
-      glslVersion: THREE.GLSL3,
       uniforms: {
         ...world.uniforms,
         ...common,

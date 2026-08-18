@@ -2,10 +2,14 @@
  * GLSL shared by every world material.
  *
  * All of these expect `SHARED_UNIFORM_DECL` and `GLSL.common` to be included
- * first, and they assume `glslVersion: THREE.GLSL3` (three then aliases
- * `texture2D`/`varying`/`gl_FragColor` for us, while `texelFetch` becomes
- * available — which is what lets us read a nearest-only float heightfield and
- * interpolate it identically on CPU and GPU).
+ * first, and they follow the same convention as every other material here:
+ * leave `glslVersion` unset and write GLSL1-flavoured source. three compiles
+ * every non-raw material as `#version 300 es` regardless, so `texture()` and
+ * `texelFetch()` are available either way — which is what lets us read a
+ * nearest-only float heightfield and interpolate it identically on CPU and GPU
+ * — but only the *unset* path also aliases `varying`/`texture2D`/`gl_FragColor`
+ * for us. Setting `THREE.GLSL3` drops those aliases and `gl_FragColor` stops
+ * existing.
  */
 
 /** Bilinear heightfield fetch. Must match `HeightField.height()` in TS. */
