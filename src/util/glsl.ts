@@ -264,25 +264,25 @@ vec3 reinhardExt(vec3 x, float white){
 const brdf = /* glsl */ `
 #ifndef LEEWARD_BRDF
 #define LEEWARD_BRDF
-float D_GGX(float NoH, float a){
+float lwD_GGX(float NoH, float a){
   float a2 = a*a;
   float d = (NoH*a2 - NoH)*NoH + 1.0;
   return a2 / max(PI*d*d, 1e-7);
 }
-float V_SmithGGXCorrelated(float NoV, float NoL, float a){
+float lwV_SmithGGX(float NoV, float NoL, float a){
   float a2 = a*a;
   float lv = NoL * sqrt(NoV*NoV*(1.0-a2)+a2);
   float ll = NoV * sqrt(NoL*NoL*(1.0-a2)+a2);
   return 0.5 / max(lv+ll, 1e-7);
 }
-vec3 F_Schlick(vec3 f0, float u){ return f0 + (vec3(1.0)-f0)*pow5(1.0-u); }
-float F_SchlickF(float f0, float f90, float u){ return f0 + (f90-f0)*pow5(1.0-u); }
-float Fd_Burley(float NoV, float NoL, float LoH, float rough){
+vec3 lwF_Schlick(vec3 f0, float u){ return f0 + (vec3(1.0)-f0)*pow5(1.0-u); }
+float lwF_SchlickF(float f0, float f90, float u){ return f0 + (f90-f0)*pow5(1.0-u); }
+float lwFd_Burley(float NoV, float NoL, float LoH, float rough){
   float f90 = 0.5 + 2.0*rough*LoH*LoH;
-  return F_SchlickF(1.0, f90, NoL) * F_SchlickF(1.0, f90, NoV) * INV_PI;
+  return lwF_SchlickF(1.0, f90, NoL) * lwF_SchlickF(1.0, f90, NoV) * INV_PI;
 }
 // Environment BRDF approximation (Karis, mobile-friendly split-sum).
-vec3 envBRDFApprox(vec3 f0, float rough, float NoV){
+vec3 lwEnvBRDF(vec3 f0, float rough, float NoV){
   const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
   const vec4 c1 = vec4( 1.0,  0.0425,  1.04, -0.04);
   vec4 r = rough*c0 + c1;
@@ -292,7 +292,7 @@ vec3 envBRDFApprox(vec3 f0, float rough, float NoV){
 }
 // Fresnel for water: exact Schlick with a 0.02 f0 gives too-weak grazing
 // reflection; this matches the dielectric curve much better at low angles.
-float fresnelWater(float cosTheta){
+float lwFresnelWater(float cosTheta){
   float f = pow5(1.0 - cosTheta);
   return 0.02 + 0.98 * f;
 }

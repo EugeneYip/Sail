@@ -150,7 +150,7 @@ export function makeShipMaterial(
           float NoV = clamp(dot(normal, V), 0.001, 1.0);
           vec3 amb = mix(uGroundColor, uSkyColor, clamp(vShipWN.y * 0.5 + 0.5, 0.0, 1.0));
           reflectedLight.indirectSpecular +=
-            amb * envBRDFApprox(material.specularColor, material.roughness, NoV) * uEnvAmount;
+            amb * lwEnvBRDF(material.specularColor, material.roughness, NoV) * uEnvAmount;
         }`,
       );
   };

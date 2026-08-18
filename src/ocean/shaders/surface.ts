@@ -304,11 +304,11 @@ void main(){
     float NoL = max(dot(Ns, L), 0.0);
     float NsoV = max(dot(Ns, V), 1e-3);
     float NoH = max(dot(Ns, H), 0.0);
-    float D = D_GGX(NoH, alpha);
-    float Vs = V_SmithGGXCorrelated(NsoV, NoL, alpha);
+    float D = lwD_GGX(NoH, alpha);
+    float Vs = lwV_SmithGGX(NsoV, NoL, alpha);
     // Foam is a rough dielectric, water is a smooth one.
     float f0 = mix(0.02, 0.05, foam);
-    float F = F_SchlickF(f0, 1.0, max(dot(H, V), 0.0));
+    float F = lwF_SchlickF(f0, 1.0, max(dot(H, V), 0.0));
     sunSpec = uSunColor * uSunIntensity * (D * Vs * F * NoL);
   }
   {
@@ -316,13 +316,13 @@ void main(){
     vec3 H = normalize(L + V);
     float NoL = max(dot(Ns, L), 0.0);
     float NoH = max(dot(Ns, H), 0.0);
-    float D = D_GGX(NoH, max(alpha, 0.05));
-    float Vs = V_SmithGGXCorrelated(max(dot(Ns, V), 1e-3), NoL, max(alpha, 0.05));
+    float D = lwD_GGX(NoH, max(alpha, 0.05));
+    float Vs = lwV_SmithGGX(max(dot(Ns, V), 1e-3), NoL, max(alpha, 0.05));
     sunSpec += uMoonColor * uMoonIntensity * (D * Vs * 0.02 * NoL);
   }
 
   /* ---- reflection -------------------------------------------------- */
-  float fres = fresnelWater(NoV);
+  float fres = lwFresnelWater(NoV);
   vec3 R = reflect(-V, N);
   R.y = abs(R.y) * 0.55 + R.y * 0.45; // keep grazing rays out of the ground
   vec3 skyRefl = oceanSky(normalize(R));

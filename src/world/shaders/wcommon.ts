@@ -145,7 +145,7 @@ vec3 worldDirect(vec3 n, vec3 albedo, float shadow, float rough, vec3 V){
   float a = max(0.045, rough * rough);
   float NoH = max(0.0, dot(n, H));
   float NoV = max(1e-3, dot(n, V));
-  float spec = D_GGX(NoH, a) * V_SmithGGXCorrelated(NoV, max(NoL, 1e-3), a);
+  float spec = lwD_GGX(NoH, a) * lwV_SmithGGX(NoV, max(NoL, 1e-3), a);
   lit += uSunColor * (uSunIntensity * NoL * shadow * spec * 0.05);
   return lit;
 }

@@ -64,3 +64,30 @@ disabling passes).
 low enough that the cost is fill/shader-bound, not batching. `sky:passes` was
 **34 per frame**, which is worth auditing first: the aerial-perspective froxel
 volume alone reports 32 passes.
+
+## 5. Shader compile failures (measured 2026-08-18, blocking all visual QA)
+
+Parsed from a live capture console log. Six distinct classes; the hull, terrain
+and shore do not render at all, so no visual critique is possible until these
+are fixed.
+
+| error | material | cause |
+|---|---|---|
+| `D_GGX : function already has a body` | MeshStandardMaterial | three ships its own `D_GGX`/`F_Schlick`; ours in `GLSL.brdf` collided |
+| `ocSpectrumK` / `ocSpreadSech2` : no matching overloaded function | `ocean-surface` | call sites disagree with the declarations' arity/types |
+| `gl_FragColor : undeclared identifier` | `world-terrain`, `world-shore` | legacy output written from a GLSL3 / WebGL2 context |
+| `vUv : undeclared identifier` | ship rigging (`src/ship/shaders/line.ts`) | varying used in an injected chunk that never declares it |
+| `geometryNormal : undeclared identifier` | MeshStandardMaterial | `onBeforeCompile` injecting at a chunk where that name is not in scope |
+| `half : Illegal use of reserved word` | RawShaderMaterial | `half` is reserved in GLSL ES; used as an identifier |
+
+The `assign : l-value required`, `dimension mismatch` and
+`z : vector field selection out of range` lines are downstream cascades of the
+above, not independent bugs.
+
+**Root-cause note for the collisions.** `luminance` and `D_GGX`/`F_Schlick` were
+the same bug twice: `src/util/glsl.ts` defined helpers whose names three.js also
+emits into its material prefixes, so every material including our snippet failed
+to compile. All of our shared BRDF helpers are now `lw`-prefixed
+(`lwD_GGX`, `lwF_Schlick`, `lwF_SchlickF`, `lwV_SmithGGX`, `lwFd_Burley`,
+`lwEnvBRDF`, `lwFresnelWater`, `lwLuminance`) precisely so three's built-ins can
+never shadow them again. **Keep new helpers in `src/util/glsl.ts` prefixed.**

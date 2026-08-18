@@ -151,11 +151,11 @@ void main(){
   vec3 col = bedLit * transmit + scatterCol * (1.0 - transmit);
 
   // --- reflection -----------------------------------------------------------
-  float F = fresnelWater(NoV);
+  float F = lwFresnelWater(NoV);
   vec3 refl = uSkyColor * 1.35 + uFogColor * 0.35;
   vec3 H = normalize(uSunDirection + V);
   float a = 0.028;
-  float spec = D_GGX(max(0.0, dot(N, H)), a) * V_SmithGGXCorrelated(NoV, max(1e-3, dot(N, uSunDirection)), a);
+  float spec = lwD_GGX(max(0.0, dot(N, H)), a) * lwV_SmithGGX(NoV, max(1e-3, dot(N, uSunDirection)), a);
   refl += uSunColor * (uSunIntensity * spec * max(0.0, dot(N, uSunDirection)) * 0.9);
   col = mix(col, refl, F * 0.92);
 
