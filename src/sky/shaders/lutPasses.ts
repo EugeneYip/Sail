@@ -165,7 +165,9 @@ void main(){
   vec3 pos = vec3(uCameraPosW.x * 0.001, RG + camAltKm, uCameraPosW.z * 0.001);
 
   float tMax = (uSliceIndex + 1.0) / AERIAL_SLICES * AERIAL_MAX_KM;
-  float steps = clamp(uSliceIndex * 0.8 + 4.0, 4.0, 24.0);
+  // Step count grows with slice distance so the march step stays ~1 km at the
+  // far plane whatever AERIAL_SLICES is.
+  float steps = clamp(tMax * 0.85 + 4.0, 4.0, 28.0);
 
   float tTopHit = raySphereFar(pos, dir, RT);
   float tGround = raySphereNear(pos, dir, RG);

@@ -1,6 +1,7 @@
 import type { Environment, SailState } from '../types';
 import { clamp01, smoothstep } from '../util/math';
 import {
+  BRACE_MAX,
   CG_Y,
   CG_Z,
   RHO_AIR,
@@ -47,6 +48,20 @@ const BLANKET_MAX = 0.82;
 const WAKE_LENGTH = 2.6;
 /** Dynamic pressure at which the cloth is fully bellied, Pa. */
 const CAMBER_FULL_Q = 110;
+/** Drag coefficient of cloth that is flogging rather than drawing. */
+const FLOG_CD = 0.42;
+/**
+ * Lift a square sail loses when the yard is braced hard against the shrouds.
+ *
+ * Close-hauled the yard is up against the standing rigging and the sail's
+ * weather leech is fouled by the mast, the shrouds and the stays running through
+ * its plane. It cannot hold a clean entry there, so its lift falls away well
+ * before the geometric limit does — which is the other half, with the shivering
+ * term, of why a square-rigger cannot point. On a reach the yards sit near 40 deg
+ * and this costs nothing.
+ */
+const SHROUD_FOUL = 0.45;
+const FOUL_START = 0.6;
 
 interface SailRec {
   /** Centre of effort relative to the CG, body frame. */
@@ -268,10 +283,27 @@ export class RigAero {
       }
       const sgn = dot >= 0 ? 1 : -1;
 
+      // A shivering sail does not drive. Below the incidence at which a
+      // membrane inflates it cannot carry a pressure difference at all: the
+      // circulation collapses and what is left is flogging cloth, which is
+      // nearly pure drag. Using LAST substep's luff gives the collapse a
+      // physical lag instead of an algebraic loop.
+      //
+      // This is the single term that creates the no-go zone. Close-hauled the
+      // yards cannot be braced past the shrouds, so the squares end up at a few
+      // degrees of incidence, shiver, and stop pulling — which is exactly why a
+      // square-rigger cannot point and why she needs her headsails to do it.
+      const draw = 1 - sail.luff;
+      const foul = rec.triangular
+        ? 1
+        : 1 - SHROUD_FOUL * smoothstep(FOUL_START * BRACE_MAX, BRACE_MAX, Math.abs(sail.brace));
+      const cl = coeff.cl * draw * foul;
+      const cd = coeff.cd * draw + FLOG_CD * sail.luff;
+
       const press = 0.5 * RHO_AIR * aw2;
       const q = press * sail.area * sail.set;
-      const fx = q * (coeff.cl * sgn * lx + coeff.cd * uwx);
-      const fz = q * (coeff.cl * sgn * lz + coeff.cd * uwz);
+      const fx = q * (cl * sgn * lx + cd * uwx);
+      const fz = q * (cl * sgn * lz + cd * uwz);
       addForceAt(out, fx, 0, fz, rec.rx, rec.ry, rec.rz);
 
       const mag = Math.hypot(fx, fz);
@@ -281,7 +313,7 @@ export class RigAero {
       // Luff, with hysteresis: a shivering sail needs more incidence to fill
       // than a drawing one needs to collapse. Drives cloth and audio, so it has
       // to move smoothly and for a physical reason.
-      const lt = luffTarget(alpha, sail.luff);
+      const lt = luffTarget(alpha, sail.luff, rec.triangular);
       const rate = lt > sail.luff ? LUFF_COLLAPSE_RATE : LUFF_FILL_RATE;
       sail.luff += (lt - sail.luff) * (1 - Math.exp(-rate * dt));
 

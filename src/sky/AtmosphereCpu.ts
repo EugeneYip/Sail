@@ -54,7 +54,11 @@ export class AtmosphereCpu {
   private msAvg = new THREE.Vector3();
   private msFms = new THREE.Vector3();
 
-  /** Rebuild the transmittance table. ~2 ms; only on a material turbidity change. */
+  /**
+   * Rebuild the transmittance table. Several ms of JS, so the caller is
+   * responsible for only moving `mieMul` on a material aerosol change — see the
+   * deadband in `Radiometry.update`.
+   */
   bake(mieMul: number): void {
     if (Math.abs(mieMul - this.bakedMieMul) < 1e-3) return;
     this.bakedMieMul = mieMul;
@@ -278,7 +282,10 @@ function opticalDepth(r: number, mu: number, mieMul: number, out: THREE.Vector3)
   const tMax = tGround > 0 ? tGround : tTop;
   out.set(0, 0, 0);
   if (tMax <= 0) return;
-  const steps = 40;
+  // 24 steps, not 40: this integrand is monotone and smooth, the table is only a
+  // mirror of a GPU LUT that is itself sampled bilinearly, and the bake is the
+  // single most expensive piece of CPU work the sky does.
+  const steps = 24;
   const dt = tMax / steps;
   for (let i = 0; i < steps; i++) {
     const t = (i + 0.5) * dt;

@@ -1,7 +1,19 @@
 import * as THREE from 'three';
-import type { Module, World } from '../types';
+import type { Module, QualityTier, World } from '../types';
 import { AtmosphereLuts } from './AtmosphereLuts';
-import { AIRGLOW, KOSCHMIEDER, M_TO_KM, RADIANCE_SCALE, SOLAR_IRRADIANCE } from './constants';
+import { AERIAL_SLICES, AIRGLOW, KOSCHMIEDER, M_TO_KM } from './constants';
+
+/**
+ * Frames between full rebuilds of the aerial-perspective froxel volume. 0 skips
+ * it entirely. It is a smooth, purely atmospheric field over tens of kilometres,
+ * so 15 Hz is indistinguishable from per-frame even while the camera turns.
+ */
+const AERIAL_PERIOD: Record<QualityTier, number> = {
+  low: 0,
+  medium: 8,
+  high: 4,
+  ultra: 4,
+};
 import { EnvProbe } from './EnvProbe';
 import { Radiometry } from './Radiometry';
 import { Sidereal } from './Sidereal';
@@ -54,8 +66,11 @@ export class Sky implements Module {
   private cloudShadowMatrix = new THREE.Matrix4();
 
   private camPos = new THREE.Vector3();
-  private scratch = new THREE.Vector3();
   private passCount = 0;
+  /** WebGL2 context, only for the serialising debug timer. */
+  private gl: WebGL2RenderingContext | null = null;
+  private timing = false;
+  private mark = 0;
 
   init(world: World): void {
     const renderer = world.renderer;
@@ -121,18 +136,44 @@ export class Sky implements Module {
     const env = world.env;
     this.camPos.setFromMatrixPosition(world.camera.matrixWorld);
     const camAltKm = Math.max(0, this.camPos.y) * M_TO_KM;
+    this.timing = world.settings.debug;
 
+    // CPU-only, so no finish(): a serialising timer here would just charge the
+    // sky for whatever the ocean and the ship left in the queue.
+    const cpu0 = this.timing ? performance.now() : 0;
     this.radiometry.update(env, camAltKm);
     this.sidereal.update(env.latitude, env.dayOfYear, env.sunDirection);
+    if (this.timing) world.stats['sky:cpuMs'] = performance.now() - cpu0;
 
     this.publish(world);
     this.light.update(world, this.radiometry);
     this.updateLuts(world);
+    this.begin();
     if (this.probe.update(world)) this.passCount++;
+    this.end(world, 'sky:probeMs');
 
     world.stats['sky:passes'] = this.passCount;
     world.stats['sky:mie'] = this.radiometry.mieMul;
     world.stats['sky:zenithLum'] = this.radiometry.zenithLuminance;
+  }
+
+  /* ---------------------------------------------------------------- *
+   *  Timing. Serialising, so it is debug-only: a finish() between two
+   *  GPU passes is the only way to attribute cost without
+   *  EXT_disjoint_timer_query, which Chrome does not expose to pages.
+   * ---------------------------------------------------------------- */
+
+  private begin(): void {
+    if (this.timing) this.mark = performance.now();
+  }
+
+  private end(world: World, key: string): void {
+    if (!this.timing) return;
+    this.gl ??= world.renderer.getContext() as WebGL2RenderingContext;
+    this.gl.finish();
+    const dt = performance.now() - this.mark;
+    const prev = world.stats[key] ?? dt;
+    world.stats[key] = prev + (dt - prev) * 0.1;
   }
 
   /* ---------------------------------------------------------------- *
@@ -146,34 +187,51 @@ export class Sky implements Module {
 
     this.luts.requestBake(mie);
     if (this.luts.baking) {
+      this.begin();
       this.luts.stepBake(renderer);
+      this.end(world, 'sky:bakeMs');
       this.passCount++;
     }
 
-    this.scratch.copy(SOLAR_IRRADIANCE).multiplyScalar(RADIANCE_SCALE);
+    // Game units, from the one place that owns the conversion. This is what
+    // puts the rendered sky on the same scale as `uSkyColor` and `uSunIntensity`.
+    const solar = this.radiometry.solarIrradiance;
     const camAltKm = Math.max(0, this.camPos.y) * M_TO_KM;
-    this.luts.updateSkyView(renderer, env.sunDirection.y, camAltKm, this.scratch, mie);
+    this.begin();
+    this.luts.updateSkyView(renderer, env.sunDirection.y, camAltKm, solar, mie);
+    this.end(world, 'sky:skyViewMs');
     this.passCount++;
 
-    // Aerial perspective is published for other subsystems rather than used
-    // here, so it runs at half rate and not at all on the low tier.
-    if (world.settings.quality !== 'low' && (world.time.frame & 1) === 0) {
+    // AERIAL PERSPECTIVE. One draw per froxel slice — WebGL2 has no layered
+    // rendering, so the slice count IS the draw count, and at 32 slices this
+    // pass alone was 32 of the module's 34 passes and the most expensive thing
+    // in the sky by an order of magnitude. Two things make that affordable:
+    // AERIAL_SLICES is 16 (the volume maps LINEARLY over 32 km, so slices are
+    // 2 km apart and the field is smooth at that scale), and the whole volume
+    // is refreshed at once every Nth frame rather than continuously. Refreshing
+    // it whole matters: `aerialMatrix` is published with it, so a consumer
+    // reprojects into the frustum the volume was actually built for and a stale
+    // volume is merely late, not wrong.
+    const period = AERIAL_PERIOD[world.settings.quality] ?? 4;
+    if (period > 0 && world.time.frame % period === 0) {
       this.aerialMatrix.multiplyMatrices(
         world.camera.matrixWorld,
         world.camera.projectionMatrixInverse,
       );
+      this.begin();
       this.luts.updateAerial(
         renderer,
         this.aerialMatrix,
         this.camPos,
         env.sunDirection,
-        this.scratch,
+        solar,
         this.handshake.cloudShadowMap,
         this.cloudShadowMatrix,
         this.handshake.cloudShadowStrength,
         mie,
       );
-      this.passCount += 32;
+      this.end(world, 'sky:aerialMs');
+      this.passCount += AERIAL_SLICES;
     }
   }
 

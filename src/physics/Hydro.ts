@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { IOcean, WaveSample } from '../types';
 import { wetWeight, type Hull, type Hydrostatics, type MassProperties } from './Hull';
 import { foilCoefficients, type Coefficients } from './Rig';
@@ -7,6 +8,7 @@ import {
   CG_Y,
   CG_Z,
   CLR_DRIFT_SHIFT,
+  CLR_DRIFT_SHIFT_MAX,
   CLR_Y,
   CLR_Z,
   CW_BASE,
@@ -75,14 +77,17 @@ import {
  * numbers. Nothing here allocates.
  */
 
-/** Placeholder sail-plan-free wave sample, built once. */
+/**
+ * The one scratch wave sample the station loop reuses. Real `Vector3`s, not
+ * plain objects: `IOcean.sample` writes them with `.set()`.
+ */
 function makeSample(): WaveSample {
   return {
     height: 0,
     dx: 0,
     dz: 0,
-    normal: { x: 0, y: 1, z: 0 } as WaveSample['normal'],
-    velocity: { x: 0, y: 0, z: 0 } as WaveSample['velocity'],
+    normal: new THREE.Vector3(0, 1, 0),
+    velocity: new THREE.Vector3(),
   };
 }
 
@@ -250,11 +255,13 @@ export class Hydro {
     const colF = this.colF;
     for (let i = 0; i < hull.columns; i++) colF[i] = 0;
 
-    // Body-frame components of the world-vertical unit vector: the transpose's
-    // second column. A vertical force f becomes (m1, m4, m7) * f in the body.
-    const uy0 = m[1];
+    // World-vertical unit vector in BODY components. world = M * body, so
+    // body = M^T * world, and M^T * (0,1,0) is M's second ROW: (m3, m4, m5).
+    // Using the second column instead mirrors the force athwartships and adds
+    // several times the real roll stiffness — it costs a 4 s roll period.
+    const uy0 = m[3];
     const uy1 = m[4];
-    const uy2 = m[7];
+    const uy2 = m[5];
 
     const rhog = RHO_WATER * GRAVITY;
     const kDrag = 0.5 * RHO_WATER * CD_PANEL_NORMAL;
@@ -422,7 +429,8 @@ export class Hydro {
     this.out.sideForce = side;
     // The centre of lateral pressure walks forward as the drift angle grows: the
     // circulation is shed off the leading edge. Half of weather helm lives here.
-    const clrZ = CLR_Z - CLR_DRIFT_SHIFT * Math.abs(drift);
+    const shift = Math.min(CLR_DRIFT_SHIFT * Math.abs(drift), CLR_DRIFT_SHIFT_MAX);
+    const clrZ = CLR_Z - shift;
     addForceAt(out, side, 0, 0, 0, CLR_Y - this.mp.cg.y, clrZ - this.mp.cg.z);
 
     // A heeled hull is asymmetric — immersed lee bow, emerged weather quarter —
@@ -440,7 +448,7 @@ export class Hydro {
     const m = pose.m;
     const vWorldY = m[3] * vrx + m[4] * vry + m[5] * vrz;
     const fy = -HEAVE_DAMP * vWorldY;
-    addForceAt(out, m[1] * fy, m[4] * fy, m[7] * fy, 0, 0, 0);
+    addForceAt(out, m[3] * fy, m[4] * fy, m[5] * fy, 0, 0, 0);
 
     /* --- rudder ---------------------------------------------------------- */
     const rrx = -this.mp.cg.x;

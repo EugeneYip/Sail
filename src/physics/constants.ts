@@ -136,9 +136,23 @@ export const CW_WALL_POWER = 8;
  * cross-flow drag that dominates at large drift angles. Together they mean the
  * ship must slip several degrees to generate any side force at all, which is
  * where leeway comes from.
+ *
+ * Lifting-line at that aspect ratio gives a slope of 2*pi*AR/(AR+2) = 0.38 per
+ * radian; 0.52 allows for the keel, deadwood and the rudder acting as an end
+ * plate. Anything near unity makes the hull an unrealistically good foil —
+ * leeway collapses below a degree and she points like a Bermudan sloop.
  */
-export const CY_LIFT = 1.9;
-export const CY_CROSS = 1.25;
+export const CY_LIFT = 0.52;
+export const CY_CROSS = 1.1;
+
+/**
+ * Added resistance from drift, as a multiplier on sin^2(beta). A hull crabbing
+ * at 8 deg drags a far bigger hole through the water than one going straight,
+ * and that penalty is the mechanism that punishes pinching: pinch and leeway
+ * grows, leeway costs speed, less speed means less lateral resistance and so
+ * more leeway still. The no-go zone is this feedback loop, not a clamp.
+ */
+export const DRIFT_RESISTANCE_GAIN = 11.0;
 
 /** Centre of lateral resistance, ship-local. Forward of amidships and deep. */
 export const CLR_Y = -0.45 * DRAUGHT; // -2.88 m
@@ -146,10 +160,15 @@ export const CLR_Z = -1.8; // m, slightly forward of amidships
 /**
  * The centre of lateral pressure walks forward as the drift angle grows — the
  * circulation is generated at the leading edge. Metres of travel per radian of
- * drift; at 6 deg of leeway the CLR is 2.6 m further forward, which is a large
+ * drift; at 6 deg of leeway the CLR is 1.5 m further forward, which is a large
  * part of where weather helm comes from.
+ *
+ * Capped, because a centre of pressure cannot leave the hull. Uncapped, a ship
+ * sagging sideways at 25 deg before she gathers way puts her CLR 11 m ahead of
+ * amidships, which slews her head to wind and leaves her stuck there.
  */
-export const CLR_DRIFT_SHIFT = 25;
+export const CLR_DRIFT_SHIFT = 14;
+export const CLR_DRIFT_SHIFT_MAX = 5.5; // m
 
 /**
  * Yaw moment produced by a heeled hull, per radian of heel per (m/s)^2 of
@@ -159,7 +178,7 @@ export const CLR_DRIFT_SHIFT = 25;
  * weather helm — the first half is the sail plan's centre of effort moving aft
  * of the CLR, which falls out of the per-sail force sum on its own.
  */
-export const YAW_FROM_HEEL = 1.1e5; // N*m per rad per (m/s)^2
+export const YAW_FROM_HEEL = 2.8e4; // N*m per rad per (m/s)^2
 
 /**
  * Roll damping: linear (wave radiation) + quadratic (eddy shedding off the
@@ -167,8 +186,8 @@ export const YAW_FROM_HEEL = 1.1e5; // N*m per rad per (m/s)^2
  * keeps rolling — deliberately, it makes her feel alive. These are on top of
  * the per-panel normal drag, which supplies roughly half the total.
  */
-export const ROLL_DAMP_LIN = 1.6e7; // N*m per rad/s
-export const ROLL_DAMP_QUAD = 4.5e7; // N*m per (rad/s)^2
+export const ROLL_DAMP_LIN = 6.5e6; // N*m per rad/s
+export const ROLL_DAMP_QUAD = 2.0e7; // N*m per (rad/s)^2
 export const PITCH_DAMP_LIN = 2.4e8;
 export const PITCH_DAMP_QUAD = 3.0e8;
 export const HEAVE_DAMP = 2.0e5; // N per m/s
@@ -197,6 +216,33 @@ export const RUDDER_MAX = 35 * (Math.PI / 180); // hard over
 export const RUDDER_STALL = 22 * (Math.PI / 180); // stalls before hard over
 /** Seconds for the wheel to go from amidships to hard over. Six turns of it. */
 export const RUDDER_SLEW_TIME = 4.5;
+/** Separated normal force of the blade. Higher than a sail: it is a flat plate. */
+export const RUDDER_CN_SEP = 1.85;
+/** Parasitic drag of the blade and its stock. */
+export const RUDDER_CD0 = 0.012;
+/**
+ * Inflow speed at the blade as a fraction of the ship's speed. The rudder sits
+ * in the hull's boundary layer and in the dead water behind the deadwood, so it
+ * never sees the full free-stream. Force goes as the square of this, so 0.86
+ * costs a quarter of the theoretical rudder force — which is why she needs
+ * several ship lengths to turn.
+ */
+export const RUDDER_WAKE = 0.86;
+
+/**
+ * The quartermaster. `input.steer` moves the wheel directly, but a square-rigger
+ * carries a real weather helm — the centre of effort is metres abaft the centre
+ * of lateral resistance and a heeled hull carves to windward — so with nobody at
+ * the wheel she rounds up into the wind and stops inside a minute. There is
+ * always a man on the wheel, and when the player is not commanding rudder he
+ * holds the ordered course with a proportional-derivative hand: KP full rudder
+ * per 14 deg of error, KD to stop him chasing the yaw.
+ *
+ * This is a control input, not a force. Nothing in the force model is scripted
+ * by it, and holding a course she cannot sail still leaves her in irons.
+ */
+export const HELM_KP = 4.1; // rudder command per radian of heading error
+export const HELM_KD = 11.0; // rudder command per rad/s of yaw rate
 
 /* ------------------------------------------------------------------ *
  *  Rig

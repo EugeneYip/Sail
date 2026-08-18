@@ -14,7 +14,7 @@ import type { PostExt } from './ext';
 import { LOOKS, makeLookTexture, resolveLookBlend } from './luts/LookLut';
 import { makeBlackTexture, makeLensDirtTexture } from './luts/LensDirt';
 import { COMPOSITE_FRAG } from './shaders/composite';
-import { PREPARE_FRAG } from './shaders/prepare';
+import { DEPTH_COPY_FRAG, PREPARE_FRAG } from './shaders/prepare';
 import { UNDERWATER_FRAG } from './shaders/underwater';
 import { VELOCITY_FRAG } from './shaders/velocity';
 
@@ -102,6 +102,7 @@ export class Pipeline {
   private prepare: FullscreenPass;
   private velocity: FullscreenPass;
   private composite: FullscreenPass;
+  private depthCopy: FullscreenPass;
   private underwater: FullscreenPass | null = null;
 
   private lookTex: THREE.Data3DTexture;
@@ -136,6 +137,10 @@ export class Pipeline {
       tScene: { value: null },
       uExposure: { value: 1 },
       uClampMax: { value: FIREFLY_CLAMP },
+    });
+
+    this.depthCopy = new FullscreenPass('depthCopy', DEPTH_COPY_FRAG, {
+      tDepth: { value: null },
     });
 
     this.velocity = new FullscreenPass('velocity', VELOCITY_FRAG, {
@@ -222,8 +227,12 @@ export class Pipeline {
     if (s.motionBlur) this.motionBlur.resize(w, h);
     else this.motionBlur.release();
 
-    const scene = this.targets.get('scene', w, h, 'rgba16f', { depth: true });
-    this.ext.depthTexture = scene.depthTexture ?? null;
+    // Published handle is the standalone copy, never the live attachment — see
+    // DEPTH_COPY_FRAG for why. Kept non-null across a resize so a consumer that
+    // latched it at init does not have to re-read it.
+    this.ext.depthTexture = this.targets.get('sceneDepth', w, h, 'r32f', {
+      nearest: true,
+    }).texture;
     this.ext.near = world.camera.near;
     this.ext.far = world.camera.far;
 
@@ -273,6 +282,20 @@ export class Pipeline {
     prof.end();
 
     this.jitter.remove(cam);
+
+    // 2b. depth out of the attachment and into a plain texture, so scene-pass
+    // consumers (soft particles, refraction) can sample it next frame without
+    // forming a framebuffer feedback loop. Cheap enough not to gate.
+    if (scene.depthTexture) {
+      const depthCopy = this.targets.get('sceneDepth', this.width, this.height, 'r32f', {
+        nearest: true,
+      });
+      prof.begin('depthCopy');
+      this.depthCopy.uniforms.tDepth.value = scene.depthTexture;
+      this.depthCopy.render(r, depthCopy);
+      prof.end();
+      this.ext.depthTexture = depthCopy.texture;
+    }
 
     // Unjittered matrices, for velocity and for next frame's reprojection.
     this.curViewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
@@ -528,6 +551,7 @@ export class Pipeline {
     this.prepare.dispose();
     this.velocity.dispose();
     this.composite.dispose();
+    this.depthCopy.dispose();
     this.underwater?.dispose();
     this.exposure.dispose();
     this.aa.dispose();

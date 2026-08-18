@@ -104,10 +104,16 @@ function separatedCN(triangular: boolean): number {
   return triangular ? 1.35 : 1.45;
 }
 
-/** Parasitic drag of cloth, bolt ropes and the spar behind it. */
-const CD_PROFILE = 0.08;
-/** Oswald span efficiency of a sail — poor, it is a single cambered membrane. */
-const OSWALD = 0.85;
+/**
+ * Parasitic drag of the sail itself: heavy flax cloth with a rough weave, roped
+ * leeches, and a mast, yard and its whole complement of rigging standing in the
+ * flow immediately in front of it. Thin-aerofoil theory with a racing-yacht
+ * value here gives a lift/drag ratio near five, which would let a square-rigger
+ * point like a Bermudan sloop.
+ */
+const CD_PROFILE = 0.16;
+/** Oswald span efficiency — poor. It is one cambered membrane, leaking at both leeches. */
+const OSWALD = 0.72;
 /** Width of the stall blend, radians. */
 const STALL_BLEND = 14 * DEG;
 
@@ -177,21 +183,35 @@ export function sailCoefficients(
  *  Luffing
  * ------------------------------------------------------------------ */
 
-/** Below this incidence the sail is edge-on and cannot hold its shape. */
-const LUFF_FULL = 4 * DEG;
-const LUFF_CLEAR = 11 * DEG;
+/**
+ * Incidence below which a sail is edge-on and cannot hold its shape.
+ *
+ * A SQUARE sail needs far more than a headsail, and that single asymmetry is the
+ * mechanism behind the no-go zone. Braced hard up against the shrouds it lies at
+ * a shallow angle with its deep belly pressed into the standing rigging and its
+ * weather leech curling; it needs real incidence before it will stand and pull.
+ * A flat-cut jib on a taut stay, with nothing in front of it, fills at a few
+ * degrees — which is why the headsails are what let her claw to windward and the
+ * squares are dead weight there.
+ */
+const LUFF_FULL_SQUARE = 7 * DEG;
+const LUFF_CLEAR_SQUARE = 18 * DEG;
+const LUFF_FULL_TRI = 4 * DEG;
+const LUFF_CLEAR_TRI = 11 * DEG;
 /** Hysteresis so a sail on the edge of drawing does not chatter frame to frame. */
 const LUFF_HYST = 2.2 * DEG;
 
 /**
  * Target luff for an angle of attack, with hysteresis: a sail already shivering
  * needs a little more incidence to fill than a drawing sail needs to collapse.
- * This value drives the cloth shader and the flapping sound, so it has to move
- * smoothly and for a physical reason.
+ * This value drives the cloth shader, the flapping sound AND the force the sail
+ * makes, so it has to move smoothly and for a physical reason.
  */
-export function luffTarget(alpha: number, currentLuff: number): number {
+export function luffTarget(alpha: number, currentLuff: number, triangular: boolean): number {
   const shift = (currentLuff > 0.5 ? 1 : -1) * LUFF_HYST;
-  return 1 - clamp01(smoothstep(LUFF_FULL + shift, LUFF_CLEAR + shift, Math.abs(alpha)));
+  const lo = triangular ? LUFF_FULL_TRI : LUFF_FULL_SQUARE;
+  const hi = triangular ? LUFF_CLEAR_TRI : LUFF_CLEAR_SQUARE;
+  return 1 - clamp01(smoothstep(lo + shift, hi + shift, Math.abs(alpha)));
 }
 
 /** A sail fills with a bang and collapses nearly as fast. Per-second rates. */

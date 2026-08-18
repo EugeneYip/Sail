@@ -15,13 +15,15 @@ import { AERIAL_FRAG, MULTISCATTER_FRAG, SKYVIEW_FRAG, TRANSMITTANCE_FRAG } from
 /**
  * The four-LUT atmosphere chain from Hillaire 2020.
  *
- *   transmittance  256x64    baked once per turbidity change   (~0.3 ms)
- *   multi-scatter  32x32     baked once per turbidity change   (~0.2 ms)
- *   sky view       192x108   refreshed every other frame       (~0.15 ms)
- *   aerial froxels 32x32x32  refreshed every other frame       (32 draws, ~0.35 ms)
+ *   transmittance  256x64    baked on a turbidity change   (0.15 ms, measured)
+ *   multi-scatter  32x32     baked on a turbidity change   (staged, next frame)
+ *   sky view       192x108   every frame                   (0.08 ms, measured)
+ *   aerial froxels 32x32x16  every 4th frame, 16 draws     (1.2 ms, measured)
  *
  * The two bakes are staged over consecutive frames so a weather transition never
- * shows up as a hitch.
+ * shows up as a hitch. Slice count and refresh rate for the froxel volume are
+ * the sky module's largest single cost; the reasoning is on AERIAL_SLICES in
+ * constants.ts and AERIAL_PERIOD in Sky.ts.
  */
 export class AtmosphereLuts {
   readonly transmittance = makeLut(TRANSMITTANCE_W, TRANSMITTANCE_H);

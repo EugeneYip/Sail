@@ -57,18 +57,64 @@ export const MOON_ANGULAR_RADIUS = 0.0045232;
  */
 export const HORIZON_REFRACTION = 0.0098;
 
-/**
- * Scene-linear radiance scale. Internally the model works in units where the
- * top-of-atmosphere solar irradiance is 1.0; the rest of the game is calibrated
- * around `uSunIntensity ~ 12` and `uSkyColor ~ 0.4` (see SharedUniforms
- * defaults), so everything the sky publishes is multiplied by this on the way
- * out. Sun light, sky radiance, fog and the env map all share it, which is what
- * keeps direct and indirect light consistent.
- */
+/* ------------------------------------------------------------------ *
+ *  THE RADIOMETRIC UNITS CONTRACT
+ *
+ *  One convention, applied once, with no per-scene correction anywhere.
+ *  `src/sky/Radiometry.ts` is the single source of truth: it is the only
+ *  place `RADIANCE_SCALE` is ever applied, and every other module reads
+ *  numbers that already have it baked in.
+ *
+ *  MODEL UNITS. The atmosphere integrator — `AtmosphereCpu` and its GPU
+ *  twin in `shaders/atmosphere.ts` — works in units where the
+ *  top-of-atmosphere solar irradiance is 1.0. Nothing outside those two
+ *  files ever sees a model-unit value.
+ *
+ *  GAME UNITS = MODEL UNITS x RADIANCE_SCALE. Since TOA solar illuminance
+ *  is 1.33e5 lux, one game unit is ~1e4 lux of irradiance or ~1e4 cd/m^2
+ *  of radiance (see LUMINANCE_PER_UNIT). Useful anchors at noon, clear,
+ *  turbidity 2:
+ *
+ *      sun irradiance, surface facing it      ~12
+ *      mean sky radiance (uSkyColor)          ~0.1 .. 0.5
+ *      sunlit 18% grey, Lambertian            ~0.7
+ *      sunlit white canvas                    ~2.5
+ *      deep sea                               ~0.05 .. 0.15
+ *      sun disc (SUN_DISC_RADIANCE_SCALE)     ~1.8e3
+ *      moonlit sea, full moon                 ~3e-4
+ *
+ *  IRRADIANCE vs RADIANCE. This is the part that is easy to get wrong, so
+ *  it is stated once and not repeated:
+ *
+ *    IRRADIANCE (E), game units, on a surface facing the light —
+ *      uSunIntensity, uMoonIntensity, DirectionalLight.intensity.
+ *      A material owes the 1/PI: `albedo * uSunIntensity * NoL * INV_PI`.
+ *      three's own lighting follows the same rule (BRDF_Lambert divides by
+ *      PI), which is why `sun.intensity = radiometry.sunIntensity` is
+ *      correct rather than off by PI.
+ *
+ *    RADIANCE (L), game units, ready to use —
+ *      uSkyColor, uGroundColor, uFogColor, zenithColor, horizonColor,
+ *      irradianceSH, envMap, aerialLUT. The 1/PI is already applied.
+ *      A material multiplies by albedo and adds: `albedo * uSkyColor`.
+ *
+ *  The post stack owns the only exposure multiplier in the frame
+ *  (`uExposure`, applied in post/shaders/prepare.ts). No material and no
+ *  sky term may scale itself to "look right" — if a time of day exposes
+ *  badly the model is wrong, not the scale.
+ * ------------------------------------------------------------------ */
+
 export const RADIANCE_SCALE = 13.0;
 
-/** Physical conversion for star visibility thresholds: 1.0 radiance -> cd/m^2. */
-export const LUMINANCE_PER_UNIT = 100000 / RADIANCE_SCALE;
+/**
+ * Photometric calibration of one game unit. TOA solar illuminance is
+ * ~1.33e5 lux, so `1.0` game unit is ~1.02e4 cd/m^2 — a sunlit white wall
+ * at noon lands near 2.5, i.e. ~2.6e4 cd/m^2, which is what a meter reads.
+ * Used for perceptual thresholds (star wash-out) that have to be stated in
+ * real photometric terms to mean anything.
+ */
+export const TOA_SOLAR_ILLUMINANCE_LUX = 133000;
+export const LUMINANCE_PER_UNIT = TOA_SOLAR_ILLUMINANCE_LUX / RADIANCE_SCALE;
 
 /** Solid angle of the solar disc, steradians. */
 export const SUN_SOLID_ANGLE = 2 * Math.PI * (1 - Math.cos(SUN_ANGULAR_RADIUS));
@@ -87,15 +133,21 @@ export const SUN_DISC_RADIANCE_SCALE = 0.01;
 export const EARTHSHINE_FRACTION = 0.014;
 
 /**
- * Star and Milky Way radiance scale. Real first-magnitude stars are ~1e-5 of
- * the daytime sky; at that level they never survive tone mapping at any exposure
- * that also keeps the moon from clipping. These are tuned so the sky reads right
- * at night rather than being radiometrically exact.
+ * Star and Milky Way radiance, game units. Real first-magnitude stars are ~1e-5
+ * of the daytime sky; at that level they never survive tone mapping at any
+ * exposure that also keeps the moon from clipping. These are tuned so the sky
+ * reads right at night rather than being radiometrically exact.
  */
 export const STAR_RADIANCE = 0.055;
 export const MILKY_WAY_RADIANCE = 0.0042;
-/** Sky radiance at which stars are half washed out, game units. */
-export const STAR_WASHOUT = 0.0022;
+/**
+ * Zenith radiance at which stars are half washed out, game units. 1e-3 is
+ * ~10 cd/m^2 — the sky brightness at which the naked eye loses all but the
+ * first-magnitude stars, so they appear through nautical twilight and are gone
+ * well before sunrise. Stated in game units because that is what
+ * `Radiometry.zenithLuminance` is in; divide by LUMINANCE_PER_UNIT to check it.
+ */
+export const STAR_WASHOUT = 0.001;
 
 /**
  * Airglow. The 557.7 nm oxygen line plus the OH Meinel bands: a real, permanent
@@ -145,7 +197,15 @@ export const MULTISCATTER_SIZE = 32;
 export const SKYVIEW_W = 192;
 export const SKYVIEW_H = 108;
 export const AERIAL_SIZE = 32;
-export const AERIAL_SLICES = 32;
+/**
+ * Froxel slices. WebGL2 cannot render to several layers of a 3D target in one
+ * draw, so this number IS the draw count of the aerial pass — at 32 it was 32 of
+ * the sky module's 34 passes per frame. The volume maps LINEARLY over
+ * AERIAL_MAX_KM, so 16 slices is 2 km per slice, and inscattered radiance over
+ * open ocean varies far more slowly than that. See AERIAL_PERIOD in Sky.ts for
+ * the matching refresh rate.
+ */
+export const AERIAL_SLICES = 16;
 /** Far plane of the froxel volume, km. Published as aerialMaxDistance. */
 export const AERIAL_MAX_KM = 32.0;
 

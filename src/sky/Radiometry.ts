@@ -6,9 +6,15 @@ import {
   AIRGLOW,
   EARTHSHINE_FRACTION,
   GROUND_RADIUS_KM,
+  MIE_ABSORPTION,
+  MIE_ANISOTROPY,
+  MIE_SCALE_HEIGHT_KM,
+  MIE_SCATTERING,
   MILKY_WAY_RADIANCE,
   MOON_IRRADIANCE_FULL,
   RADIANCE_SCALE,
+  RAYLEIGH_SCALE_HEIGHT_KM,
+  RAYLEIGH_SCATTERING,
   SEA_BOUNCE_ALBEDO,
   SOLAR_IRRADIANCE,
   STAR_RADIANCE,
@@ -29,14 +35,32 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
  * a readback either stalls the pipeline or lands two frames late — and a
  * directional light that disagrees with the sky behind it is instantly obvious.
  *
- * Units: everything published here is scene-linear radiance or irradiance with
- * RADIANCE_SCALE already applied, i.e. directly usable by materials.
+ * UNITS. This class is the single place `RADIANCE_SCALE` is applied and the
+ * only boundary between model units and game units — the full contract is
+ * documented next to `RADIANCE_SCALE` in `constants.ts`, and it is worth
+ * reading before touching anything here. In short: every field below is in
+ * game units, irradiance fields (`sunIrradiance`, `sunIntensity`,
+ * `moonIntensity`) owe the caller a 1/PI, radiance fields (`skyColor`,
+ * `groundColor`, `zenithColor`, `horizonColor`, `fogColor`, `sh`) do not.
+ *
+ * Nothing here is allowed a per-time-of-day correction. A scene that exposes
+ * badly is a modelling bug, not a missing multiplier.
  */
 export class Radiometry {
   readonly cpu = new AtmosphereCpu();
 
   /** Aerosol column multiplier, quantised so the LUT bakes are rare. */
   mieMul = 1;
+
+  /**
+   * Top-of-atmosphere solar irradiance in GAME units. The GPU LUT passes take
+   * this as their `uSunIrradiance`, which is what puts the rendered sky on the
+   * same scale as everything published here — do not reconstruct it from
+   * SOLAR_IRRADIANCE * RADIANCE_SCALE at the call site.
+   */
+  readonly solarIrradiance = new THREE.Vector3()
+    .copy(SOLAR_IRRADIANCE)
+    .multiplyScalar(RADIANCE_SCALE);
 
   /** Direct sun irradiance on a surface facing it, game units. */
   readonly sunIrradiance = new THREE.Vector3();
@@ -91,7 +115,17 @@ export class Radiometry {
    * @param camAltKm  observer altitude, kilometres.
    */
   update(env: Environment, camAltKm: number): void {
-    this.mieMul = quantise(aerosolMultiplier(env), 0.02);
+    // DEADBAND, not plain quantisation. Baking the transmittance table is 2048
+    // texels x a 24-step march — several milliseconds of JS — and both this and
+    // the GPU LUT chain rebake whenever `mieMul` moves. The weather sim drifts
+    // turbidity and visibility continuously, so a quantised value parked on a
+    // step boundary flipped back and forth every single frame and re-baked every
+    // single frame. Requiring a 4% change first makes the bake a
+    // per-weather-event cost; 4% of aerosol column is invisible in the result.
+    const target = aerosolMultiplier(env);
+    if (Math.abs(target - this.mieMul) > 0.04 * Math.max(0.5, this.mieMul)) {
+      this.mieMul = quantise(target, 0.02);
+    }
     this.cpu.bake(this.mieMul);
 
     const r = GROUND_RADIUS_KM + camAltKm;
@@ -107,11 +141,11 @@ export class Radiometry {
     this.cpu.transmittance(r, Math.max(sunY, 0.0016), this.tmp);
     this.sunIrradiance
       .set(
-        this.tmp.x * SOLAR_IRRADIANCE.x,
-        this.tmp.y * SOLAR_IRRADIANCE.y,
-        this.tmp.z * SOLAR_IRRADIANCE.z,
+        this.tmp.x * this.solarIrradiance.x,
+        this.tmp.y * this.solarIrradiance.y,
+        this.tmp.z * this.solarIrradiance.z,
       )
-      .multiplyScalar(RADIANCE_SCALE * sunGate);
+      .multiplyScalar(sunGate);
 
     const sunPeak = Math.max(this.sunIrradiance.x, this.sunIrradiance.y, this.sunIrradiance.z);
     this.sunIntensity = sunPeak;
@@ -143,11 +177,11 @@ export class Radiometry {
     this.moonColor.setRGB(0.5, 0.66, 1.0);
 
     // The disc itself keeps its true warm-grey albedo; only the LIGHT is shifted.
-    const discScale = (RADIANCE_SCALE / Math.PI) * moonGate;
+    const discScale = moonGate / Math.PI;
     this.moonDiscRadiance.set(
-      this.tmp2.x * SOLAR_IRRADIANCE.x * discScale,
-      this.tmp2.y * SOLAR_IRRADIANCE.y * discScale,
-      this.tmp2.z * SOLAR_IRRADIANCE.z * discScale,
+      this.tmp2.x * this.solarIrradiance.x * discScale,
+      this.tmp2.y * this.solarIrradiance.y * discScale,
+      this.tmp2.z * this.solarIrradiance.z * discScale,
     );
     // Earthshine is brightest at new moon, when the earth is full as seen from
     // the moon. The illuminated fraction is the standard half-angle relation.
@@ -158,36 +192,41 @@ export class Radiometry {
 
     /* --- sky, ground, fog ------------------------------------------- */
 
-    this.cpu.radiance(1, sunY, camAltKm, sunY, this.mieMul, this.radiance);
+    // Both luminaries are placed in the CPU model's own frame, sun at
+    // (sunH, sunY, 0) and moon at (moonH, moonY, 0). The azimuth between them
+    // is dropped; every quantity below is either straight up or an azimuthal
+    // average, so it cannot survive into the answer.
+    const sunH = Math.sqrt(Math.max(0, 1 - sunY * sunY));
+    const moonH = Math.sqrt(Math.max(0, 1 - moonY * moonY));
+
+    this.skyRadiance(1, sunY, moonY, camAltKm, sunY, this.radiance);
     this.zenithColor.setRGB(this.radiance.x, this.radiance.y, this.radiance.z);
     this.zenithLuminance = luminance(this.radiance);
 
     // Horizon: average four azimuths so a low sun does not swing the fog colour
     // hard toward whichever way the ship happens to be pointing.
     const horizY = 0.026;
-    const sunH = Math.sqrt(Math.max(0, 1 - sunY * sunY));
+    const horizH = Math.sqrt(1 - horizY * horizY);
     let hr = 0;
     let hg = 0;
     let hb = 0;
     for (let i = 0; i < 4; i++) {
       const az = (i / 4) * Math.PI * 2;
-      const cosTheta = Math.cos(az) * sunH * Math.sqrt(1 - horizY * horizY) + horizY * sunY;
-      this.cpu.radiance(horizY, cosTheta, camAltKm, sunY, this.mieMul, this.radiance);
+      const c = Math.cos(az) * horizH;
+      this.skyRadiance(horizY, c * sunH + horizY * sunY, c * moonH + horizY * moonY, camAltKm, sunY, this.radiance);
       hr += this.radiance.x;
       hg += this.radiance.y;
       hb += this.radiance.z;
     }
     this.horizonColor.setRGB(hr / 4, hg / 4, hb / 4);
 
-    this.accumulateSh(camAltKm, sunY);
+    this.accumulateSh(camAltKm, sunY, moonY);
 
-    // Fog inscatter is the horizon sky, warmed slightly toward the low-sun side
-    // because most of what a fogged pixel scatters comes from near the sun.
+    // Fog inscatter is the horizon sky. It needed a hand-tuned airglow and
+    // moonlight floor when the horizon radiance was in the wrong units and went
+    // to zero at night; now that skyRadiance() carries both terms analytically,
+    // the horizon colour IS the fog colour and there is nothing left to trim.
     this.fogColor.copy(this.horizonColor);
-    const moonFog = this.moonGlow.length() * 0.6;
-    this.fogColor.r += AIRGLOW.x * 8 + moonFog * 0.5;
-    this.fogColor.g += AIRGLOW.y * 8 + moonFog * 0.66;
-    this.fogColor.b += AIRGLOW.z * 8 + moonFog * 1.0;
 
     // Sea bounce: the sky and sun that the water reflects and scatters back up.
     const downwelling = this.tmp.copy(this.skyIrradiance);
@@ -221,12 +260,51 @@ export class Radiometry {
   }
 
   /**
+   * Sky radiance in GAME units, along a direction whose vertical component is
+   * `dirY` and whose angles to the sun and moon have cosines `cosSun`/`cosMoon`.
+   *
+   * The one and only bridge out of the atmosphere model's own units:
+   * `AtmosphereCpu` deliberately knows nothing about RADIANCE_SCALE so that it
+   * stays a line-for-line mirror of the GPU shader, which is scaled instead by
+   * the `uSunIrradiance` it is handed.
+   *
+   * It also adds the two terms the multiple-scattering model has no sun to
+   * drive — airglow and the moon's own sky glow — with exactly the expressions
+   * `shaders/skyRender.ts` uses. Without them the CPU sky is mathematically
+   * black after astronomical twilight while the rendered sky plainly is not,
+   * `uSkyColor` goes to zero, and every custom material loses its night fill.
+   */
+  private skyRadiance(
+    dirY: number,
+    cosSun: number,
+    cosMoon: number,
+    camAltKm: number,
+    sunMu: number,
+    out: THREE.Vector3,
+  ): THREE.Vector3 {
+    this.cpu.radiance(dirY, cosSun, camAltKm, sunMu, this.mieMul, out);
+    out.multiplyScalar(RADIANCE_SCALE);
+
+    const airmass = Math.min(1 / Math.max(dirY, 0.015), 22);
+    const glow = Math.min(airmass, 6);
+    out.x += AIRGLOW.x * glow;
+    out.y += AIRGLOW.y * glow;
+    out.z += AIRGLOW.z * glow;
+
+    if (this.moonIntensity > 1e-7) {
+      addWeakSourceSkyGlow(out, this.moonGlow, cosMoon, airmass, this.mieMul);
+    }
+    return out;
+  }
+
+  /**
    * One slice of the spherical-harmonic sweep. Spreading 48 directions over 4
    * frames keeps the cost at ~300 march steps a frame; the sun moves far too
    * slowly for the 67 ms of latency to be visible.
    */
-  private accumulateSh(camAltKm: number, sunY: number): void {
+  private accumulateSh(camAltKm: number, sunY: number, moonY: number): void {
     const sunH = Math.sqrt(Math.max(0, 1 - sunY * sunY));
+    const moonH = Math.sqrt(Math.max(0, 1 - moonY * moonY));
     const w = (4 * Math.PI) / SH_SAMPLES;
 
     for (let s = 0; s < SH_PER_FRAME; s++) {
@@ -238,8 +316,7 @@ export class Radiometry {
       const z = Math.sin(theta) * ring;
 
       // cosTheta against a sun placed at (sunH, sunY, 0) — the CPU model's frame.
-      const cosTheta = x * sunH + y * sunY;
-      this.cpu.radiance(y, cosTheta, camAltKm, sunY, this.mieMul, this.radiance);
+      this.skyRadiance(y, x * sunH + y * sunY, x * moonH + y * moonY, camAltKm, sunY, this.radiance);
 
       const a = this.shAccum;
       const yb0 = 0.282095;
@@ -295,6 +372,49 @@ export class Radiometry {
 /** A_l / PI for l = 0, 1, 2 with A = (PI, 2PI/3, PI/4). */
 const SH_COSINE_CONVOLUTION = [1, 2 / 3, 2 / 3, 2 / 3, 0.25, 0.25, 0.25, 0.25, 0.25];
 const SH_BASIS_SCRATCH = new Float64Array(9);
+
+/** Rayleigh column density above sea level, dimensionless (1/km x km). */
+const COLUMN_R = new THREE.Vector3()
+  .copy(RAYLEIGH_SCATTERING)
+  .multiplyScalar(RAYLEIGH_SCALE_HEIGHT_KM);
+const MIE_PHASE_K = ((3 / (8 * Math.PI)) * (1 - MIE_ANISOTROPY ** 2)) / (2 + MIE_ANISOTROPY ** 2);
+
+/**
+ * Single-scattered sky glow from a weak source, added into `out`. The exact
+ * CPU twin of `weakSourceSkyGlow` in `shaders/celestial.ts`: a plane-parallel
+ * slab of the whole atmospheric column, self-shadowed by its own optical depth.
+ * Cheap enough to evaluate per SH sample, and being the same expression as the
+ * shader is the point — it is what keeps the night ambient equal to the night
+ * sky the camera sees.
+ */
+function addWeakSourceSkyGlow(
+  out: THREE.Vector3,
+  irradiance: THREE.Vector3,
+  cosTheta: number,
+  airmass: number,
+  mieMul: number,
+): void {
+  const colM = MIE_SCATTERING * MIE_SCALE_HEIGHT_KM * mieMul;
+  const extM = (MIE_SCATTERING + MIE_ABSORPTION) * MIE_SCALE_HEIGHT_KM * mieMul;
+  const cos2 = 1 + cosTheta * cosTheta;
+  const pR = (3 / (16 * Math.PI)) * cos2;
+  const g2 = MIE_ANISOTROPY ** 2;
+  const d = Math.max(1e-4, 1 + g2 - 2 * MIE_ANISOTROPY * cosTheta);
+  const pM = (MIE_PHASE_K * cos2) / (d * Math.sqrt(d));
+
+  const sR = colM * pM * airmass;
+  const gx = (COLUMN_R.x * pR * airmass + sR) * slabAttenuation((COLUMN_R.x + extM) * airmass);
+  const gy = (COLUMN_R.y * pR * airmass + sR) * slabAttenuation((COLUMN_R.y + extM) * airmass);
+  const gz = (COLUMN_R.z * pR * airmass + sR) * slabAttenuation((COLUMN_R.z + extM) * airmass);
+  out.x += irradiance.x * gx;
+  out.y += irradiance.y * gy;
+  out.z += irradiance.z * gz;
+}
+
+/** (1 - e^-tau) / tau — the mean transmittance across an emitting slab. */
+function slabAttenuation(tau: number): number {
+  return (1 - Math.exp(-tau)) / Math.max(tau, 1e-4);
+}
 
 function luminance(v: THREE.Vector3): number {
   return 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z;

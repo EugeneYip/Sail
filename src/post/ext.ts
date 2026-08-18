@@ -4,11 +4,14 @@ import type * as THREE from 'three';
  * Published on `world.ext.post`. Allocated once and mutated in place, so a
  * consumer may cache the reference.
  *
- * `depthTexture` is the scene depth attachment: DEPTH_COMPONENT32F, non-linear,
- * over `near`..`far`. It is valid from the moment the scene pass finishes until
- * the next frame's scene pass begins — i.e. any module reading it during its
- * own `update()` sees last frame's depth, which is what a screen-space effect
- * wants anyway.
+ * `depthTexture` is a standalone R32F COPY of the scene depth attachment:
+ * non-linear window-space depth over `near`..`far`, sampled as `.r` exactly
+ * like a DepthTexture. It is deliberately not the attachment itself — a
+ * material that samples the live attachment while the scene is rendering forms
+ * a framebuffer feedback loop and the draw is dropped by the driver. The copy
+ * holds LAST frame's depth for the whole of the current frame, including inside
+ * the scene pass, so soft particles and screen-space refraction can bind it
+ * once at init and never think about it again.
  */
 export interface PostExt {
   depthTexture: THREE.Texture | null;

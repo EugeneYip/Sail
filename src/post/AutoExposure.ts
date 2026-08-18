@@ -10,7 +10,6 @@ import {
   EXPOSURE_MIN_LOG,
   EXPOSURE_STRIPS,
   HISTOGRAM_FRAG,
-  HISTOGRAM_REDUCE_FRAG,
   HISTOGRAM_RESOLVE_FRAG,
   LUM_REDUCE_FRAG,
 } from './shaders/exposure';
@@ -18,18 +17,18 @@ import {
 /**
  * Histogram auto-exposure.
  *
- * Four tiny passes build a centre-weighted log-luminance histogram of the frame
+ * Three tiny passes build a centre-weighted log-luminance histogram of the frame
  * and resolve a **weighted percentile band**, not a mean. That distinction is
  * the whole point on an ocean: the sky is two thirds of most frames and several
  * stops brighter than the ship, so a plain average meters for the sky and
  * leaves the hull a silhouette. Discarding the brightest 20% (sky, sun glitter)
  * and the darkest 45% (shadowed sea) meters for the subject.
  *
- * The result comes back to the CPU through an asynchronous 1x1 readback, so the
- * pipeline never stalls; the two-frame latency is nothing against a 0.4 s
- * adaptation. The scalar is published on `world.uniforms.uExposure` and applied
- * by the prepare pass, which means forward materials can read it but must not
- * pre-multiply by it.
+ * Metering runs at METER_INTERVAL and the result comes back through a persistent
+ * pixel-pack buffer polled by a fence, so the pipeline never stalls; the
+ * one-to-two-frame latency is nothing against a 0.4 s adaptation. The scalar is
+ * published on `world.uniforms.uExposure` and applied by the prepare pass, which
+ * means forward materials can read it but must not pre-multiply by it.
  *
  * Adaptation is asymmetric and *compressive*. Full compensation would map a
  * moonlit sea to the same middle grey as noon, which is exactly the "night is
@@ -51,6 +50,15 @@ const MIN_GAIN_STOPS = -7.0;
 /** Per-second damping rates. 1/rate is the 63% response time. */
 const RATE_BRIGHTEN = 1 / 0.4;
 const RATE_DARKEN = 1 / 1.5;
+/**
+ * Frames between measurements. The three metering passes are tiny in shading
+ * terms but each is a separate render pass, which on a tile-based GPU costs a
+ * fixed setup + flush no matter how few pixels it touches. The fastest
+ * adaptation constant here is 0.4 s, so measuring at 20 Hz is already ~8x
+ * faster than anything the adaptation can follow; every frame was pure waste.
+ * Adaptation itself still runs every frame, so the exposure ramp stays smooth.
+ */
+const METER_INTERVAL = 3;
 
 export class AutoExposure {
   /** Latest applied exposure multiplier, scene-linear. */
@@ -60,13 +68,15 @@ export class AutoExposure {
 
   private lumPass: FullscreenPass;
   private histPass: FullscreenPass;
-  private reducePass: FullscreenPass;
   private resolvePass: FullscreenPass;
 
   private readonly readBuffer = new Float32Array(4);
-  private reading = false;
   private asyncFailed = false;
   private syncCountdown = 0;
+
+  private gl: WebGL2RenderingContext | null = null;
+  private pbo: WebGLBuffer | null = null;
+  private fence: WebGLSync | null = null;
 
   private measuredLog = -1;
   private adaptedStops = 0;
@@ -85,13 +95,10 @@ export class AutoExposure {
       uLumSize: { value: EXPOSURE_LUM_SIZE },
       uRange: { value: new THREE.Vector2(EXPOSURE_MIN_LOG, EXPOSURE_MAX_LOG) },
     });
-    this.reducePass = new FullscreenPass('exposure/reduce', HISTOGRAM_REDUCE_FRAG, {
-      tPartial: { value: null },
-      uStrips: { value: EXPOSURE_STRIPS },
-    });
     this.resolvePass = new FullscreenPass('exposure/resolve', HISTOGRAM_RESOLVE_FRAG, {
-      tHistogram: { value: null },
+      tPartial: { value: null },
       uBins: { value: EXPOSURE_BINS },
+      uStrips: { value: EXPOSURE_STRIPS },
       uRange: { value: new THREE.Vector2(EXPOSURE_MIN_LOG, EXPOSURE_MAX_LOG) },
       uPercentile: { value: new THREE.Vector2(PERCENTILE_LOW, PERCENTILE_HIGH) },
     });
@@ -103,12 +110,13 @@ export class AutoExposure {
    * which oscillates.
    */
   meter(world: World, scene: THREE.WebGLRenderTarget): void {
+    if (world.time.frame % METER_INTERVAL !== 0) return;
+
     const r = world.renderer;
     const t = this.targets;
 
     const lum = t.get('expLum', EXPOSURE_LUM_SIZE, EXPOSURE_LUM_SIZE, 'r16f', { nearest: true });
     const partial = t.get('expPartial', EXPOSURE_BINS, EXPOSURE_STRIPS, 'r16f', { nearest: true });
-    const hist = t.get('expHist', EXPOSURE_BINS, 1, 'r16f', { nearest: true });
     const result = t.get('expResult', 1, 1, 'rgba32f', { nearest: true });
 
     const lu = this.lumPass.uniforms;
@@ -123,39 +131,78 @@ export class AutoExposure {
     this.histPass.uniforms.tLum.value = lum.texture;
     this.histPass.render(r, partial);
 
-    this.reducePass.uniforms.tPartial.value = partial.texture;
-    this.reducePass.render(r, hist);
-
-    this.resolvePass.uniforms.tHistogram.value = hist.texture;
+    this.resolvePass.uniforms.tPartial.value = partial.texture;
     this.resolvePass.render(r, result);
 
     this.readback(r, result);
   }
 
+  /**
+   * Pull the 1x1 result back without stalling.
+   *
+   * This is hand-rolled rather than `readRenderTargetPixelsAsync` for a measured
+   * reason: on ANGLE/Metal that call costs ~2.3 ms of *submission* time, because
+   * it allocates and orphans a pixel-pack buffer on every invocation. Reading
+   * the same target synchronously costs ~1.2 ms. Against a 16.7 ms frame either
+   * is absurd for four floats. A persistent PBO plus a fence polled on a later
+   * frame costs ~0.05 ms: `readPixels` into a bound PBO returns immediately, and
+   * the data is only touched once the fence says the GPU is done with it.
+   *
+   * The latency is one to two frames, which is nothing against a 0.4 s
+   * adaptation, and is the same latency the old path had.
+   */
   private readback(r: THREE.WebGLRenderer, result: THREE.WebGLRenderTarget): void {
-    if (this.asyncFailed) {
-      // Sync fallback: a 1x1 read still flushes the pipeline, so throttle hard.
-      if (--this.syncCountdown > 0) return;
-      this.syncCountdown = 6;
-      try {
-        r.readRenderTargetPixels(result, 0, 0, 1, 1, this.readBuffer);
-        this.accept(this.readBuffer[0], this.readBuffer[1]);
-      } catch {
-        /* metering unavailable; adaptation freezes at the last good value */
-      }
+    const gl = (this.gl ??= asWebGL2(r));
+    if (!gl || this.asyncFailed) {
+      this.readbackSync(r, result);
       return;
     }
-    if (this.reading) return;
-    this.reading = true;
-    r.readRenderTargetPixelsAsync(result, 0, 0, 1, 1, this.readBuffer)
-      .then(() => {
+
+    // Last request first: if it has landed, take it and free the fence.
+    if (this.fence) {
+      const status = gl.clientWaitSync(this.fence, 0, 0);
+      if (status === gl.TIMEOUT_EXPIRED) return;
+      gl.deleteSync(this.fence);
+      this.fence = null;
+      if (status !== gl.WAIT_FAILED && this.pbo) {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.readBuffer);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         this.accept(this.readBuffer[0], this.readBuffer[1]);
-        this.reading = false;
-      })
-      .catch(() => {
-        this.asyncFailed = true;
-        this.reading = false;
-      });
+      }
+    }
+
+    try {
+      if (!this.pbo) {
+        this.pbo = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, 16, gl.STREAM_READ);
+      } else {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
+      }
+      // The resolve pass just wrote this target, so it is already the bound
+      // framebuffer; setRenderTarget is idempotent and makes that explicit.
+      r.setRenderTarget(result);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      this.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!this.fence) this.asyncFailed = true;
+    } catch {
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      this.asyncFailed = true;
+    }
+  }
+
+  /** Fallback: a 1x1 read that flushes the pipeline, so throttle it hard. */
+  private readbackSync(r: THREE.WebGLRenderer, result: THREE.WebGLRenderTarget): void {
+    if (--this.syncCountdown > 0) return;
+    this.syncCountdown = 6;
+    try {
+      r.readRenderTargetPixels(result, 0, 0, 1, 1, this.readBuffer);
+      this.accept(this.readBuffer[0], this.readBuffer[1]);
+    } catch {
+      /* metering unavailable; adaptation freezes at the last good value */
+    }
   }
 
   private accept(meanLog: number, weight: number): void {
@@ -222,7 +269,19 @@ export class AutoExposure {
   dispose(): void {
     this.lumPass.dispose();
     this.histPass.dispose();
-    this.reducePass.dispose();
     this.resolvePass.dispose();
+    const gl = this.gl;
+    if (gl) {
+      if (this.fence) gl.deleteSync(this.fence);
+      if (this.pbo) gl.deleteBuffer(this.pbo);
+    }
+    this.fence = null;
+    this.pbo = null;
   }
+}
+
+/** WebGL2 context or null — `texImage3D` is the cheapest reliable probe. */
+function asWebGL2(r: THREE.WebGLRenderer): WebGL2RenderingContext | null {
+  const ctx = r.getContext() as WebGL2RenderingContext;
+  return typeof ctx.fenceSync === 'function' ? ctx : null;
 }

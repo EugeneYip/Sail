@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 
-export type TargetKind = 'rgba16f' | 'rg16f' | 'r16f' | 'rgba32f' | 'rgba8' | 'rg8' | 'r8';
+export type TargetKind =
+  | 'rgba16f'
+  | 'rg16f'
+  | 'r16f'
+  | 'rgba32f'
+  | 'r32f'
+  | 'rgba8'
+  | 'rg8'
+  | 'r8';
 
 interface Spec {
   format: THREE.PixelFormat;
@@ -13,6 +21,7 @@ const SPECS: Record<TargetKind, Spec> = {
   rg16f: { format: THREE.RGFormat, type: THREE.HalfFloatType, bytes: 4 },
   r16f: { format: THREE.RedFormat, type: THREE.HalfFloatType, bytes: 2 },
   rgba32f: { format: THREE.RGBAFormat, type: THREE.FloatType, bytes: 16 },
+  r32f: { format: THREE.RedFormat, type: THREE.FloatType, bytes: 4 },
   rgba8: { format: THREE.RGBAFormat, type: THREE.UnsignedByteType, bytes: 4 },
   rg8: { format: THREE.RGFormat, type: THREE.UnsignedByteType, bytes: 2 },
   r8: { format: THREE.RedFormat, type: THREE.UnsignedByteType, bytes: 1 },

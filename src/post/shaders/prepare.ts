@@ -34,6 +34,30 @@ void main() {
 }
 `;
 
+/**
+ * Scene depth attachment -> a standalone R32F texture.
+ *
+ * This exists for a correctness reason, not a convenience one. The scene's
+ * `DepthTexture` is an *attachment* of the scene framebuffer, so any material
+ * that samples it while the scene is being rendered forms a framebuffer
+ * feedback loop: the driver rejects the draw outright
+ * (`glDrawElementsInstanced: Feedback loop formed between Framebuffer and
+ * active Texture`) and the object silently disappears. Soft particles, screen
+ * space refraction and contact fades all want exactly that texture. Copying it
+ * out once per frame gives them a sampler that is never attached to anything,
+ * with last frame's contents — which is what a screen-space effect wants and
+ * what `PostExt.depthTexture` has always claimed to be.
+ *
+ * R32F, not R16F: non-linear depth spends almost all of its range next to 1.0
+ * and half floats have 11 bits of mantissa there.
+ */
+export const DEPTH_COPY_FRAG = /* glsl */ `
+precision highp float;
+uniform highp sampler2D tDepth;
+varying vec2 vUv;
+void main() { gl_FragColor = vec4(texture2D(tDepth, vUv).r, 0.0, 0.0, 1.0); }
+`;
+
 /** Straight copy. Used for the TAA history seed and for debug taps. */
 export const COPY_FRAG = /* glsl */ `
 precision highp float;

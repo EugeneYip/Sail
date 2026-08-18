@@ -6,9 +6,16 @@ export const EXPOSURE_LUM_SIZE = 64;
 /** Horizontal strips the partial histogram is split into, for occupancy. */
 export const EXPOSURE_STRIPS = 32;
 
-/** log2(luminance) range covered by the histogram, in our scene-radiance units. */
-export const EXPOSURE_MIN_LOG = -10;
-export const EXPOSURE_MAX_LOG = 8;
+/**
+ * log2(luminance) range covered by the histogram, in game radiance units (see
+ * the units contract in `sky/constants.ts`). The band has to bracket the whole
+ * day: a moonlit sea is ~3e-4 (log2 -11.7) and a sunlit sail is ~2.5 (log2 1.3).
+ * -10 clipped the entire night into bin 0, which pinned the metered value and
+ * made every night scene expose identically regardless of the moon. 20 stops
+ * over 64 bins is 0.31 stops per bin, finer than the adaptation can resolve.
+ */
+export const EXPOSURE_MIN_LOG = -13;
+export const EXPOSURE_MAX_LOG = 7;
 
 /**
  * Pass 1 — log-luminance reduce to a small square.
@@ -85,25 +92,15 @@ void main() {
 }
 `;
 
-/** Pass 3 — collapse the strips. */
-export const HISTOGRAM_REDUCE_FRAG = /* glsl */ `
-precision highp float;
-uniform sampler2D tPartial;
-uniform float uStrips;
-varying vec2 vUv;
-
-void main() {
-  float sum = 0.0;
-  for (int s = 0; s < 64; s++) {
-    if (float(s) >= uStrips) break;
-    sum += texture2D(tPartial, vec2(vUv.x, (float(s) + 0.5) / uStrips)).r;
-  }
-  gl_FragColor = vec4(sum, 0.0, 0.0, 1.0);
-}
-`;
-
 /**
- * Pass 4 — weighted percentile band into a 1x1 float target for readback.
+ * Pass 3 — collapse the strips AND resolve the weighted percentile band, into
+ * a 1x1 float target for readback.
+ *
+ * The strip collapse used to be its own pass. On a tile-based GPU a 64x1 render
+ * pass costs almost nothing in shading and a fixed amount in tile setup and
+ * flush, so folding it into the resolve — which is a single fragment and has to
+ * walk all 64 bins twice anyway — removes a whole pass boundary for 2048 extra
+ * texel reads in one invocation.
  *
  * Averaging the whole histogram lets whatever covers the most pixels win. We
  * instead average only the band between two percentiles, which throws away the
@@ -112,17 +109,27 @@ void main() {
  */
 export const HISTOGRAM_RESOLVE_FRAG = /* glsl */ `
 precision highp float;
-uniform sampler2D tHistogram;
+uniform sampler2D tPartial;
 uniform float uBins;
+uniform float uStrips;
 uniform vec2 uRange;
 uniform vec2 uPercentile;   // (low, high) in 0..1
 varying vec2 vUv;
+
+float bin[64];
 
 void main() {
   float total = 0.0;
   for (int b = 0; b < 64; b++) {
     if (float(b) >= uBins) break;
-    total += texture2D(tHistogram, vec2((float(b) + 0.5) / uBins, 0.5)).r;
+    float x = (float(b) + 0.5) / uBins;
+    float sum = 0.0;
+    for (int s = 0; s < 64; s++) {
+      if (float(s) >= uStrips) break;
+      sum += texture2D(tPartial, vec2(x, (float(s) + 0.5) / uStrips)).r;
+    }
+    bin[b] = sum;
+    total += sum;
   }
   if (total <= 0.0) {
     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -135,9 +142,8 @@ void main() {
   float span = (uRange.y - uRange.x) / uBins;
   for (int b = 0; b < 64; b++) {
     if (float(b) >= uBins) break;
-    float c = texture2D(tHistogram, vec2((float(b) + 0.5) / uBins, 0.5)).r;
     float lo = acc;
-    acc += c;
+    acc += bin[b];
     float w = max(0.0, min(acc, hiClip) - max(lo, loClip));
     float logLum = uRange.x + (float(b) + 0.5) * span;
     sum += w * logLum;

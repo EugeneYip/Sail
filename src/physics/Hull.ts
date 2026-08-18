@@ -385,8 +385,12 @@ export interface Hydrostatics {
  *   BM             2.39 m
  *   KG             5.66 m
  *   GM             0.95 m
- *   roll period   11.6 s      inside the 8-14 s band for a ship this size
- *   GZ            0.17 / 0.33 / 0.47 / 0.55 m at 10 / 20 / 30 / 45 deg
+ *   roll period   11.6 s      linearised; the solver's own free-decay period is
+ *                             9.3 s, measured over eight cycles from a 20 deg
+ *                             release on flat water (scripts/physics-test.mjs).
+ *                             Shorter than the linear figure because the GZ
+ *                             curve stiffens with angle — see below.
+ *   GZ            0.18 / 0.39 / 0.61 / 1.02 m at 10 / 20 / 30 / 45 deg
  *
  * The GZ curve still rising at 45 deg is the topsides doing their job; with the
  * panel set truncated at the waterline it peaked at 20 deg and she could be
