@@ -53,16 +53,29 @@ Dev server is already running on <http://127.0.0.1:5178>. It hot-reloads.
 
 ```bash
 cd tallship
-npx tsc --noEmit
-node scripts/capture.mjs --out shots/<yourname> --scene all --settle 5
+npm run typecheck
+node scripts/capture.mjs --out shots/<yourname> --scene all --settle 6
 ```
+
+The harness stages PNGs outside the Vite root and disables HMR, so a capture run
+is not disturbed by another agent editing `src/`, and it exits non-zero if the
+page navigated unexpectedly. Wall-clock fps is NOT trustworthy while other
+agents are running — use the `upd:<module>` values in `world.stats` instead.
 
 Then **`Read` the PNGs you just wrote** and judge them yourself, harshly, before
 reporting done. Scenes available: `dawn morning noon golden sunset dusk night
 storm fog helm masthead orbit waterline island`.
 
-Reference frames from slowroads.io are in `refs/` — open them. That is the bar
-for lighting, colour, composition and restraint.
+**Grade yourself against `RUBRIC.md`.** It has eight weighted axes and a list of
+automatic failures (water tiling, LOD popping, sky banding, TAA ghosting, a
+horizon that reads as a hard seam, placeholder geometry, sub-60fps). Most frames
+honestly score 4-6; reserve 8+ for a frame a stranger could not distinguish from
+a commercial release.
+
+There are no slowroads.io reference frames on disk — the site is behind a
+bot-verification challenge we do not bypass, so the rubric is the standard.
+`DIAGNOSIS.md` carries the current measured defect list; read it before you
+start and trust its numbers over your own guesses.
 
 ## Coordinate + unit conventions
 
