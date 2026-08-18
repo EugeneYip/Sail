@@ -145,3 +145,53 @@ CPU cost is now the whole remaining deficit.**
 Note: wall-clock fps in this environment is not trustworthy while other agents
 run their own headless Chromium and `tsc`. Trust the per-pass GPU numbers and the
 `upd:*` CPU numbers, not the fps figure.
+
+## 8. State after the shader repair — measured on a QUIET machine, 2026-08-18
+
+All shaders compile. Zero GLSL errors, zero failing materials, no framebuffer
+feedback loop, no `useProgram: program not valid`. The ship renders in full.
+
+**Trustworthy performance numbers** (no other agent running, 1600x900, ultra):
+
+| scene | fps | draw calls | tris |
+|---|---|---|---|
+| noon | 16 | 60 | 0.57 M |
+| golden | 14 | 64 | 0.57 M |
+| orbit | 16 | 62 | 0.56 M |
+| island | 15 | 65 | 0.75 M |
+| storm | 12 | 68 | 0.81 M |
+
+**~14 fps against a 60 target.** Earlier readings of 34 fps and of 2-9 fps were
+both taken while other agents were running their own Chromium and `tsc`; ignore
+them. Draw calls and triangle counts are very low, which confirms section 7: the
+cost is CPU in `update()`, not geometry, batching or fill.
+
+### Visual defects, ranked by how much they cost the frame
+
+1. **No sails.** Masts and yards are bare while the HUD reports ~2870 m2 drawing
+   at 76%. Physics is trimming sails that do not exist visually. This is the
+   single largest visual gap — it is the hero asset's silhouette.
+2. **Everything is washed out and hazy.** Low contrast, pale blue-grey overall.
+   The deep saturated blue of open ocean is absent. Suspects, in order: aerial
+   perspective / fog applied too strongly at close range; the spray/foam
+   `INV_PI` error in section 6.2 making foam PI x too bright; the ship's
+   double-counted specular IBL in section 6.1.
+3. **Hull colour is wrong.** It reads mostly buff/tan. The Constitution is
+   **black above the wale with a single buff gunport stripe** (see AGENTS.md).
+4. **The wake is a white blob at the hull**, not a Kelvin V with divergent arms
+   at ~19.47 degrees and a persistent trail.
+5. **Two stray dark horizontal lines** run across the water either side of the
+   ship, roughly at the waterline in the `orbit` capture. Looks like a mesh seam
+   or a stray line primitive. Owner unknown — ocean clipmap edge or a world
+   prop are the likeliest candidates.
+6. **`cloudCover` does nothing** — volumetric clouds unimplemented, so `storm`
+   and `fog` cannot pass the rubric's atmosphere axis.
+
+### Remaining console noise
+
+- 131 x `READ-usage buffer was written, then fenced, but written again before
+  being read back` — the post stack's new fenced exposure readback is being
+  rewritten before the fence is consumed. Harmless but it means the async path
+  is not actually saving the readback.
+- 5 x `THREE.Material: parameter 'defines' has value of undefined` from
+  `src/vfx/Particles.ts` and `src/vfx/WakeField.ts`.
