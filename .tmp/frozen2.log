@@ -1,6 +1,0 @@
-control (nothing hidden, two frames apart): 1 px changed  [815,679,1,1]
-05-ship-oak                        changed=    7267 bbox=[693,310,503,404] mean=156.7
-09-ship-rigging                    changed=    6371 bbox=[281,10,915,709] mean=47.3
-10-ship-sail-cloth                 changed=   57366 bbox=[7,4,1186,708] mean=130.9
-
-done -> /tmp/frozen2 
