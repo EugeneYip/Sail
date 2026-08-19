@@ -288,3 +288,72 @@ when interrupted. I had mis-routed this to the ship agent; it was VFX's all alon
 - Sails read flat and pale — closer to bent planes than loaded cloth. Camber
   shaping, cloth translucency and the woven sheen still need work.
 - Composition: the ship sits right of centre and grazes the right frame edge.
+
+## 11. Ocean perf resolved; bottleneck has moved (2026-08-18 night)
+
+**`upd:ocean` 18.9 ms -> 1.3-1.5 ms**, verified, with **no visual cost** — the
+render path was untouched and only the CPU physics mirror was approximated.
+`solveSpectrum` (2.27 ms) and `cpu.setParams` (2.2 ms) had been running *every
+frame* instead of on their documented rebake thresholds.
+
+CPU-vs-GPU agreement after the change (`debugCompare`, 4096 points):
+
+| scene | GPU rms | CPU rms | rms diff | correlation |
+|---|---|---|---|---|
+| noon | 0.4104 m | 0.4040 m | **5.4 cm** (2.7% of Hs) | 0.996 |
+| storm | 1.4698 m | 1.4751 m | **12.4 cm** (1.9% of Hs) | 0.997 |
+
+**The bottleneck has moved.** All `upd:*` modules now sum to about 5 ms. The
+remaining cost is in post/sky/core.
+
+**Caveat on every timing in this section:** the machine sat at load average
+130-300 for the whole session with several agents running their own headless
+Chromium and `tsc`. Wall-clock frame time and any ablation done under that load
+is unreliable — one ablation made the frame *slower* by removing the ship. Trust
+`upd:*` and GPU-timer numbers; re-measure frame time on a quiet machine.
+
+## 12. Why the storm sea rendered as a flat slab
+
+Worth recording because it is a class of bug, not a one-off. Under heavy overcast
+`uSkyColor` (0.284, 0.272, 0.258) and `uFogColor` (0.303, 0.320, 0.383) land
+within 10% of each other, so the reflected sky is the same grey in every
+direction, and the body term's own `N.y` factor varies only 1.8% across the whole
+slope range. **Nothing in the water shader responded to the surface normal.** A
+Force 9 gale therefore shaded as featureless concrete. Noon looked fine only
+because its sky actually has a gradient.
+
+Fixed with nine changes (wetness roughness double-count, reflection over-blur,
+crest/trough sky occlusion written symmetrically about 1.0 so far water is exactly
+unmodulated, whitecap ramp width, wake foam headroom, a foam threshold that
+disagreed between `Foam.ts` and the shader, bounded foam accumulation via
+max-blend rather than a runaway rate integral, persistent buffer no longer
+suppressing live foam, and the wake anchored to VFX's published centre).
+Storm went from an effective auto-fail to a real gale with wind-aligned whitecap
+streaking; measured whitecap coverage 0.41 -> 0.18 against Monahan's 0.145.
+
+## 13. Two verification-tool bugs — check your instruments before your code
+
+Both were found inside agents' own measurement tools, and both produced
+confident, wrong answers:
+
+1. `bilinear()` returned a shared module-level scratch array, so two sample
+   results aliased.
+2. **Reading a HalfFloat render target into a `Float32Array` returns all zeros
+   and does NOT throw.** A foam probe reported "the buffer is empty" in both
+   scenes; decoding the raw halves showed storm was actually at 41%.
+
+If a measurement says something is exactly zero or exactly empty, verify the
+instrument before believing it.
+
+## 14. The stray waterline line is still unattributed
+
+Ruled out empirically, not by reasoning:
+- **Not the ocean clipmap** — the ocean agent confirmed it has no line primitives.
+- **Not the ship transform** — probed exact (see section 9).
+- **Not VFX geometry** — it survives `wakeStrength = 0` *and* hiding every
+  `vfx-*` mesh.
+
+It now reads as a hard **bright** hairline in storm and golden hour. It has been
+mis-routed twice (once by me to the ship agent, once by VFX claiming it as its own
+Kelvin arms). **Do not guess at it again — bisect by disabling scene objects until
+it disappears, then report which one.**

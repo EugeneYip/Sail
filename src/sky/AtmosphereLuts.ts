@@ -13,12 +13,25 @@ import { SkyPass, makeLut } from './Pass';
 import { AERIAL_FRAG, MULTISCATTER_FRAG, SKYVIEW_FRAG, TRANSMITTANCE_FRAG } from './shaders/lutPasses';
 
 /**
+ * Refresh thresholds for the sky-view LUT. One unit of drift in any of them
+ * triggers a rebuild; see `updateSkyView`. All four are set well below what is
+ * visible as a step in a smooth sky gradient.
+ */
+/** cos(sun zenith). 0.0015 is about 0.09 deg of sun elevation at the horizon. */
+const SKYVIEW_EPS_SUN_COS = 0.0015;
+/** Camera altitude. 4 m — the deck bobs more than this and the sky does not care. */
+const SKYVIEW_EPS_ALT_KM = 0.004;
+const SKYVIEW_EPS_MIE = 0.01;
+/** Relative change in solar irradiance, which moves fastest around sunset. */
+const SKYVIEW_EPS_IRRADIANCE = 0.004;
+
+/**
  * The four-LUT atmosphere chain from Hillaire 2020.
  *
  *   transmittance  256x64    baked on a turbidity change   (0.15 ms, measured)
  *   multi-scatter  32x32     baked on a turbidity change   (staged, next frame)
- *   sky view       192x108   every frame                   (0.08 ms, measured)
- *   aerial froxels 32x32x16  every 4th frame, 16 draws     (1.2 ms, measured)
+ *   sky view       192x108   on input drift, ~2-30 Hz      (0.83 ms, measured)
+ *   aerial froxels 32x32x16  every 6th frame, 16 draws     (3.05 ms, measured)
  *
  * The two bakes are staged over consecutive frames so a weather transition never
  * shows up as a hitch. Slice count and refresh rate for the froxel volume are
@@ -40,6 +53,13 @@ export class AtmosphereLuts {
   /** 0 = idle, 1 = transmittance queued, 2 = multi-scatter queued. */
   private bakeStage = 0;
   private pendingMieMul = 1;
+  /** Inputs the sky-view LUT currently holds. See `updateSkyView`. */
+  private lastSkyView = {
+    sunZenithCos: NaN,
+    cameraAltKm: NaN,
+    mieMul: NaN,
+    irradiance: new THREE.Vector3(),
+  };
 
   constructor(cloudShadowFallback: THREE.Texture) {
     this.aerial = new THREE.WebGL3DRenderTarget(AERIAL_SIZE, AERIAL_SIZE, AERIAL_SLICES, {
@@ -117,19 +137,55 @@ export class AtmosphereLuts {
     this.stepBake(renderer);
   }
 
+  /**
+   * Rebuild the sky-view LUT, but only when one of its four inputs has actually
+   * moved.
+   *
+   * It is a 192x108 raymarch of the whole atmosphere per texel — measured at
+   * **0.83 ms**, which made it the most expensive thing in the sky module after
+   * the froxel volume, and it was running every single frame to produce a
+   * bit-identical result. Its only inputs are sun elevation, camera altitude,
+   * aerosol and solar irradiance, all of which move slowly.
+   *
+   * A drift budget rather than a fixed period, because the sun's angular rate is
+   * not fixed: under a 60x time warp this still refreshes every frame or two,
+   * and on a becalmed noon it refreshes about twice a second. Each threshold is
+   * set an order of magnitude below what is visible in a smooth gradient, so
+   * the refresh can never read as a step.
+   *
+   * @returns true if the LUT was re-rendered.
+   */
   updateSkyView(
     renderer: THREE.WebGLRenderer,
     sunZenithCos: number,
     cameraAltKm: number,
     sunIrradiance: THREE.Vector3,
     mieMul: number,
-  ): void {
+    force = false,
+  ): boolean {
+    const last = this.lastSkyView;
+    const drift =
+      Math.abs(sunZenithCos - last.sunZenithCos) / SKYVIEW_EPS_SUN_COS +
+      Math.abs(cameraAltKm - last.cameraAltKm) / SKYVIEW_EPS_ALT_KM +
+      Math.abs(mieMul - last.mieMul) / SKYVIEW_EPS_MIE +
+      (Math.abs(sunIrradiance.x - last.irradiance.x) +
+        Math.abs(sunIrradiance.y - last.irradiance.y) +
+        Math.abs(sunIrradiance.z - last.irradiance.z)) /
+        (SKYVIEW_EPS_IRRADIANCE * Math.max(1e-3, sunIrradiance.length()));
+    if (!force && drift < 1) return false;
+
+    last.sunZenithCos = sunZenithCos;
+    last.cameraAltKm = cameraAltKm;
+    last.mieMul = mieMul;
+    last.irradiance.copy(sunIrradiance);
+
     const u = this.skyViewPass.uniforms;
     u.uSunZenithCos.value = sunZenithCos;
     u.uCameraAltKm.value = cameraAltKm;
     (u.uSunIrradiance.value as THREE.Vector3).copy(sunIrradiance);
     u.uMieMul.value = mieMul;
     this.skyViewPass.render(renderer, this.skyView);
+    return true;
   }
 
   updateAerial(

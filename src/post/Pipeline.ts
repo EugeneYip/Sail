@@ -136,7 +136,7 @@ export class Pipeline {
 
     this.prepare = new FullscreenPass('prepare', PREPARE_FRAG, {
       tScene: { value: null },
-      uExposure: { value: 1 },
+      tExposure: { value: null },
       uClampMax: { value: FIREFLY_CLAMP },
     });
 
@@ -190,6 +190,7 @@ export class Pipeline {
       resetHistory: () => {
         this.aa.reset = true;
         this.hasPrevFrame = false;
+        this.exposure.invalidate();
       },
       profile: (frames = 90) => this.startProfile(frames),
       vram: () => ({ total: this.targets.bytes() / 1048576, targets: this.targets.breakdown() }),
@@ -268,7 +269,9 @@ export class Pipeline {
       this.hasPrevFrame = false;
     }
 
-    // 1. exposure for this frame, from the most recent completed readback
+    // 1. CPU-side exposure ESTIMATE, for the HUD and for probes. The value the
+    // frame is actually graded with lives in a 1x1 texture on the GPU and is
+    // never read back — see AutoExposure.
     this.exposure.update(world);
     this.ext.exposure = this.exposure.exposure;
 
@@ -305,19 +308,19 @@ export class Pipeline {
     this.curViewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this.invViewProj.copy(this.curViewProj).invert();
 
-    // 3. metering runs on pre-exposure radiance, so it cannot feed back
-    if (s.autoExposure) {
-      prof.begin('exposure');
-      this.exposure.meter(world, scene);
-      prof.end();
-    }
+    // 3. metering runs on pre-exposure radiance, so it cannot feed back. The
+    // adapt pass inside run() must precede prepare, which samples what it writes.
+    prof.begin('exposure');
+    this.exposure.run(world, scene);
+    prof.end();
+    const exposureTex = this.exposure.texture;
 
     // 4. exposure + firefly clamp
     let cur = this.targets.get('work0', this.width, this.height, 'rgba16f');
     let alt = this.targets.get('work1', this.width, this.height, 'rgba16f');
     prof.begin('prepare');
     this.prepare.uniforms.tScene.value = scene.texture;
-    this.prepare.uniforms.uExposure.value = this.exposure.exposure;
+    this.prepare.uniforms.tExposure.value = exposureTex;
     this.prepare.render(r, cur);
     prof.end();
     let curTex: THREE.Texture = cur.texture;
@@ -348,8 +351,6 @@ export class Pipeline {
 
     // 6. anti-aliasing
     prof.begin(`aa:${s.antialias}`);
-    const historyScale =
-      this.exposure.previous > 1e-6 ? this.exposure.exposure / this.exposure.previous : 1;
     const aaTex = this.aa.render(
       r,
       s,
@@ -358,7 +359,7 @@ export class Pipeline {
       velocityTex,
       alt,
       this.jitter.pixels,
-      historyScale,
+      exposureTex,
     );
     prof.end();
     if (aaTex !== curTex) {
@@ -406,7 +407,7 @@ export class Pipeline {
     const submerged = clamp01(camExt?.underwater ?? 0);
     if (submerged > 0.001 && depthTex) {
       prof.begin('underwater');
-      this.renderUnderwater(world, curTex, depthTex, alt, submerged);
+      this.renderUnderwater(world, curTex, depthTex, alt, submerged, exposureTex);
       prof.end();
       const t = cur;
       cur = alt;
@@ -483,19 +484,21 @@ export class Pipeline {
     depth: THREE.Texture,
     dst: THREE.WebGLRenderTarget,
     amount: number,
+    exposureTex: THREE.Texture,
   ): void {
     const p = this.getUnderwater();
     const u = p.uniforms;
     u.tColor.value = source;
     u.tDepth.value = depth;
+    u.tExposure.value = exposureTex;
     (u.uTexelSize.value as THREE.Vector2).set(1 / this.width, 1 / this.height);
     (u.uDepthRange.value as THREE.Vector2).set(world.camera.near, world.camera.far);
     u.uAmount.value = amount;
     u.uTime.value = world.time.elapsed;
     u.uAspect.value = this.width / this.height;
-    // The medium is lit by whatever is above it, and it is already in exposed
-    // units because everything downstream of `prepare` is.
-    this.scatterColor.copy(world.uniforms.uSkyColor.value).multiplyScalar(0.22 * this.exposure.exposure);
+    // The medium is lit by whatever is above it. Left in scene-linear radiance;
+    // the shader brings it into exposed units from the adaptation texture.
+    this.scatterColor.copy(world.uniforms.uSkyColor.value).multiplyScalar(0.22);
     this.scatterColor.r *= 0.35;
     this.scatterColor.g *= 0.85;
     (u.uScatter.value as THREE.Vector3).set(
@@ -511,6 +514,7 @@ export class Pipeline {
       this.underwater = new FullscreenPass('underwater', UNDERWATER_FRAG, {
         tColor: { value: null },
         tDepth: { value: null },
+        tExposure: { value: null },
         uTexelSize: { value: new THREE.Vector2() },
         uDepthRange: { value: new THREE.Vector2(0.25, 60000) },
         uAmount: { value: 0 },

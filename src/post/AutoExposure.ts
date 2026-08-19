@@ -92,7 +92,7 @@ export class AutoExposure {
 
   /** 1x1 RGBA32F: (adaptedStops, exposure, previousExposure, measuredLog2). */
   get texture(): THREE.Texture {
-    return this.state[this.current].texture;
+    return this.ensureState()[this.current].texture;
   }
 
   private lumPass: FullscreenPass;

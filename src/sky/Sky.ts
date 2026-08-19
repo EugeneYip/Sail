@@ -6,13 +6,20 @@ import { AERIAL_SLICES, AIRGLOW, CLEAR_VISIBILITY_M, KOSCHMIEDER, M_TO_KM } from
 /**
  * Frames between full rebuilds of the aerial-perspective froxel volume. 0 skips
  * it entirely. It is a smooth, purely atmospheric field over tens of kilometres,
- * so 15 Hz is indistinguishable from per-frame even while the camera turns.
+ * so 10 Hz is indistinguishable from per-frame even while the camera turns.
+ *
+ * Measured at **3.05 ms** per rebuild — 16 draws whose cost is pass setup, not
+ * shading, since the whole volume is only 16 k texels. That is by far the
+ * largest single item in the sky module, so the period is what pays for it:
+ * every 6th frame is 0.5 ms/frame amortised. `aerialMatrix` is published with
+ * the volume, so a consumer reprojects into the frustum it was built for and a
+ * stale volume is merely late, never wrong.
  */
 const AERIAL_PERIOD: Record<QualityTier, number> = {
   low: 0,
-  medium: 8,
-  high: 4,
-  ultra: 4,
+  medium: 10,
+  high: 6,
+  ultra: 6,
 };
 import { Clouds } from './Clouds';
 import { EnvProbe } from './EnvProbe';
@@ -228,10 +235,12 @@ export class Sky implements Module {
     // puts the rendered sky on the same scale as `uSkyColor` and `uSunIntensity`.
     const solar = this.radiometry.solarIrradiance;
     const camAltKm = Math.max(0, this.camPos.y) * M_TO_KM;
+    // Rebuilt on input drift rather than every frame; see updateSkyView.
     this.begin();
-    this.luts.updateSkyView(renderer, env.sunDirection.y, camAltKm, solar, mie);
+    if (this.luts.updateSkyView(renderer, env.sunDirection.y, camAltKm, solar, mie)) {
+      this.passCount++;
+    }
     this.end(world, 'sky:skyViewMs');
-    this.passCount++;
 
     // AERIAL PERSPECTIVE. One draw per froxel slice — WebGL2 has no layered
     // rendering, so the slice count IS the draw count, and at 32 slices this
