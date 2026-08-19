@@ -737,3 +737,57 @@ finished. Evidence: an injected 3 s stall reported a longest frame of 6.02 s.
 To finish: run `node .tmp/camdrag.mjs` on a quiet machine (should read 49/49 or
 name what is left), then a capture, then re-read `shots/cam-bow-chase.png` to
 confirm the head rig is inside the frame.
+
+## 24. Camera §B strengthened, and one of my own instruments retracted
+
+**Double-measured.** A second independent probe run reproduced the drag result:
+24/24 for the six player modes, gains 0.87-1.17, two runs agreeing to within ~2%
+per cell. **Drag-up = look-up and drag-right = look-right in all six modes the
+player sails with — measured twice, not inferred.** Yaw range re-confirmed too
+(chase 8.27, helm 7.83, bowsprit 7.84, masthead 7.84 rad).
+
+**RETRACTED: the cinematic view-axis differential was a bad instrument.** Run B
+reported gain 1.11 "correctly signed"; Run 4 gives **1.67**. The flaw is in the
+method, not the noise: the differential assumed the director's own motion is
+*common* to a drag-right window and a drag-left window, but those are two separate
+`enter('cinematic')` calls that land in **different shots at different phases**, so
+there is no shared term to cancel. The +0.77 rad of "common" motion in Run B and
++0.102 in Run 4 are just what those particular window pairs coincidentally shared.
+A second confound: `dYaw` subtracts the ship's heading change, and that model does
+not fit a cinematic shot's aim, so a turning ship injects a further non-common
+error. **Treat any cinematic view-axis number as uninformative and demote that
+assertion to an informational print.**
+
+What replaced it is exact and passed 4/4 at gain 1.00 — the accumulator half is
+director-proof, and `aimOffset` rotates the axis by exactly `lookYaw` by
+construction (`bearing = atan2(dx,-dz) + yawOff`). That also settled an older
+defect: cinematic declared `lookYawLimit = 0` and gave a dragging player **nothing
+at all**.
+
+## 25. The pattern: eight measurement bugs, and they all read as confident answers
+
+This is the most transferable lesson of the project so far. Every one of these
+produced a plausible, confidently-stated number that was wrong:
+
+| # | instrument | failure |
+|---|---|---|
+| 1 | `scripts/capture.mjs` (mine) | wrote PNGs inside the Vite root, so the dev server reloaded between scenes and every scene after the first was captured on an unsettled engine |
+| 2 | `.tmp/crop.mjs` | mixed CSS-percentage and pixel coordinates; every crop was off-register at the wrong magnification |
+| 3 | ocean `bilinear()` | returned a shared module-level scratch array, so two samples aliased |
+| 4 | ocean foam probe | read a HalfFloat target into a `Float32Array`, which returns **all zeros without throwing** — reported "the buffer is empty" when storm was at 41% |
+| 5 | `settings.debug` | enabling `upd:*` stats also enables a synchronous readback costing 117-370 ms every 60 frames, so the profiler perturbed what it measured and faked a "shared stall" across four subsystems |
+| 6 | camera framing probe | measured a merged batch's bounding-box corner sitting beside the lens, where tiny depth yields a colossal NDC (reported -4.506) |
+| 7 | camera orbit probe | a 2.4 s window is ~14 simulated seconds here, and orbit drifts 0.055 rad/s by design, so drift swamped the signal |
+| 8 | camera cinematic differential | assumed a common-mode term that does not exist between two separate shot entries |
+| 9 | physics floating-origin assertion | sampled the phase of a 4 km sawtooth; gave 4083 m then 226 m on identical code |
+
+**Rules that follow, and they are cheap:**
+- If a measurement says something is *exactly* zero or *exactly* empty, suspect the
+  instrument first.
+- Assert that your ablation actually applied. A silent no-op replace is how you
+  "verify" a fix that never ran.
+- Never trust a single run of anything with a periodic or drifting component;
+  run it twice and compare per-cell.
+- Two-sided bands, not one-sided sign checks — a one-sided check passed happily
+  while chase was losing 70% of the drag.
+- Check whether enabling the instrumentation changes the thing being measured.

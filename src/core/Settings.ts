@@ -105,7 +105,14 @@ export const QUALITY_PRESETS: Record<QualityTier, Preset> = {
     shadowMapSize: 2048,
     shadowCascades: 4,
     volumetricClouds: true,
-    cloudSteps: 80,
+    // 56, not 80. Measured by the slope method in `storm` at 1600x900: the
+    // half-res cloud march costs 0.62 ms of fixed pass cost plus 0.054 ms per
+    // step, i.e. 4.96 ms at 80 and 3.6 ms at 56. The steps are distributed
+    // GEOMETRICALLY over the ray's chord, so cutting the count coarsens the FAR
+    // half of a long grazing chord and barely moves the near field — which is
+    // why section 15 measured 80 -> 24 as no visible change at noon. 56 keeps
+    // roughly twice the near-field density of that test and gives back 1.3 ms.
+    cloudSteps: 56,
     screenSpaceReflections: true,
     depthOfField: true,
     motionBlur: true,

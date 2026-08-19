@@ -8,18 +8,21 @@ import { AERIAL_SLICES, AIRGLOW, CLEAR_VISIBILITY_M, KOSCHMIEDER, M_TO_KM } from
  * it entirely. It is a smooth, purely atmospheric field over tens of kilometres,
  * so 10 Hz is indistinguishable from per-frame even while the camera turns.
  *
- * Measured at **3.05 ms** per rebuild — 16 draws whose cost is pass setup, not
- * shading, since the whole volume is only 16 k texels. That is by far the
- * largest single item in the sky module, so the period is what pays for it:
- * every 6th frame is 0.5 ms/frame amortised. `aerialMatrix` is published with
- * the volume, so a consumer reprojects into the frustum it was built for and a
- * stale volume is merely late, never wrong.
+ * Measured at **3.05 ms** per rebuild, independently reconfirmed at 2.80 ms by
+ * the slope method — 16 draws whose cost is pass setup, not shading, since the
+ * whole volume is only 16 k texels. `aerialMatrix` is published with the volume,
+ * so a consumer reprojects into the frustum it was built for and a stale volume
+ * is merely late, never wrong.
+ *
+ * 8, not 6: at 60 fps that is 7.5 Hz against a field whose fastest input is the
+ * sun moving 0.25 deg/s at a 60x time warp, and it hands back 0.16 ms/frame of
+ * amortised cost for nothing visible.
  */
 const AERIAL_PERIOD: Record<QualityTier, number> = {
   low: 0,
   medium: 10,
-  high: 6,
-  ultra: 6,
+  high: 8,
+  ultra: 8,
 };
 import { Clouds } from './Clouds';
 import { EnvProbe } from './EnvProbe';

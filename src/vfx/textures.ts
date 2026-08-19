@@ -421,13 +421,22 @@ export function makeFoamTexture(size = 256): THREE.DataTexture {
       const coarse = fbmS(u * 3, v * 3, sCoarse);
 
       // R — bubble raft at three scales, so it still has structure when the
-      // camera is at the rail rather than dissolving into one flat tone. The
-      // 'k' values are high enough that the cells are fat and the films between
-      // them are thin, which is the proportion real whitewater has.
-      const c1 = cellCore(u * 10, v * 10, 10, raft1, 2.4);
-      const c2 = cellCore(u * 22, v * 22, 22, raft2, 2.9);
-      const c3 = cellCore(u * 46, v * 46, 46, raft3, 3.4);
-      const bubbles = sstep(0.14, 0.78, c1 * 0.46 + c2 * 0.33 + c3 * 0.21);
+      // camera is at the rail rather than dissolving into one flat tone.
+      //
+      // 'k' MUST SCALE WITH THE CELL COUNT. F2 - F1 is measured in tile units,
+      // so its magnitude inside a cell is proportional to the cell SPACING
+      // (~0.3/cells). A fixed k of 2.4 against a 10-cell grid therefore peaked
+      // at about 0.24 — never saturating, so every cell was a soft dome and the
+      // films between them were mid-grey. That is a field of soft round blobs
+      // wearing a Worley costume, and it is why the raft still read as suds
+      // after F1 was replaced by F2 - F1. At k = 1.25 * cells the cells are fat
+      // and flat-topped and the films are thin and dark, which is the proportion
+      // real whitewater has, at every scale.
+      const c1 = cellCore(u * 10, v * 10, 10, raft1, 12.5);
+      const c2 = cellCore(u * 22, v * 22, 22, raft2, 27.5);
+      const c3 = cellCore(u * 46, v * 46, 46, raft3, 57.5);
+      // Steep: a 0.64-wide ramp put a soft gradient back on every cell wall.
+      const bubbles = sstep(0.24, 0.60, c1 * 0.46 + c2 * 0.33 + c3 * 0.21);
 
       // G — filaments, meandered across the flow and thresholded so there is
       // clear water BETWEEN the streaks, then broken up along their length so
