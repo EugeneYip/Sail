@@ -96,6 +96,9 @@ body {
 .ctl-k,
 .speed-u,
 .irons-tag,
+.mini-card,
+.mini-wind-l,
+.modesw-b,
 .chip-l,
 .grp-t,
 .kb-t,
@@ -115,6 +118,7 @@ body {
 .ctl-v,
 .clock,
 .speed,
+.mini-deg,
 .dbg,
 .kb-k kbd,
 .chip-k {
@@ -154,10 +158,18 @@ body {
   transition-duration: 0.18s;
 }
 
-/* Corner falloff. Reads as the lens vignette it sits inside, not as panels. */
+/* Corner falloff. Reads as the lens vignette it sits inside, not as panels.
+   Minimal mode only darkens the one corner it writes in; Pro lights all six
+   because it fills all six. */
 .hud-scrim {
   position: absolute;
   inset: 0;
+  background:
+    radial-gradient(40% 28% at 0% 100%, rgba(var(--shade), 0.4), transparent 72%),
+    radial-gradient(26% 16% at 100% 0%, rgba(var(--shade), 0.3), transparent 76%);
+}
+
+.hud.m-pro .hud-scrim {
   background:
     radial-gradient(56% 30% at 0% 100%, rgba(var(--shade), 0.3), transparent 74%),
     radial-gradient(50% 28% at 100% 100%, rgba(var(--shade), 0.28), transparent 74%),
@@ -165,6 +177,22 @@ body {
     radial-gradient(40% 22% at 100% 0%, rgba(var(--shade), 0.22), transparent 76%),
     linear-gradient(to bottom, rgba(var(--shade), 0.14), transparent 13%),
     linear-gradient(to top, rgba(var(--shade), 0.16), transparent 17%);
+}
+
+/* ------------------------------------------------------------------ *
+ *  mode gating
+ * ------------------------------------------------------------------ */
+
+.hud .pro {
+  display: none;
+}
+
+.hud.m-pro .pro {
+  display: block;
+}
+
+.hud.m-pro .mini {
+  display: none;
 }
 
 .region {
@@ -343,6 +371,82 @@ body {
 
 .irons .pos {
   color: var(--warm);
+}
+
+/* ------------------------------------------------------------------ *
+ *  minimal readout — the default screen
+ * ------------------------------------------------------------------ */
+
+.mini {
+  position: absolute;
+  left: var(--m);
+  bottom: var(--m);
+  contain: layout style;
+  text-shadow:
+    0 0 3px rgba(var(--shade), 0.5),
+    0 0 12px rgba(var(--shade), 0.6),
+    0 1px 2px rgba(var(--shade), 0.4);
+}
+
+.mini-hdg {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-top: 8px;
+}
+
+.mini-deg {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-1);
+}
+
+.mini-card {
+  color: var(--ink-3);
+}
+
+.mini-wind {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 11px;
+}
+
+.mini-wind-g {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.mw-stem {
+  stroke: var(--warm);
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.mw-head {
+  fill: var(--warm);
+}
+
+.mini-wind-l {
+  color: var(--ink-3);
+}
+
+/* The one thing the default screen ever nags about, and only in Pro physics
+   where being in irons is possible at all. */
+.mini-irons {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--warm);
+  margin-top: 9px;
+  opacity: 0;
+  transition: opacity 0.45s;
+}
+
+.mini.irons .mini-irons {
+  opacity: 1;
 }
 
 /* ------------------------------------------------------------------ *
@@ -794,15 +898,207 @@ body {
 
 .dbg {
   display: none;
-  margin: 14px 0 0;
+  position: absolute;
+  left: var(--m);
+  top: var(--mt);
+  margin: 0;
   font-size: 10px;
   line-height: 1.5;
   color: var(--ink-3);
   white-space: pre;
 }
 
+/* Under the clock in Pro, in the empty corner otherwise. */
+.hud.m-pro .dbg {
+  top: calc(var(--mt) + 84px);
+}
+
 .hud.show-dbg .dbg {
   display: block;
+}
+
+/* ------------------------------------------------------------------ *
+ *  mode switch — the only chrome a new player has to find
+ * ------------------------------------------------------------------ */
+
+/* Two words beside the menu rule. A word pair says both "there is another
+   mode" and "you are in this one", which no single icon manages. It rides the
+   HUD's fade, so an idle beauty shot stays empty. */
+.modesw {
+  position: absolute;
+  top: calc(var(--mt) + 10px);
+  right: calc(var(--m) + 38px);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  pointer-events: auto;
+  opacity: 0.9;
+  transition: opacity var(--fade) cubic-bezier(0.4, 0, 0.2, 1);
+  text-shadow:
+    0 0 3px rgba(var(--shade), 0.55),
+    0 0 12px rgba(var(--shade), 0.6),
+    0 1px 2px rgba(var(--shade), 0.4);
+}
+
+.modesw:hover {
+  opacity: 1;
+  transition-duration: 0.25s;
+}
+
+.modesw.faded {
+  opacity: 0;
+}
+
+.modesw.off {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.ui.still .modesw {
+  transition-duration: 0.18s;
+}
+
+.modesw-b {
+  padding: 3px 0 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.25s;
+}
+
+.modesw-b:hover {
+  color: var(--ink-1);
+}
+
+.modesw-b[aria-checked='true'] {
+  color: var(--ink);
+}
+
+.modesw-d {
+  width: 1px;
+  height: 10px;
+  background: var(--ink-4);
+}
+
+/* ------------------------------------------------------------------ *
+ *  touch helm
+ * ------------------------------------------------------------------ */
+
+/* The arrow keys, for a thumb. Only mounted on a device that has one. */
+.touch {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.4s;
+}
+
+.ui.has-touch .touch {
+  display: block;
+}
+
+.touch.off {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* At 0.4 opacity over a dark sea these were right; over sunlit wake foam — which
+   is exactly what is under a thumb in a chase shot — they disappeared, and a
+   control a new player cannot find is not a control. The fix is contrast, not
+   size: a slightly deeper well, a hairline ring so the target has an edge, and
+   a real shadow under the chevron stroke so it never sits white-on-white. */
+.pad {
+  position: absolute;
+  width: 78px;
+  height: 78px;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  opacity: 0.55;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--ink-6);
+  transition: opacity 0.18s, transform 0.18s;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(var(--shade), 0.46) 0%,
+    rgba(var(--shade), 0.34) 52%,
+    rgba(var(--shade), 0.12) 78%,
+    transparent 100%
+  );
+}
+
+.pad.on {
+  opacity: 1;
+  transform: scale(0.93);
+  box-shadow: inset 0 0 0 1px var(--ink-4);
+}
+
+.pad-g {
+  display: block;
+  width: 28px;
+  height: 28px;
+  /* Static, four of them, composited once — not a per-frame cost. */
+  filter: drop-shadow(0 0 3px rgba(var(--shade), 0.9));
+}
+
+.pad-c {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pad-l {
+  left: calc(var(--m) + env(safe-area-inset-left, 0px));
+  bottom: calc(var(--m) + env(safe-area-inset-bottom, 0px));
+}
+
+.pad-r {
+  right: calc(var(--m) + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--m) + env(safe-area-inset-bottom, 0px));
+}
+
+/* Canvas is only a player's problem in Pro, so the sail pair only exists there.
+
+   It used to ride at the right edge, mid-height, where on a phone in Pro it sat
+   straight on top of the wind rose — a control overlapping an instrument. The
+   bottom strip is the one band nothing else claims (every readout is lifted
+   clear of a thumb already), so the pair moves inboard of the starboard helm,
+   still stacked up-over-down like the two keys it stands in for. */
+.pad-sail {
+  display: none;
+  position: absolute;
+  right: calc(var(--m) + 88px + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--m) + env(safe-area-inset-bottom, 0px));
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ui.m-pro .pad-sail {
+  display: flex;
+}
+
+.pad-sail .pad {
+  position: relative;
+  width: 58px;
+  height: 40px;
+  border-radius: 20px;
+}
+
+/* The readouts step up over the left pad rather than sitting under a thumb. */
+.ui.has-touch .mini {
+  bottom: calc(var(--m) + 88px + env(safe-area-inset-bottom, 0px));
+}
+
+.ui.has-touch .r-bot-l,
+.ui.has-touch .r-bot-r {
+  bottom: calc(var(--m) + 88px + env(safe-area-inset-bottom, 0px));
 }
 
 /* ------------------------------------------------------------------ *
@@ -970,6 +1266,15 @@ body {
   font-size: 10.5px;
   color: var(--ink-1);
   white-space: nowrap;
+}
+
+.ctl-note {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-4);
+  margin: -4px 0 14px;
 }
 
 .rng {
@@ -1363,7 +1668,7 @@ body {
 .firstrun {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: 68%;
   transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
@@ -1374,6 +1679,14 @@ body {
   opacity: 0;
   transition: opacity 1.1s ease;
   pointer-events: none;
+  /* This card lives on `.ui`, not inside `.hud`, so it does not inherit the
+     halo — and without it the italic line washes out completely against sunlit
+     wake. Same recipe, one stop stronger, because it has to survive whatever
+     is behind it for its one appearance. */
+  text-shadow:
+    0 0 4px rgba(var(--shade), 0.7),
+    0 0 14px rgba(var(--shade), 0.65),
+    0 1px 2px rgba(var(--shade), 0.5);
 }
 
 .firstrun.on {
@@ -1394,11 +1707,50 @@ body {
   padding: 3px 7px 4px;
   border: 1px solid var(--ink-5);
   border-radius: 2px;
+  min-width: 20px;
   font-size: 9.5px;
   color: var(--ink-1);
   line-height: 1;
   letter-spacing: 0.08em;
+  text-align: center;
   background: rgba(var(--shade), 0.32);
+}
+
+/* The whole first-run tutorial in minimal mode: two keys and one line.
+
+   Centred at 68% height it landed squarely on the ship's hull — the chase
+   camera puts her right about there — so "steer" was set over black planking
+   and gun ports. Drop it to the bottom instead: below the hull, on the same
+   line as the two thumb pads on a phone, which quietly says where they are. */
+.firstrun-min {
+  top: auto;
+  bottom: max(11%, calc(var(--m) + 30px));
+  transform: translateX(-50%);
+  gap: 18px;
+}
+
+.ui.has-touch .firstrun-min {
+  bottom: calc(var(--m) + 96px + env(safe-area-inset-bottom, 0px));
+}
+
+.firstrun-min .chip {
+  gap: 10px;
+}
+
+.chip-g {
+  display: grid;
+  place-items: center;
+  padding: 2px 5px;
+}
+
+.chip-svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+}
+
+.chip-g .pad-c {
+  stroke-width: 1.6;
 }
 
 .chip-l {
@@ -1477,6 +1829,12 @@ body {
   opacity: 1;
 }
 
+/* The toast confirms the mode you just switched to, so it must not appear under
+   the thumb that switched it. */
+.ui.has-touch .toast {
+  bottom: calc(var(--m) + 100px + env(safe-area-inset-bottom, 0px));
+}
+
 /* ------------------------------------------------------------------ *
  *  responsive
  * ------------------------------------------------------------------ */
@@ -1503,6 +1861,17 @@ body {
 
 @media (max-width: 720px) {
   :root { --m: 15px; --mt: 13px; }
+  .modesw { gap: 7px; right: calc(var(--m) + 34px); }
+  .mini-hdg { margin-top: 6px; }
+  .mini-wind { margin-top: 9px; }
+  .mini-irons { font-size: 12.5px; }
+  .pad { width: 72px; height: 72px; }
+  .pad-g { width: 26px; height: 26px; }
+  .pad-sail { right: calc(var(--m) + 80px + env(safe-area-inset-right, 0px)); }
+  .pad-sail .pad { width: 54px; height: 37px; }
+  .ui.has-touch .mini,
+  .ui.has-touch .r-bot-l,
+  .ui.has-touch .r-bot-r { bottom: calc(var(--m) + 80px + env(safe-area-inset-bottom, 0px)); }
   .compass { width: 74vw; height: 60px; }
   .speed { font-size: 30px; }
   .pos { font-size: 15px; }
@@ -1532,6 +1901,8 @@ body {
 @media (max-height: 620px) {
   .chart { display: none; }
   .speedblock { margin-top: 0; }
+  .firstrun { top: 70%; }
+  .pad { width: 66px; height: 66px; }
   .intro-load { margin-top: 26px; }
   .intro-begin { margin-top: 26px; }
 }

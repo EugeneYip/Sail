@@ -13,8 +13,10 @@ export const BINDINGS: BindingGroup[] = [
   {
     title: 'Working the ship',
     items: [
-      { keys: ['A', 'D'], label: 'Helm to port / starboard' },
-      { keys: ['W', 'S'], label: 'Make sail / take in sail' },
+      { keys: ['←', '→'], label: 'Helm to port / starboard' },
+      { keys: ['↑', '↓'], label: 'Make sail / take in sail' },
+      { keys: ['A', 'D'], label: 'Helm, the other hand' },
+      { keys: ['W', 'S'], label: 'Sail, the other hand' },
       { keys: ['Q', 'E'], label: 'Brace the yards' },
     ],
   },
@@ -31,6 +33,7 @@ export const BINDINGS: BindingGroup[] = [
     items: [
       { keys: ['Tab'], label: "Open the ship's book" },
       { keys: ['Esc'], label: 'Close / back' },
+      { keys: ['I'], label: 'Simple / full instruments' },
       { keys: ['H'], label: 'Hide the instruments' },
       { keys: ['P'], label: 'Pause' },
       { keys: ['F2'], label: 'Photo mode' },
@@ -39,10 +42,10 @@ export const BINDINGS: BindingGroup[] = [
   },
 ];
 
-/** The short list shown once, on a first voyage. */
+/** The short list shown once on a first voyage — Pro mode only. */
 export const FIRST_RUN: Binding[] = [
-  { keys: ['A', 'D'], label: 'helm' },
-  { keys: ['W', 'S'], label: 'sail' },
+  { keys: ['←', '→'], label: 'helm' },
+  { keys: ['↑', '↓'], label: 'sail' },
   { keys: ['Q', 'E'], label: 'brace' },
   { keys: ['C'], label: 'camera' },
   { keys: ['Tab'], label: 'settings' },

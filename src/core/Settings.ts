@@ -33,6 +33,9 @@ export function defaultSettings(): Settings {
     targetFps: 60,
     showHud: true,
     debug: false,
+    // Playability first: the default ship is the assisted one. Physics owns
+    // this flag — see `src/physics/Assist.ts` and the note in `Settings`.
+    assist: true,
   };
 }
 

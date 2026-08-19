@@ -11,6 +11,15 @@ import {
   poseToQuaternion,
   setPoseHeading,
 } from './Body';
+import {
+  Assist,
+  ASSIST_HELM_KD,
+  ASSIST_HELM_KP,
+  ASSIST_HYDRO,
+  ASSIST_RUDDER_SLEW_TIME,
+  ASSIST_TOP_SPEED_KNOTS,
+  PRO_HYDRO,
+} from './Assist';
 import { Hydro } from './Hydro';
 import {
   buildHull,
@@ -92,6 +101,19 @@ export interface PhysicsExt {
   sailLevel: number;
   /** Freeze the sea flat and still. Test hook: isolates the ship from the ocean. */
   flatSea: boolean;
+  /**
+   * Handling mode. TRUE (the default) is the assist layer; FALSE is Pro, the
+   * bare measured solver. Writing this also writes `world.settings.assist`, so
+   * the UI can toggle either one and both agree. Safe to flip at any time.
+   */
+  assist: boolean;
+  /** Canvas the player has ordered, 0..1. What the up/down arrows move. */
+  readonly throttle: number;
+  /** Assist speed ceiling on a beam reach in a 10 m/s breeze, knots. */
+  readonly assistTopKnots: number;
+  /** Assist forward force and yaw moment applied last substep, N and N*m. 0 in Pro. */
+  readonly assistDrive: number;
+  readonly assistTurn: number;
   /** Put her on a bearing at a given speed, upright and at rest otherwise. */
   reset(headingDeg: number, knots: number, heelDeg?: number): void;
   /**
@@ -150,6 +172,10 @@ export class ShipDynamics implements Module {
   /** Course the man on the wheel is holding, radians. */
   private helmCourse = 0;
 
+  /** The arcade handling layer. See `Assist.ts`; ON by default. */
+  private readonly assistLayer = new Assist();
+  private assistOn = false;
+
   /** Body offset of the stem at deck level, for the bow-slam accelerometer. */
   private bowRX = 0;
   private bowRY = 0;
@@ -188,6 +214,7 @@ export class ShipDynamics implements Module {
     // irons.
     this.place(heading, 5, 0);
     this.helmCourse = heading;
+    this.setAssist(world.settings.assist !== false);
     this.publish(world);
 
     // A 2200 t hull needs minutes to reach terminal speed, and the capture
@@ -228,6 +255,23 @@ export class ShipDynamics implements Module {
       set flatSea(v: boolean) {
         self.hydro.flatSea = v;
       },
+      get assist() {
+        return self.assistOn;
+      },
+      set assist(v: boolean) {
+        self.setAssist(v);
+        self.world.settings.assist = v;
+      },
+      get throttle() {
+        return self.trim.ordered / Math.max(1, self.world.ship.sails.length);
+      },
+      assistTopKnots: ASSIST_TOP_SPEED_KNOTS,
+      get assistDrive() {
+        return self.assistOn ? self.assistLayer.drive : 0;
+      },
+      get assistTurn() {
+        return self.assistOn ? self.assistLayer.turn : 0;
+      },
       reset: (h, kn, heel) => this.reset(h, kn, heel ?? 0),
       run: (s, dt, rec) => this.run(s, dt, rec ?? false),
     };
@@ -246,8 +290,16 @@ export class ShipDynamics implements Module {
 
   update(world: World): void {
     const t0 = performance.now();
+    // The mode is a setting, so the UI toggle needs no access to physics at all.
+    // Deliberately here and not in `tick()`: `run()` is a measurement hook and
+    // must keep whatever mode the caller asked for.
+    if (world.settings.assist !== this.assistOn) this.setAssist(world.settings.assist);
     this.tick(world, world.time.dt);
     world.stats['physics:ms'] = performance.now() - t0;
+  }
+
+  applySettings(world: World): void {
+    this.setAssist(world.settings.assist !== false);
   }
 
   /* ------------------------------------------------------------------ *
@@ -283,6 +335,7 @@ export class ShipDynamics implements Module {
     // quartermaster holds the ordered course instead of letting her round up —
     // see HELM_KP in constants.ts for why that is not cheating.
     const steer = THREE.MathUtils.clamp(input.steer, -1, 1);
+    const assist = this.assistOn;
     let cmd: number;
     if (Math.abs(steer) > 0.02) {
       cmd = steer;
@@ -290,14 +343,16 @@ export class ShipDynamics implements Module {
     } else {
       // heading rate is -wby, so the derivative term adds wby.
       cmd = THREE.MathUtils.clamp(
-        HELM_KP * angleDelta(ship.heading, this.helmCourse) + HELM_KD * this.wby,
+        (assist ? ASSIST_HELM_KP : HELM_KP) * angleDelta(ship.heading, this.helmCourse) +
+          (assist ? ASSIST_HELM_KD : HELM_KD) * this.wby,
         -1,
         1,
       );
     }
     const target = cmd * RUDDER_MAX;
     ship.rudderTarget = target;
-    const slew = (RUDDER_MAX / RUDDER_SLEW_TIME) * dt;
+    const slew =
+      (RUDDER_MAX / (assist ? ASSIST_RUDDER_SLEW_TIME : RUDDER_SLEW_TIME)) * dt;
     const d = target - this.rudder;
     this.rudder = Math.abs(d) <= slew ? target : this.rudder + Math.sign(d) * slew;
     ship.rudder = this.rudder;
@@ -364,6 +419,21 @@ export class ShipDynamics implements Module {
     );
     // Forward is -Z, so a rig that is drawing shows up as a negative delta.
     this.aeroThrust = -(w.fz - fzHydro);
+
+    // The assist adds its two forces to the SAME wrench, on the same substep,
+    // and they go through the same integrator below. Nothing is special-cased.
+    if (this.assistOn) {
+      const env = world.env;
+      this.assistLayer.apply(
+        w,
+        this.trim.level / Math.max(1, world.ship.sails.length),
+        this.rudder / RUDDER_MAX,
+        wrapPi(env.windBearing - poseHeading(pose)),
+        env.windSpeed * env.gust,
+        -this.vbz,
+        this.hydro.out.waterSpeed,
+      );
+    }
 
     this.integrate(pose, w, h);
   }
@@ -545,7 +615,13 @@ export class ShipDynamics implements Module {
     // she swings 20 deg either side of the wind while she is stuck there.
     const twaAbs = Math.abs(twa);
     const water = this.hydro.out.waterSpeed;
-    if (this.ironsLatch) {
+    // Assist has no no-go zone to be caught in: the drive force does not care
+    // what the yards are doing, so she always answers and always makes way.
+    // Reported honestly rather than suppressed — nothing here is ever latched
+    // true in assist because the condition it describes cannot arise.
+    if (this.assistOn) {
+      this.ironsLatch = false;
+    } else if (this.ironsLatch) {
       this.ironsLatch = twaAbs < 62 * DEG && water < 1.6;
     } else {
       this.ironsLatch = twaAbs < 44 * DEG && (this.aeroThrust <= 0 || water < 0.7);
@@ -601,12 +677,39 @@ export class ShipDynamics implements Module {
     this.ironsLatch = false;
   }
 
+  /**
+   * Select the handling mode. Swapping the hydro tuning struct and the trim
+   * rates is the whole of it — there is no second solver to switch to, and no
+   * state is discarded, so this is safe to flip mid-voyage at any speed.
+   */
+  private setAssist(on: boolean): void {
+    this.assistOn = on;
+    this.hydro.tuning = on ? ASSIST_HYDRO : PRO_HYDRO;
+    this.trim.assist = on;
+  }
+
   private reset(headingDeg: number, knots: number, heelDeg: number): void {
     this.place(headingDeg * DEG, fromKnots(knots), heelDeg * DEG);
     this.helmCourse = headingDeg * DEG;
     this.pose.x = 0;
     this.pose.z = 0;
-    this.trim.bias = 0;
+    this.aeroThrust = 0;
+    // Brace the yards for the condition she has just been placed in and drop any
+    // player bias. `run()` must be a pure function of (pose, rig, weather, dt)
+    // for the acceptance tests to mean anything, and the yards are lagged state
+    // that used to survive a reset.
+    this.aero.reference(this.world.env, this.pose, this.vbx, this.vbz);
+    this.trim.reset(
+      this.world.ship.sails,
+      this.aero.refX,
+      this.aero.refZ,
+      this.aero.refSpeed,
+    );
+    // A reset is a MEASUREMENT hook, and Pro is the calibrated ship, so it
+    // always lands in Pro mode. `scripts/assist-test.mjs` sets `px.assist =
+    // true` after each of its resets; `scripts/physics-test.mjs` therefore
+    // keeps measuring the Pro ship without knowing the assist exists.
+    this.setAssist(false);
     this.publish(this.world);
   }
 

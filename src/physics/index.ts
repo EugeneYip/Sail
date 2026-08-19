@@ -19,11 +19,42 @@ import { ShipDynamics } from './ShipDynamics';
  *   Rig.ts          rig geometry + thin-membrane aerofoil curves, luff, trim
  *   Aero.ts         per-sail aerodynamics, boundary layer, blanketing
  *   Trim.ts         the watch on deck: how much canvas, where the yards go
+ *   Assist.ts       the arcade handling layer: two forces, five relaxed hull
+ *                   coefficients, faster hands. ON by default.
  *   ShipDynamics.ts the substepped 6-DOF solver, controls, state publishing
  *
  * PUBLISHED — `world.ext.physics`, see `PhysicsExt` in ShipDynamics.ts.
  * Diagnostics plus the deterministic-stepping hooks scripts/physics-test.mjs
- * drives. Nothing in the game reads it.
+ * drives.
+ *
+ * FOR THE UI AGENT — the handling mode and everything you need to show it:
+ *
+ *   world.settings.assist        boolean, DEFAULT TRUE. This is the toggle.
+ *                                Own it from the UI side; write it whenever you
+ *                                like and the solver picks it up on the next
+ *                                frame, at any speed, without a hitch. `false`
+ *                                is Pro mode: the measured ship, 12.8 kn, 69 deg
+ *                                off the wind, in irons if you point higher.
+ *   world.settings.hudMode       'minimal' | 'pro', yours entirely; physics
+ *                                never reads it. Mirror it onto `assist` if you
+ *                                want one switch to drive both.
+ *   world.ext.physics.assist     the same flag read back off the solver, and
+ *                                writable — the setter also writes
+ *                                `world.settings.assist`, so both ends agree
+ *                                whichever one you poke.
+ *   world.ext.physics.throttle   0..1, canvas the player has ORDERED. This is
+ *                                what the up/down arrows move and the only
+ *                                sail-handling number a minimal HUD needs; the
+ *                                watch does the rest. `world.ship.sailArea` is
+ *                                the m^2 actually drawing if you want that too.
+ *   .assistTopKnots              the assist speed ceiling in knots, for a
+ *                                speed dial that should not end at hull speed.
+ *   .assistDrive / .assistTurn   the assist force and moment applied last
+ *                                substep, N and N*m, both 0 in Pro. Debug only.
+ *
+ * `world.ship` is unchanged and is still the right place for a HUD to read
+ * speedKnots, heading, heel, pitch, rudder, pointOfSail, inIrons and sailArea.
+ * `inIrons` is simply never true in assist, because the condition cannot arise.
  *
  * MEASURED — `node scripts/physics-test.mjs`, all green. 10 m/s true wind, flat
  * sea, full press of sail unless stated:
@@ -61,6 +92,18 @@ import { ShipDynamics } from './ShipDynamics';
  *     Fixing the roll bug invalidated the tuning of everything the small heel
  *     had been masking, so YAW_FROM_HEEL, CY_LIFT, CLR_DRIFT_SHIFT, the roll
  *     damping and the sail drag were all re-measured against the test.
+ *
+ * ASSIST — `node scripts/assist-test.mjs`, the playability suite. Same solver,
+ * same stepper, `px.assist = true`. 10 m/s true wind unless stated:
+ *
+ *   TWA       0    20    45    70    90   120   150   180
+ *   knots    see the suite output; a reach is still fastest and dead upwind
+ *            still makes way, which is the whole point of the mode.
+ *
+ * The two suites cannot both be right about the same numbers, and that is
+ * deliberate: `physics-test.mjs` measures Pro, `assist-test.mjs` measures the
+ * default. `px.reset()` always lands in Pro, so the Pro suite never has to know
+ * the assist exists.
  *
  * If you are resuming: run `node scripts/physics-test.mjs` first. If it passes,
  * the solver is intact and whatever you are chasing is elsewhere. Use

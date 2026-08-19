@@ -4,6 +4,17 @@ import type { InputState, Module, World } from '../types';
 /**
  * Keyboard + pointer input, smoothed into analogue axes so the ship never
  * receives a step input. Also owns pointer-lock free-look.
+ *
+ * THE ARROW KEYS ARE THE WHOLE GAME. Left/right put the wheel over; up/down
+ * are the throttle — more canvas, less canvas — which in assist mode is all the
+ * sail handling there is, because the watch braces the yards and reefs on its
+ * own (`physics/Trim.ts`). WASD is the same four axes for players who expect
+ * it, and Q/E braces the yards by hand for anyone who wants to. Nothing else is
+ * needed to sail.
+ *
+ * In assist mode the axes are also quicker to answer: half a second of ramp on
+ * the helm is most of what makes the Pro ship feel like it is ignoring you, and
+ * it is not the part of the ship's mass anyone enjoys.
  */
 export class InputSystem implements Module {
   readonly name = 'input';
@@ -80,7 +91,8 @@ export class InputSystem implements Module {
     const trimIn = (this.held('w') || this.held('arrowup') ? 1 : 0) + (this.held('s') || this.held('arrowdown') ? -1 : 0);
     const braceIn = (this.held('q') ? -1 : 0) + (this.held('e') ? 1 : 0);
 
-    this.rawSteer = approach(this.rawSteer, steerIn, dt, steerIn === 0 ? 3.4 : 2.1);
+    const attack = world.settings.assist ? ASSIST_STEER_ATTACK : STEER_ATTACK;
+    this.rawSteer = approach(this.rawSteer, steerIn, dt, steerIn === 0 ? STEER_RELEASE : attack);
     this.rawTrim = approach(this.rawTrim, trimIn, dt, 8);
     this.rawBrace = approach(this.rawBrace, braceIn, dt, 6);
 
@@ -123,6 +135,12 @@ export class InputSystem implements Module {
     return t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName);
   }
 }
+
+/** Helm ramp rates, 1/s. Assist puts the wheel over in a third of the time. */
+const STEER_ATTACK = 2.1;
+const ASSIST_STEER_ATTACK = 6.5;
+/** Coming off the key is always quicker than going on: she wants to run straight. */
+const STEER_RELEASE = 3.4;
 
 const GAME_KEYS = new Set([
   'w', 'a', 's', 'd', 'q', 'e', 'c', 'r', 'f', 'v', 'g', 'h', 'x', 'z',

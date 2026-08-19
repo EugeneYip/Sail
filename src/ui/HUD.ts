@@ -12,12 +12,16 @@ import { SailPlan } from './instruments/SailPlan';
 import { WindRose } from './instruments/WindRose';
 
 /**
- * The sailing HUD. Six regions around an empty centre.
+ * The Pro instruments. Six regions around an empty centre.
  *
  * Nothing here rebuilds DOM. `updateFast` writes only transforms (compositor
  * work, gated on an epsilon); `updateSlow` runs at 10 Hz and every write goes
  * through the change-gated `setText`/`setAttr` in dom.ts, so a steady readout
  * costs one string compare.
+ *
+ * Built lazily, the first time anyone asks for Pro — a default session never
+ * pays for the compass strip, the chart or the sail plan. The fade, the scrim
+ * and `settings.showHud` belong to the layer above, not to this view.
  */
 export class HudView {
   readonly root: HTMLElement;
@@ -48,12 +52,10 @@ export class HudView {
   private force!: HTMLElement;
 
   private sailCap!: HTMLElement;
-  private debug!: HTMLElement;
   private nominalArea = 1;
 
   constructor(world: World) {
-    this.root = el('div', 'hud');
-    add(this.root, el('div', 'hud-scrim'));
+    this.root = el('div', 'pro');
 
     this.buildTopLeft();
     add(this.root, this.wrap('r-top-c', this.compass.root));
@@ -76,7 +78,6 @@ export class HudView {
     this.clock = add(r, el('div', 'clock'));
     this.watch = add(r, el('div', 'watch'));
     add(r, this.bells.root);
-    this.debug = add(r, el('pre', 'dbg'));
   }
 
   private buildTopRight(): void {
@@ -186,19 +187,4 @@ export class HudView {
     this.chart.updateSlow(world);
   }
 
-  updateDebug(world: World): void {
-    const s = world.stats;
-    let out = `${world.time.fps.toFixed(0)} fps   ${(s.drawCalls ?? 0) | 0} dc   ${((s.triangles ?? 0) / 1e6).toFixed(2)} Mtri   ${(s.programs ?? 0) | 0} prog\n`;
-    out += `scale ${world.settings.renderScale.toFixed(2)}   ${world.size.width}×${world.size.height}\n`;
-    const keys: string[] = [];
-    for (const k in s) if (k.startsWith('upd:')) keys.push(k);
-    keys.sort((a, b) => s[b] - s[a]);
-    for (const k of keys.slice(0, 8)) out += `${k.slice(4).padEnd(9)} ${s[k].toFixed(2)} ms\n`;
-    if (s['ui:ms'] !== undefined) out += `ui(self)  ${s['ui:ms'].toFixed(3)} ms`;
-    setText(this.debug, out);
-  }
-
-  setDebugVisible(on: boolean): void {
-    setClass(this.root, 'show-dbg', on);
-  }
 }

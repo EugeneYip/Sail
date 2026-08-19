@@ -1,20 +1,30 @@
 import type { Module, World } from '../types';
+import { DebugOverlay } from './Debug';
 import { add, el, setClass, setText } from './dom';
 import { HudView } from './HUD';
+import { MiniHud } from './MiniHud';
+import { type HudMode, readExternalMode, writeExternalMode } from './mode';
+import { ModeSwitch } from './ModeSwitch';
 import { PhotoMode } from './PhotoMode';
 import { saveCanvasPng } from './screenshot';
 import { SettingsPanel } from './SettingsPanel';
 import { FirstRunCard, Title } from './Title';
+import { TouchControls } from './TouchControls';
 
 /**
  * The one UI module. Owns the DOM, the key bindings, the idle fade and the
  * update rates.
  *
+ * Two modes share one root, one scrim and one fade. `minimal` is the default —
+ * speed, heading, wind, and the rest of the frame left alone. `pro` is the full
+ * instrument set, built the first time it is asked for so a default session
+ * never pays for a compass strip it will not draw.
+ *
  * Rate plan, per frame at 60 fps:
- *   every frame  — four transform attributes (compass strip, wind needles,
- *                  clinometer, chart glyph), each gated on an epsilon
- *   10 Hz        — every text readout and the sail plan, change-gated
- *    5 Hz        — the chart track and the debug overlay
+ *   every frame  — one transform in minimal (the wind arrow), four in Pro,
+ *                  each gated on an epsilon
+ *   10 Hz        — every text readout, change-gated
+ *    5 Hz        — the chart track, the mode bridge and the debug overlay
  *    4 Hz        — settings-panel sync, only while it is open
  * Measured cost lands in `world.stats['ui:ms']` whether or not debug is on.
  */
@@ -27,7 +37,12 @@ export class UiLayer implements Module {
   readonly name = 'ui';
 
   private root!: HTMLElement;
-  private hud!: HudView;
+  private hudRoot!: HTMLElement;
+  private mini!: MiniHud;
+  private hud: HudView | null = null;
+  private dbg!: DebugOverlay;
+  private modeSw!: ModeSwitch;
+  private touch!: TouchControls;
   private title!: Title;
   private firstRun!: FirstRunCard;
   private panel!: SettingsPanel;
@@ -35,6 +50,8 @@ export class UiLayer implements Module {
   private pauseEl!: HTMLElement;
   private toastEl!: HTMLElement;
 
+  private mode: HudMode = 'minimal';
+  private lastExternal: HudMode | null = null;
   private lastActivity = 0;
   private slowAt = 0;
   private chartAt = 0;
@@ -45,7 +62,10 @@ export class UiLayer implements Module {
   private focusInUi = false;
   private uiMs = 0;
   private detach: Array<() => void> = [];
-  private extState = { paused: false, hudVisible: true, panelOpen: false, photoMode: false };
+  private extState = {
+    paused: false, hudVisible: true, panelOpen: false, photoMode: false,
+    mode: 'minimal' as HudMode, touch: false,
+  };
 
   init(world: World): void {
     const host = document.getElementById('ui-root');
@@ -59,8 +79,12 @@ export class UiLayer implements Module {
       setClass(this.root, 'still', true);
     }
 
-    this.hud = new HudView(world);
-    add(this.root, this.hud.root);
+    this.hudRoot = add(this.root, el('div', 'hud'));
+    add(this.hudRoot, el('div', 'hud-scrim'));
+    this.mini = new MiniHud();
+    add(this.hudRoot, this.mini.root);
+    this.dbg = new DebugOverlay();
+    add(this.hudRoot, this.dbg.root);
 
     this.panel = new SettingsPanel(world);
     add(this.root, this.panel.root);
@@ -68,11 +92,25 @@ export class UiLayer implements Module {
     this.photo = new PhotoMode(world);
     add(this.root, this.photo.root);
 
+    this.modeSw = new ModeSwitch();
+    add(this.root, this.modeSw.root);
+    this.modeSw.onPick = (m) => this.setMode(m, world, true);
+
     const menu = add(this.root, el('button', 'menu'));
     menu.type = 'button';
     menu.setAttribute('aria-label', "Open the ship's book");
     for (let i = 0; i < 3; i++) add(menu, el('span'));
+    menu.addEventListener('pointerdown', (e) => e.preventDefault());
     menu.addEventListener('click', () => this.panel.toggleOpen());
+
+    this.touch = new TouchControls();
+    add(this.root, this.touch.root);
+    this.touch.watch(() => {
+      // NOT 'touch' — the layer itself is .touch, and a bare class match on the
+      // root would hit `.touch { display: none }` and hide the entire UI.
+      setClass(this.root, 'has-touch', true);
+      this.extState.touch = true;
+    });
 
     this.pauseEl = add(this.root, el('div', 'pause'));
     add(this.pauseEl, el('div', 'pause-t', 'Paused'));
@@ -90,7 +128,7 @@ export class UiLayer implements Module {
     this.title.onBegin = () => {
       world.cam.mode = 'chase';
       this.lastActivity = performance.now();
-      this.firstRun.show();
+      this.firstRun.show(this.mode, this.touch.active);
     };
 
     this.panel.onPhoto = () => {
@@ -99,12 +137,24 @@ export class UiLayer implements Module {
     };
     this.panel.onShot = () => this.shoot(world);
     this.photo.onShot = () => this.shoot(world);
+    this.panel.getMode = () => this.mode;
+    this.panel.setMode = (m) => this.setMode(m, world, true);
+
+    // A persisted choice is the player's; the handling layer's flag is only
+    // consulted when there is no choice on record yet.
+    this.applyMode(world.settings.hudMode ?? readExternalMode(world) ?? 'minimal', world);
+    writeExternalMode(world, this.mode);
+    this.lastExternal = readExternalMode(world);
 
     this.bindKeys(world);
     this.bindActivity();
 
     this.detach.push(world.bus.on('capture:scene', () => this.enterCaptureMode()));
     this.detach.push(world.bus.on('capture:focusIsland', () => this.enterCaptureMode()));
+    this.detach.push(world.bus.on('settings:changed', () => {
+      const want = world.settings.hudMode;
+      if (want && want !== this.mode) this.applyMode(want, world);
+    }));
 
     world.ext.ui = this.extState;
     this.lastActivity = performance.now();
@@ -142,27 +192,36 @@ export class UiLayer implements Module {
 
     const visible = s.showHud && !this.hudOff && !this.photo.active && !this.title.active;
     const idle = !this.captureMode && !this.panel.isOpen && t0 - this.lastActivity > IDLE_MS;
-    setClass(this.hud.root, 'off', !visible);
-    setClass(this.hud.root, 'faded', visible && idle);
+    setClass(this.hudRoot, 'off', !visible);
+    setClass(this.hudRoot, 'faded', visible && idle);
+    setClass(this.modeSw.root, 'off', !visible);
+    setClass(this.modeSw.root, 'faded', visible && idle);
+    // The helm is not an instrument: hiding the readouts must not strand a
+    // player who has no keyboard to press H with.
+    setClass(this.touch.root, 'off', this.title.active || this.photo.active || this.paused);
+    setClass(this.hudRoot, 'show-dbg', s.debug);
     this.extState.hudVisible = visible && !idle;
     this.extState.paused = this.paused;
     this.extState.panelOpen = this.panel.isOpen;
     this.extState.photoMode = this.photo.active;
 
     if (visible && !idle) {
-      this.hud.updateFast(world);
+      const pro = this.mode === 'pro' && this.hud;
+      if (pro) this.hud!.updateFast(world);
+      else this.mini.updateFast(world);
 
       if (t0 - this.slowAt > SLOW_MS) {
         this.slowAt = t0;
-        this.hud.updateSlow(world);
-        if (s.debug) this.hud.updateDebug(world);
+        if (pro) this.hud!.updateSlow(world);
+        else this.mini.updateSlow(world);
+        if (s.debug) this.dbg.update(world);
       }
       if (t0 - this.chartAt > CHART_MS) {
         this.chartAt = t0;
-        this.hud.updateChart(world);
+        if (pro) this.hud!.updateChart(world);
+        this.syncExternalMode(world);
       }
     }
-    this.hud.setDebugVisible(s.debug);
 
     if (this.panel.isOpen) this.panel.update(t0);
     this.photo.applyOverrides(world);
@@ -180,7 +239,49 @@ export class UiLayer implements Module {
   dispose(): void {
     for (const d of this.detach) d();
     this.detach.length = 0;
+    this.touch.dispose();
     this.root.remove();
+  }
+
+  /* ---------------------------------------------------------------- *
+   *  mode
+   * ---------------------------------------------------------------- */
+
+  /** Change the mode and tell everyone else. */
+  private setMode(mode: HudMode, world: World, announce: boolean): void {
+    if (mode === this.mode) return;
+    this.applyMode(mode, world);
+    writeExternalMode(world, mode);
+    this.lastExternal = readExternalMode(world);
+    // Persists the choice and lets the handling layer re-read it.
+    world.bus.emit('settings:changed');
+    if (announce) {
+      this.toast(mode === 'pro' ? 'full instruments — I for simple' : 'simple instruments — I for full');
+    }
+  }
+
+  /** Change the mode without broadcasting — used when someone else set it. */
+  private applyMode(mode: HudMode, world: World): void {
+    this.mode = mode;
+    world.settings.hudMode = mode;
+    if (mode === 'pro' && !this.hud) {
+      this.hud = new HudView(world);
+      add(this.hudRoot, this.hud.root);
+    }
+    setClass(this.hudRoot, 'm-pro', mode === 'pro');
+    setClass(this.root, 'm-pro', mode === 'pro');
+    this.modeSw.set(mode);
+    this.extState.mode = mode;
+    this.slowAt = 0;
+    this.chartAt = 0;
+  }
+
+  /** 5 Hz: adopt a mode the handling layer changed under us. */
+  private syncExternalMode(world: World): void {
+    const ext = readExternalMode(world);
+    if (!ext || ext === this.lastExternal) return;
+    this.lastExternal = ext;
+    if (ext !== this.mode) this.applyMode(ext, world);
   }
 
   /* ---------------------------------------------------------------- *
@@ -189,7 +290,8 @@ export class UiLayer implements Module {
 
   private bindKeys(world: World): void {
     const onKeyDown = (e: KeyboardEvent): void => {
-      const inUi = this.root.contains(e.target as Node);
+      const t = e.target;
+      const inUi = t instanceof Node && this.root.contains(t);
       // A keystroke aimed at a control must never reach the helm. InputSystem
       // listens on window in the bubble phase, so stopping here is enough.
       if (inUi) e.stopPropagation();
@@ -219,6 +321,13 @@ export class UiLayer implements Module {
           if (this.hudOff) this.toast('instruments stowed — H to bring them back');
           break;
         }
+
+        case 'i':
+        case 'I':
+          if (inUi || this.title.active) return;
+          e.stopPropagation();
+          this.setMode(this.mode === 'pro' ? 'minimal' : 'pro', world, true);
+          break;
 
         case 'p':
         case 'P':
@@ -257,7 +366,8 @@ export class UiLayer implements Module {
     };
 
     const onKeyUp = (e: KeyboardEvent): void => {
-      if (this.root.contains(e.target as Node)) e.stopPropagation();
+      const t = e.target;
+      if (t instanceof Node && this.root.contains(t)) e.stopPropagation();
     };
 
     addEventListener('keydown', onKeyDown, { capture: true });

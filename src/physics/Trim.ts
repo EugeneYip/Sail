@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { InputState, SailState } from '../types';
 import { clamp01, smoothstep } from '../util/math';
+import { ASSIST_BIAS_DECAY_TIME, ASSIST_HAND_RATE } from './Assist';
 import {
   BRACE_MAX,
   BRACE_SLEW_TIME,
@@ -114,6 +115,40 @@ export class SailTrim {
   cap = 0;
   /** Player brace offset, radians, decaying back to the watch's trim. */
   bias = 0;
+  /**
+   * Assist mode: the watch works the ship `ASSIST_HAND_RATE` times faster.
+   * Every rate below is still rate-limited in real seconds — a yard still takes
+   * 4 s to come round rather than snapping — so the rig visibly works. What
+   * goes is the half-minute of dead time between an order and anything
+   * happening, which is lag the player experiences as the ship ignoring them.
+   */
+  assist = false;
+
+  /**
+   * Drop any player bias and brace every yard straight to the trim this
+   * apparent wind calls for, with no slew. Only the LAGGED state is touched;
+   * `ordered`, `cap` and each sail's `set` are the caller's, because
+   * `physics-test.mjs` sets them either side of a reset.
+   *
+   * This exists for test isolation. `run()` is supposed to be a pure function of
+   * (pose, rig, weather, dt), and it was not: the yards carried over from
+   * whatever the previous scenario left them at, so the first `run()` after a
+   * different scenario answered differently from the second. That read as a
+   * frame-rate-independence failure and was not one.
+   *
+   * Braced to the SOLVED angle rather than squared, because squaring them is not
+   * a neutral starting state — it is a badly trimmed ship, and in 24 m/s of wind
+   * the heel spike off a square rig makes the watch shorten sail before the
+   * measurement has even begun.
+   */
+  reset(sails: SailState[], wx: number, wz: number, windSpeed: number): void {
+    this.bias = 0;
+    for (let i = 0; i < this.count; i++) {
+      const target = windSpeed > 0.4 ? this.solveBrace(sails[i], i, wx, wz) : 0;
+      this.braceTarget[i] = target;
+      sails[i].brace = sails[i].triangular ? target / SHEET_GAIN : target;
+    }
+  }
 
   get level(): number {
     return Math.min(this.ordered, this.cap);
@@ -157,8 +192,13 @@ export class SailTrim {
     const n = this.count;
 
     /* --- how much canvas ------------------------------------------------- */
+    const hand = this.assist ? ASSIST_HAND_RATE : 1;
     const cmd = THREE.MathUtils.clamp(input.sailTrim, -1, 1);
-    this.ordered = THREE.MathUtils.clamp(this.ordered + cmd * (n / SAIL_LEVEL_TIME) * dt, 0, n);
+    this.ordered = THREE.MathUtils.clamp(
+      this.ordered + cmd * ((n * hand) / SAIL_LEVEL_TIME) * dt,
+      0,
+      n,
+    );
     if (cmd !== 0) this.cap = Math.max(this.cap, this.ordered);
 
     // The watch shortens sail when she is over-pressed and shakes it out again
@@ -179,7 +219,7 @@ export class SailTrim {
     this.cap = THREE.MathUtils.clamp(this.cap, 0, n);
 
     const level = this.level;
-    const setRate = dt / SAIL_SLEW_TIME;
+    const setRate = (dt * hand) / SAIL_SLEW_TIME;
     for (let i = 0; i < n; i++) {
       const want = clamp01(level - this.setRank[i]);
       const s = sails[i];
@@ -188,8 +228,9 @@ export class SailTrim {
     }
 
     /* --- where the yards go ---------------------------------------------- */
-    this.bias += THREE.MathUtils.clamp(input.brace, -1, 1) * (BRACE_MAX / BRACE_SLEW_TIME) * dt;
-    this.bias -= (this.bias * dt) / BIAS_DECAY_TIME;
+    this.bias +=
+      THREE.MathUtils.clamp(input.brace, -1, 1) * ((BRACE_MAX * hand) / BRACE_SLEW_TIME) * dt;
+    this.bias -= (this.bias * dt) / (this.assist ? ASSIST_BIAS_DECAY_TIME : BIAS_DECAY_TIME);
     this.bias = THREE.MathUtils.clamp(this.bias, -BRACE_MAX, BRACE_MAX);
 
     // Below this there is no wind to trim to; hold what we have.
@@ -197,8 +238,8 @@ export class SailTrim {
       for (let i = 0; i < n; i++) this.braceTarget[i] = this.solveBrace(sails[i], i, wx, wz);
     }
 
-    const braceRate = (BRACE_MAX / BRACE_SLEW_TIME) * dt;
-    const sheetRate = (SHEET_MAX / SHEET_GAIN / SHEET_SLEW_TIME) * dt;
+    const braceRate = ((BRACE_MAX * hand) / BRACE_SLEW_TIME) * dt;
+    const sheetRate = ((SHEET_MAX * hand) / SHEET_GAIN / SHEET_SLEW_TIME) * dt;
     for (let i = 0; i < n; i++) {
       const s = sails[i];
       const rate = s.triangular ? sheetRate : braceRate;

@@ -420,3 +420,46 @@ Current, at load ~15 (not idle): noon p25 **16.7 ms** (at the cap), golden p25
 maxima in the *same* storm run. That pattern is one shared stall (GC, or a late
 shader compile) landing wherever it falls — not four independent bugs. Check that
 before optimising your own p95.
+
+## 17. Owner-observed defects, 2026-08-19 — highest priority
+
+The owner played the build and reported five things. Four are rendering defects;
+the fifth is repo structure. A zoomed crop of the starboard bow
+(`orbit` scene, region 780,480 420x270) confirms all four and links two of them.
+
+**A. The "bracket" off the starboard bow is a BUG, not a design feature.**
+A flat grey plank-like slab extends from the bow area out over the water to
+starboard, floating *above* the sea surface, roughly horizontal. It is not a
+cathead (those are small, paired, and sit at deck level) and not the bowsprit
+(that is round, forward, and much higher).
+
+**Strong hypothesis: this slab IS the "stray waterline line" of sections 8/10/14.**
+Seen edge-on from a distance a flat horizontal slab reads exactly as a thin line
+passing through the hull at waterline height and extending to both frame edges —
+which is precisely how it was described. That also explains why it survived
+`wakeStrength = 0` and hiding every `vfx-*` mesh: if the slab is a *separate*
+mesh (a bow-wave sheet, hull-water skirt, or a mis-oriented quad) that is not
+named `vfx-*`, both of those tests would miss it.
+**Bisect by name and by module: log every mesh in the scene with its bounding box,
+find the one whose box is a thin horizontal slab wider than the hull, and report
+which module created it.** Do not reason about it again — it has been
+mis-attributed three times now (to the ship, to the ocean clipmap, and to the
+Kelvin wake arms).
+
+**B. Foam reads as cotton wool.** At close range the bow and stern foam is a mass
+of soft round blobs rather than water. It needs a sharp breaking leading edge,
+directional streaking, and much finer detail near the hull. This is the same
+"scattered blotches, not breaking crests" the ocean agent already flagged.
+
+**C. Horizontal streak lines across the sea, and they flicker.** Clearly visible
+as darker horizontal bands in the mid-distance. The *flickering* is the important
+new information: it means temporal instability, not a static shading artefact.
+Candidates: cascade/mip band boundaries in the ocean normal or displacement
+sampling; specular aliasing that TAA is failing to resolve; or a wake-buffer
+sampling seam. This is separate from defect A.
+
+**D. Materials are too flat when zoomed in.** The hull and deck read as flat
+colour with almost no grain; the sails read as flat cloth. The owner specifically
+asked for deck wood grain and sail fabric weave to hold up under close
+inspection. Procedural albedo/normal/roughness detail needs to survive at close
+range, not just read correctly at 80 m.

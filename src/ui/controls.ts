@@ -175,6 +175,14 @@ export function readout(parent: Element, label: string, get: () => string): Ctl 
   return { el: box, sync };
 }
 
+/** A line of prose under a control — no value, no interaction. */
+export function note(parent: Element, get: () => string): Ctl {
+  const box = add(parent, el('div', 'ctl-note'));
+  const sync = (): void => setText(box, get());
+  sync();
+  return { el: box, sync };
+}
+
 export function group(parent: Element, title: string): HTMLElement {
   const sec = add(parent, el('section', 'grp'));
   add(sec, el('h2', 'grp-t', title));

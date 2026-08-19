@@ -288,6 +288,33 @@ export interface Settings {
   showHud: boolean;
   /** Debug overlays. */
   debug: boolean;
+  /**
+   * How much of the ship the player is asked to run.
+   *
+   * `minimal` (the default) is the arrow-keys-and-nothing-else mode: speed and
+   * heading only, sail trim handled for you. `pro` is the full instrument set
+   * and the bare solver. Optional so a settings blob persisted by an older
+   * build still loads, and so the handling layer can own its own assist flag —
+   * `src/ui/mode.ts` mirrors the two at runtime.
+   */
+  hudMode?: 'minimal' | 'pro';
+  /**
+   * Arcade handling assist. ON by default; this is the flag `src/ui/mode.ts`
+   * probes for, and `minimal` HUD mode means this is true.
+   *
+   * TRUE  — quicker acceleration, a speed ceiling above what the hull can
+   *         physically reach, a much tighter turn that answers even when slow,
+   *         no no-go zone, and fully automatic sail trim, so the arrow keys are
+   *         the whole control scheme. Implemented as two extra forces and five
+   *         relaxed hull coefficients over the SAME 6-DOF solver — see
+   *         `src/physics/Assist.ts`.
+   * FALSE — Pro mode: the measured ship. 12.8 kn, 69 deg off the wind, in irons
+   *         if you point higher, and the yards are your problem.
+   *
+   * Flip it any time, in flight, from either end: `world.settings.assist` or
+   * `world.ext.physics.assist` (the latter writes the former).
+   */
+  assist: boolean;
 }
 
 /* ------------------------------------------------------------------ *

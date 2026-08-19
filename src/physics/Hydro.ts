@@ -3,6 +3,7 @@ import type { IOcean, WaveSample } from '../types';
 import { wetWeight, type Hull, type Hydrostatics, type MassProperties } from './Hull';
 import { foilCoefficients, type Coefficients } from './Rig';
 import { addForceAt, addTorque, type Pose, type Wrench } from './Wrench';
+import { PRO_HYDRO, type HydroTuning } from './Assist';
 import {
   CD_PANEL_NORMAL,
   CG_Y,
@@ -11,13 +12,9 @@ import {
   CLR_DRIFT_SHIFT_MAX,
   CLR_Y,
   CLR_Z,
-  CW_BASE,
   CW_WALL_POWER,
   CY_CROSS,
-  CY_LIFT,
-  DRIFT_RESISTANCE_GAIN,
   FK_GAIN,
-  FN_WALL,
   FORM_FACTOR,
   GRAVITY,
   HEAVE_DAMP,
@@ -37,7 +34,6 @@ import {
   RUDDER_Y,
   RUDDER_Z,
   WETTED_AREA,
-  YAW_DAMP_LIN,
   YAW_DAMP_QUAD,
   YAW_FROM_HEEL,
 } from './constants';
@@ -154,6 +150,15 @@ export class Hydro {
 
   /** Test hook: pretend the sea is dead flat and still. Used by the roll-decay test. */
   flatSea = false;
+
+  /**
+   * The five hull coefficients the assist layer relaxes. `PRO_HYDRO` is
+   * literally the constants, so Pro mode computes exactly what it always did;
+   * ShipDynamics swaps in `ASSIST_HYDRO` when the assist is on. Everything else
+   * in this file — the panel pressure integral, added mass, the friction line,
+   * the damping — is read straight off `constants.ts` in both modes.
+   */
+  tuning: HydroTuning = PRO_HYDRO;
 
   init(hull: Hull, mp: MassProperties, hydrostatics: Hydrostatics): void {
     this.hull = hull;
@@ -403,12 +408,12 @@ export class Hydro {
       const fn = U / Math.sqrt(GRAVITY * LWL);
       // The pole is real but must stay finite: clamp the denominator so the wall
       // is a wall rather than a division by zero.
-      const r = Math.min(fn / FN_WALL, 0.9995);
+      const r = Math.min(fn / this.tuning.fnWall, 0.9995);
       const den = Math.max(1 - Math.pow(r, CW_WALL_POWER), 0.02);
-      const cw = (CW_BASE * fn * fn * fn * fn) / den;
+      const cw = (this.tuning.cwBase * fn * fn * fn * fn) / den;
       resistance = q * WETTED_AREA * (cf * FORM_FACTOR + cw);
       // Sailing sideways drags a much bigger hole through the water.
-      resistance *= 1 + DRIFT_RESISTANCE_GAIN * sb * sb;
+      resistance *= 1 + this.tuning.driftResistanceGain * sb * sb;
 
       // Guard: never let one substep reverse the flow it is opposing.
       const cap = (0.9 * this.mp.mBody.z * U) / dt;
@@ -424,7 +429,7 @@ export class Hydro {
     }
 
     /* --- lateral force --------------------------------------------------- */
-    const cn = CY_LIFT * sb * cb + CY_CROSS * sb * Math.abs(sb);
+    const cn = this.tuning.cyLift * sb * cb + CY_CROSS * sb * Math.abs(sb);
     const side = -q * LATERAL_AREA * cn;
     this.out.sideForce = side;
     // The centre of lateral pressure walks forward as the drift angle grows: the
@@ -441,7 +446,7 @@ export class Hydro {
     addTorque(
       out,
       -(PITCH_DAMP_LIN * wbx + PITCH_DAMP_QUAD * Math.abs(wbx) * wbx),
-      -(YAW_DAMP_LIN * U * wby + YAW_DAMP_QUAD * Math.abs(wby) * wby),
+      -(this.tuning.yawDampLin * U * wby + YAW_DAMP_QUAD * Math.abs(wby) * wby),
       -(ROLL_DAMP_LIN * wbz + ROLL_DAMP_QUAD * Math.abs(wbz) * wbz),
     );
     // Wave-radiation damping in heave, on top of the per-panel normal drag.

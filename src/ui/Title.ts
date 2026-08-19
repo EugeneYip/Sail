@@ -1,6 +1,7 @@
 import type { World } from '../types';
 import { FIRST_RUN } from './bindings';
-import { add, el, setClass, setTransform } from './dom';
+import { add, el, setClass, setTransform, svg, svgRoot } from './dom';
+import type { HudMode } from './mode';
 
 const SEEN_KEY = 'leeward.ui.seen.v1';
 /** The controls card gives up on its own if the player just watches. */
@@ -93,21 +94,22 @@ export class Title {
   }
 }
 
+/**
+ * The whole tutorial: two arrow keys and one line of italic.
+ *
+ * It is built at `show()`, not in the constructor, because what it has to say
+ * depends on the mode the player is actually in and on whether they have a
+ * keyboard at all. It gives up as soon as the helm moves.
+ */
 export class FirstRunCard {
   readonly root: HTMLElement;
   private shown = false;
   private done = false;
+  private built = false;
   private t = 0;
 
   constructor() {
     this.root = el('div', 'firstrun');
-    for (const b of FIRST_RUN) {
-      const chip = add(this.root, el('div', 'chip'));
-      const keys = add(chip, el('span', 'chip-k'));
-      keys.textContent = b.keys.join(' ');
-      add(chip, el('span', 'chip-l', b.label));
-    }
-    add(this.root, el('div', 'chip chip-note', 'take the helm when you are ready'));
   }
 
   get needed(): boolean {
@@ -118,13 +120,45 @@ export class FirstRunCard {
     }
   }
 
-  show(): void {
+  show(mode: HudMode, touch: boolean): void {
     if (this.done || !this.needed) {
       this.done = true;
       return;
     }
+    if (!this.built) {
+      this.built = true;
+      if (mode === 'pro') this.buildPro();
+      else this.buildMinimal(touch);
+    }
     this.shown = true;
     setClass(this.root, 'on', true);
+  }
+
+  private buildMinimal(touch: boolean): void {
+    setClass(this.root, 'firstrun-min', true);
+    const row = add(this.root, el('div', 'chip'));
+    if (touch) {
+      for (const d of ['M15 5 L8.5 12 L15 19', 'M9 5 L15.5 12 L9 19']) {
+        const s = add(add(row, el('span', 'chip-k chip-g')), svgRoot('chip-svg', 24, 24));
+        add(s, svg('path', { d, class: 'pad-c' }));
+      }
+      add(row, el('span', 'chip-l', 'steer'));
+    } else {
+      add(row, el('span', 'chip-k', '←'));
+      add(row, el('span', 'chip-k', '→'));
+      add(row, el('span', 'chip-l', 'steer'));
+    }
+    add(this.root, el('div', 'chip chip-note', 'the watch will see to the sails'));
+  }
+
+  private buildPro(): void {
+    for (const b of FIRST_RUN) {
+      const chip = add(this.root, el('div', 'chip'));
+      const keys = add(chip, el('span', 'chip-k'));
+      keys.textContent = b.keys.join(' ');
+      add(chip, el('span', 'chip-l', b.label));
+    }
+    add(this.root, el('div', 'chip chip-note', 'take the helm when you are ready'));
   }
 
   update(world: World): void {

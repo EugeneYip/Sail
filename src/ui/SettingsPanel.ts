@@ -1,8 +1,9 @@
 import type { CameraModeName, Environment, QualityTier, World } from '../types';
 import { applyQualityPreset, defaultSettings } from '../core/Settings';
 import { BINDINGS } from './bindings';
-import { action, choice, group, readout, slider, toggle, type Ctl } from './controls';
+import { action, choice, group, note, readout, slider, toggle, type Ctl } from './controls';
 import { add, el, setClass } from './dom';
+import type { HudMode } from './mode';
 import {
   beaufortFromSpeed, beaufortName, cardinal, clamp, RAD2DEG,
   seaStateName, shipTime, toKnots, visibilityText,
@@ -27,6 +28,9 @@ export class SettingsPanel {
 
   onPhoto: () => void = () => {};
   onShot: () => void = () => {};
+  /** Owned by the layer — the panel is one of three ways to flip the mode. */
+  getMode: () => HudMode = () => 'minimal';
+  setMode: (mode: HudMode) => void = () => {};
 
   private body: HTMLElement;
   private ctls: Ctl[] = [];
@@ -53,6 +57,7 @@ export class SettingsPanel {
     close.addEventListener('click', () => this.close());
 
     this.body = add(this.root, el('div', 'panel-b'));
+    this.buildSailing();
     this.buildVoyage();
     this.buildPicture();
     this.buildEffects();
@@ -111,6 +116,19 @@ export class SettingsPanel {
   /* ---------------------------------------------------------------- *
    *  groups
    * ---------------------------------------------------------------- */
+
+  private buildSailing(): void {
+    const g = group(this.body, 'Sailing');
+    this.add(choice<HudMode>(g, {
+      label: 'Mode',
+      options: [{ v: 'minimal', t: 'minimal' }, { v: 'pro', t: 'pro' }],
+      get: () => this.getMode(),
+      set: (v) => this.setMode(v),
+    }, this.commitNone));
+    this.add(note(g, () => (this.getMode() === 'pro'
+      ? 'The full instrument set, and the ship as she really sailed — yours to trim, and yours to put in irons.'
+      : 'Speed and heading. The watch trims the sails; you steer with the arrow keys.')));
+  }
 
   private buildVoyage(): void {
     const env = this.world.env;

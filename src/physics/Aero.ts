@@ -91,6 +91,11 @@ export class RigAero {
   refX = 0;
   refZ = 1;
   refSpeed = 0;
+  /** True wind speed at the 10 m reference height, and its body-frame travel
+   * direction in the XZ plane. Set by `reference()`, consumed by `solve()`. */
+  private v10 = 0;
+  private wdx = 0;
+  private wdz = 0;
   /** Sum of |force| this substep, newtons, and the area actually drawing. */
   totalForce = 0;
   drawingArea = 0;
@@ -186,19 +191,14 @@ export class RigAero {
    * Solve the whole rig for one substep and accumulate into `out`.
    * `vb`/`wb` are the body-frame linear and angular velocity of the CG.
    */
-  solve(
-    sails: SailState[],
-    env: Environment,
-    pose: Pose,
-    vbx: number,
-    vby: number,
-    vbz: number,
-    wbx: number,
-    wby: number,
-    wbz: number,
-    dt: number,
-    out: Wrench,
-  ): void {
+  /**
+   * The reference apparent wind at mid-rig height, in the body XZ plane: unit
+   * direction `refX/refZ` plus speed. This is what the trim solver and the
+   * blanketing model both work from, and it needs nothing but the pose and the
+   * ship's velocity — so `ShipDynamics.reset()` can call it on its own to trim
+   * the yards for a condition before a single step has been taken.
+   */
+  reference(env: Environment, pose: Pose, vbx: number, vbz: number): void {
     const m = pose.m;
     const v10 = env.windSpeed * env.gust;
     // True wind travel direction rotated into the body frame (transpose of M).
@@ -208,7 +208,10 @@ export class RigAero {
     const wdx = m[0] * wvx + m[3] * wvy + m[6] * wvz;
     const wdz = m[2] * wvx + m[5] * wvy + m[8] * wvz;
 
-    // Reference apparent wind at mid-rig height, used for trim and blanketing.
+    this.v10 = v10;
+    this.wdx = wdx;
+    this.wdz = wdz;
+
     const vRef = RigAero.windAt(v10, Math.max(2, pose.y + 30));
     let rx = wdx * vRef - vbx;
     let rz = wdz * vRef - vbz;
@@ -223,7 +226,22 @@ export class RigAero {
     this.refX = rx;
     this.refZ = rz;
     this.refSpeed = rlen;
+  }
 
+  solve(
+    sails: SailState[],
+    env: Environment,
+    pose: Pose,
+    vbx: number,
+    vby: number,
+    vbz: number,
+    wbx: number,
+    wby: number,
+    wbz: number,
+    dt: number,
+    out: Wrench,
+  ): void {
+    this.reference(env, pose, vbx, vbz);
     this.blanket(sails);
 
     let total = 0;
@@ -243,15 +261,15 @@ export class RigAero {
 
       // Height of this sail's centre of effort above the sea.
       const h = pose.y + bodyToWorldY(pose, rec.rx, rec.ry, rec.rz);
-      const vw = RigAero.windAt(v10, h) * rec.exposure;
+      const vw = RigAero.windAt(this.v10, h) * rec.exposure;
 
       // Velocity of the sail's centre of effort: the mast head sweeps fast when
       // she rolls, and that sweep is most of the rig's roll damping.
       const vpx = vbx + (wby * rec.rz - wbz * rec.ry);
       const vpz = vbz + (wbx * rec.ry - wby * rec.rx);
 
-      const awx = wdx * vw - vpx;
-      const awz = wdz * vw - vpz;
+      const awx = this.wdx * vw - vpx;
+      const awz = this.wdz * vw - vpz;
       const aw2 = awx * awx + awz * awz;
       if (aw2 < 1e-5) {
         sail.force = 0;
@@ -329,9 +347,9 @@ export class RigAero {
 
     // Windage of hull, masts, yards and furled canvas. In a gale under bare
     // poles this is the only thing driving her, and it is not small.
-    const hw = RigAero.windAt(v10, WINDAGE_Y);
-    const gx = wdx * hw - vbx;
-    const gz = wdz * hw - vbz;
+    const hw = RigAero.windAt(this.v10, WINDAGE_Y);
+    const gx = this.wdx * hw - vbx;
+    const gz = this.wdz * hw - vbz;
     const gs = Math.hypot(gx, gz);
     if (gs > 1e-4) {
       const k = 0.5 * RHO_AIR * WINDAGE_CD * gs;
