@@ -91,7 +91,12 @@ export const QUALITY_PRESETS: Record<QualityTier, Preset> = {
     maxPixelRatio: 2,
     oceanResolution: 512,
     oceanCascades: 4,
-    shadowMapSize: 4096,
+    // 2048, not 4096. The sun's shadow frustum is fitted to the SHIP, not the
+    // camera — half-extent 54 m at ultra — so 2048 already gives 5.3 cm per
+    // texel, finer than a rigging line is thick. 4096 bought no visible detail
+    // and cost 9 ms/frame, because VSM blurs the whole map twice every frame
+    // whatever is in it. See SunLight.blurSamples for the other half of that.
+    shadowMapSize: 2048,
     shadowCascades: 4,
     volumetricClouds: true,
     cloudSteps: 80,

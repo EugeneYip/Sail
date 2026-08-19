@@ -47,7 +47,13 @@ export class SunLight {
     // scales with surface curvature and leaves thin casters alone.
     sun.shadow.bias = -0.00016;
     sun.shadow.normalBias = 0.055;
-    sun.shadow.blurSamples = 8;
+    // VSM blurs the ENTIRE shadow map, twice, every frame, regardless of how
+    // little of it a single ship covers: cost is blurSamples x 2 x mapSize^2.
+    // At 8 taps on a 4096 map that was 268 M fetches a frame and 19 ms, the
+    // largest single item in the whole budget. Six taps across a 2.2-texel
+    // kernel still oversamples the penumbra — the taps land closer together
+    // than one texel — so this is free visually.
+    sun.shadow.blurSamples = 6;
     sun.shadow.radius = 2.2;
     sun.shadow.autoUpdate = true;
     sun.target.position.set(0, 0, 0);

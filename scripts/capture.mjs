@@ -298,6 +298,24 @@ for (const name of sceneNames) {
     { scene, quality: args.quality },
   );
 
+  // Record frame periods across the settle window. Wall-clock "fps" averaged
+  // over a noisy machine is worthless — this session measured the same
+  // unchanged scene at 9 fps and 34 fps twenty minutes apart. Percentiles
+  // separate the engine's real cost (p25/p50) from machine contention (mean,
+  // p95), so report those instead of trusting the average.
+  await page.evaluate(() => {
+    const w = window;
+    w.__periods = [];
+    let last = performance.now();
+    const tick = () => {
+      const now = performance.now();
+      w.__periods.push(now - last);
+      last = now;
+      w.__periodRaf = requestAnimationFrame(tick);
+    };
+    w.__periodRaf = requestAnimationFrame(tick);
+  });
+
   // Let the sim settle: waves need to build, TAA needs to converge, auto
   // exposure needs to adapt, LOD/streaming needs to finish.
   const settleMs = args.settle * 1000;
@@ -310,7 +328,14 @@ for (const name of sceneNames) {
 
   const stats = await page.evaluate(() => {
     const w = window.__leeward.world;
+    const P = (window.__periods ?? []).slice(10).sort((a, b) => a - b);
+    cancelAnimationFrame(window.__periodRaf);
+    const pct = (q) => (P.length ? +P[Math.min(P.length - 1, Math.floor(P.length * q))].toFixed(1) : 0);
     return {
+      p25: pct(0.25),
+      p50: pct(0.5),
+      p95: pct(0.95),
+      frames: P.length,
       fps: Math.round(w.time.fps),
       drawCalls: w.stats.drawCalls ?? 0,
       triangles: w.stats.triangles ?? 0,
@@ -326,11 +351,16 @@ for (const name of sceneNames) {
   await page.screenshot({ path: stage(file), animations: 'allow' });
 
   results.push({ name, label: scene.label, file, fps: lastFps ? Math.round(lastFps) : stats.fps, ...stats });
+  // Headless Chromium caps rAF at 60 Hz, so 16.6 ms IS the floor here and a
+  // p25 at the cap means "as fast as this harness can observe", not "exactly 60".
+  const capped = stats.p25 > 0 && stats.p25 <= 17.2;
   console.log(
-    `[capture] ${name.padEnd(10)} ${String(stats.fps).padStart(3)}fps  ` +
-      `${String(stats.drawCalls).padStart(4)}dc  ` +
-      `${(stats.triangles / 1e6).toFixed(2)}Mtri  ` +
-      `${stats.knots.toFixed(1)}kn  -> ${file}`,
+    `[capture] ${name.padEnd(10)} ` +
+      `p25 ${String(stats.p25).padStart(5)}ms${capped ? '*' : ' '} ` +
+      `p50 ${String(stats.p50).padStart(5)}ms  ` +
+      `p95 ${String(stats.p95).padStart(6)}ms  ` +
+      `${String(stats.drawCalls).padStart(3)}dc  ` +
+      `${(stats.triangles / 1e6).toFixed(2)}Mtri  -> ${file}`,
   );
 }
 
@@ -353,6 +383,8 @@ if (navigations > 1) {
 }
 
 console.log('\nGPU: ' + gpuInfo.renderer + (gpuInfo.float ? ' [float-rt ok]' : ' [NO FLOAT RT]'));
+console.log('* p25 at the 16.6 ms rAF cap — the harness cannot observe faster than 60 Hz.');
+console.log('Trust p25/p50 (engine cost). p95 and any mean are dominated by machine load.');
 if (errors.length) {
   console.error(`\n${errors.length} PAGE ERROR(S):`);
   for (const e of errors.slice(0, 25)) console.error('  ' + e);

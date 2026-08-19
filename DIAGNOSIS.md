@@ -357,3 +357,66 @@ It now reads as a hard **bright** hairline in storm and golden hour. It has been
 mis-routed twice (once by me to the ship agent, once by VFX claiming it as its own
 Kelvin arms). **Do not guess at it again — bisect by disabling scene objects until
 it disappears, then report which one.**
+
+## 15. The frame-rate regression: a synchronous readback, not the clouds
+
+**Root cause: `gl.getBufferSubData` in `AutoExposure.readback` cost 117-156 ms
+per call at 0.3 calls/frame = 38-52 ms/frame.** It is a synchronous IPC
+round-trip to Chrome's GPU process, so its latency tracks machine contention,
+not GPU completion. **A fence can never fix it** — `clientWaitSync` returned
+SATISFIED, `readPixels` into the PBO cost 0.012 ms, and the entire cost was the
+`getBufferSubData` itself. The two-slot PBO design was sound and irrelevant.
+
+Auto-exposure is now GPU-resident: a one-fragment pass adapts into a 1x1
+RGBA32F ping-pong texture that `prepare`, TAA's history rescale and the
+underwater scatter sample directly. No readback in the render path. Visual cost:
+none — same percentile band, same knee, same asymmetric damping, moved into a
+shader.
+
+| | before | after |
+|---|---|---|
+| frame period p50 | 84.9 ms | **18.4 ms** |
+| tick mean / p50 | 43.8 / 21.5 ms | **7.3 / 6.5 ms** |
+| sync GL round-trips | 38-52 ms/frame | **none** |
+| ANGLE fenced warnings | 160-207/run | **0** |
+
+Engine cost is now **CPU 7.3 ms + GPU ~1.9 ms = 9.2 ms** against a 16.6 ms budget.
+
+**Clouds are exonerated.** Budgeted <=2.5 ms, measured **0.4 ms**; `cloudSteps`
+80 -> 24 changed nothing. I had suspected them in section 10 — wrongly.
+
+Also fixed: a bake-loop bug where `requestBake` re-armed stage 1 every frame
+while a bake was in flight, so the transmittance table re-rendered **every frame
+forever** and multi-scatter was **never baked after init**.
+
+## 16. How to measure performance in THIS environment
+
+Three standard methods are unusable here. Do not repeat them:
+
+| method | why it fails |
+|---|---|
+| `gl.finish()` bracketing | drifts 60x — one scene render measured 0.6 ms then 36 ms *in the same loop* |
+| `EXT_disjoint_timer_query_webgl2` (exposed!) | ANGLE-on-Metal returns the whole command buffer's duration for any sub-region; a 1-tap blit "cost" 35 ms and regions summed to 20x the frame |
+| single wall-clock A/B | baselines drifted 65 -> 129 ms between consecutive runs at load 25-215 |
+
+**What works:** the *slope method* for per-pass GPU cost (run a pass K extra
+times/frame, round-robin K so drift decorrelates, take the 35th-percentile frame
+time; noise lands in the intercept, the slope is the marginal cost), and
+**tick/period percentiles** for engine cost. Probes are in `.tmp/slope.mjs`,
+`after.mjs`, `storm.mjs`.
+
+**Headless Chromium caps rAF at 60 Hz.** A stubbed page measures 16.6-16.7 ms
+even at load 163, so 60 fps is the observation ceiling — a p25 at the cap means
+"as fast as this harness can see", not "exactly 60".
+
+**Every raw fps number printed before this section is unreliable** — the same
+unchanged scene measured 9 fps and 34 fps twenty minutes apart. `capture.mjs`
+now reports p25/p50/p95 frame periods instead.
+
+Current, at load ~15 (not idle): noon p25 **16.7 ms** (at the cap), golden p25
+20.2, **storm p25 31.1 ms** — storm is the remaining gap.
+
+**Shared caveat for all owners:** ocean, vfx, sky and weather all show 50-155 ms
+maxima in the *same* storm run. That pattern is one shared stall (GC, or a late
+shader compile) landing wherever it falls — not four independent bugs. Check that
+before optimising your own p95.

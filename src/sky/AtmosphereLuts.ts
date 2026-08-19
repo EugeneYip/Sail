@@ -22,6 +22,8 @@ const SKYVIEW_EPS_SUN_COS = 0.0015;
 /** Camera altitude. 4 m — the deck bobs more than this and the sky does not care. */
 const SKYVIEW_EPS_ALT_KM = 0.004;
 const SKYVIEW_EPS_MIE = 0.01;
+/** Aerosol change that justifies re-baking transmittance + multi-scatter. */
+const BAKE_EPS_MIE = 0.02;
 /** Relative change in solar irradiance, which moves fastest around sunset. */
 const SKYVIEW_EPS_IRRADIANCE = 0.004;
 
@@ -104,9 +106,20 @@ export class AtmosphereLuts {
     });
   }
 
-  /** Queue a rebake if the aerosol column changed materially. */
+  /**
+   * Queue a rebake if the aerosol column changed materially.
+   *
+   * The second test is not redundant. `bakedMieMul` is only written when stage 2
+   * finishes, so a bake that is still in flight would be re-armed to stage 1 on
+   * the very next frame — the transmittance table was re-rendered every frame
+   * forever and the multi-scatter table, which is stage 2, was **never reached**
+   * after init. Once a bake is in flight for essentially this value, let it run.
+   */
   requestBake(mieMul: number, force = false): void {
-    if (!force && Math.abs(mieMul - this.bakedMieMul) < 0.02) return;
+    if (!force && Math.abs(mieMul - this.bakedMieMul) < BAKE_EPS_MIE) return;
+    if (!force && this.bakeStage !== 0 && Math.abs(mieMul - this.pendingMieMul) < BAKE_EPS_MIE) {
+      return;
+    }
     this.pendingMieMul = mieMul;
     this.bakeStage = 1;
   }
