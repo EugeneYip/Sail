@@ -21,6 +21,13 @@ export interface RigOptions {
   mute?: BusName[];
   /** 1 = full voice counts, 0.6 = reduced (low/medium quality tiers). */
   voiceScale?: number;
+  /**
+   * Offline only: route `masterPre` straight to the destination, skipping the
+   * limiter and soft clip. The point is to measure the raw voice sum, because a
+   * limiter that never stops working is itself a distortion source — see
+   * `scripts/audio-test.mjs`.
+   */
+  bypassLimiter?: boolean;
 }
 
 /**
@@ -63,15 +70,24 @@ export class Rig {
     const scale = opts.voiceScale ?? 1;
     const n = (x: number): number => Math.max(2, Math.round(x * scale));
 
-    this.mixer = new Mixer(nodes, buffers, opts.destination ?? ctx.destination, opts.analyser !== false);
+    this.mixer = new Mixer(
+      nodes,
+      buffers,
+      opts.destination ?? ctx.destination,
+      opts.analyser !== false,
+      opts.bypassLimiter === true,
+    );
     const b = this.mixer.buses;
 
     // Three pools, split by family so a gale of sail cracks cannot starve the
     // creaks, and so each pool can use the panning model it deserves.
-    const impacts = new NoisePool(nodes, n(7), buffers.dark, buffers.white, b.sea.in, false, 20);
+    // No pool steals a sounding voice any more (see NoisePool.fire), so the count
+    // is a hard cap on concurrency: too few and wanted events are dropped, never
+    // clipped. `impacts` is the shared one — sea slams, spray, thunder, whales.
+    const impacts = new NoisePool(nodes, n(10), buffers.dark, buffers.white, b.sea.in, false, 20);
     const wood = new NoisePool(nodes, n(12), buffers.dark, buffers.white, b.ship.in, true, 11);
     const canvas = new NoisePool(nodes, n(8), buffers.dark, buffers.white, b.ship.in, false, 26);
-    const tones = new TonePool(nodes, n(5), buffers.white, b.wildlife.in);
+    const tones = new TonePool(nodes, n(6), buffers.white, b.wildlife.in);
 
     this.sea = new Sea(nodes, buffers, b.sea, impacts);
     this.wind = new WindCtor(nodes, buffers, b.wind, workletReady);
@@ -88,15 +104,17 @@ export class Rig {
     const l = ctx.listener;
     if ('positionX' in l) {
       this.listenerRamps = [
-        new Ramp(l.positionX, 0.02, 0.03),
-        new Ramp(l.positionY, 0.02, 0.03),
-        new Ramp(l.positionZ, 0.02, 0.03),
-        new Ramp(l.forwardX, 0.02, 0.004),
-        new Ramp(l.forwardY, 0.02, 0.004),
-        new Ramp(l.forwardZ, 0.02, 0.004),
-        new Ramp(l.upX, 0.05, 0.01),
-        new Ramp(l.upY, 0.05, 0.01),
-        new Ramp(l.upZ, 0.05, 0.01),
+        // tau 0.02 was shorter than one stalled frame, so a late update arrived
+        // as a simultaneous step in every panner gain in the graph.
+        new Ramp(l.positionX, 0.09, 0.03),
+        new Ramp(l.positionY, 0.09, 0.03),
+        new Ramp(l.positionZ, 0.09, 0.03),
+        new Ramp(l.forwardX, 0.09, 0.004),
+        new Ramp(l.forwardY, 0.09, 0.004),
+        new Ramp(l.forwardZ, 0.09, 0.004),
+        new Ramp(l.upX, 0.12, 0.01),
+        new Ramp(l.upY, 0.12, 0.01),
+        new Ramp(l.upZ, 0.12, 0.01),
       ];
       this.legacyListener = null;
     } else {
@@ -138,7 +156,7 @@ export class Rig {
   }
 
   strikeBell(count: number, now: number): void {
-    let t = now + 0.1;
+    let t = now + 0.2;
     for (let i = 0; i < Math.max(1, Math.min(8, count)); i++) {
       this.bell.strikeOne(t, 1);
       t += i % 2 === 0 ? 0.34 : 0.86;

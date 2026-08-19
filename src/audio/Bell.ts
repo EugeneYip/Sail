@@ -2,7 +2,7 @@ import { makeRng } from '../util/math';
 import { ANCHOR, anchorWorld } from './Anchors';
 import type { AudioBuffers } from './Buffers';
 import type { Bus } from './Buses';
-import { dB, Nodes, PanRamp, strike } from './Context';
+import { dB, LEAD_S, Nodes, PanRamp, strike } from './Context';
 import type { SimView } from './Sim';
 
 /**
@@ -18,17 +18,28 @@ import type { SimView } from './Sim';
  * superquint. The perceived strike note is the nominal, an octave above prime.
  */
 const PARTIALS: readonly { ratio: number; gain: number; tau: number }[] = [
-  { ratio: 0.5, gain: 0.5, tau: 5.5 },
-  { ratio: 1.0, gain: 0.75, tau: 3.1 },
-  { ratio: 1.19, gain: 0.42, tau: 1.7 },
-  { ratio: 1.5, gain: 0.3, tau: 1.1 },
-  { ratio: 2.0, gain: 1.0, tau: 2.4 },
-  { ratio: 2.0056, gain: 0.85, tau: 2.2 },
-  { ratio: 2.61, gain: 0.22, tau: 0.45 },
+  { ratio: 0.5, gain: 0.5, tau: 2.7 },
+  { ratio: 1.0, gain: 0.75, tau: 1.9 },
+  { ratio: 1.19, gain: 0.42, tau: 1.2 },
+  { ratio: 1.5, gain: 0.3, tau: 0.8 },
+  { ratio: 2.0, gain: 1.0, tau: 1.6 },
+  { ratio: 2.0056, gain: 0.85, tau: 1.5 },
+  { ratio: 2.61, gain: 0.22, tau: 0.35 },
 ];
+
+/** Longest partial, times a margin: how long a struck voice stays unavailable. */
+const RING_S = 2.7 * 1.15 + 0.05;
 
 /** Prime of the ship's bell, Hz. Strike note is heard an octave up. */
 const BELL_PRIME_HZ = 540;
+
+/**
+ * Five, because the watch is struck in pairs 0.34 s apart with 0.86 s between
+ * pairs, so up to five bells are ringing at once. A sixth strike used to steal a
+ * ringing voice and restart its envelope, which turned eight bells into eight
+ * bells and five cracks.
+ */
+const VOICES = 5;
 
 interface BellVoice {
   oscs: OscillatorNode[];
@@ -44,6 +55,7 @@ export class Bell {
   private readonly pan: PanRamp;
   private cursor = 0;
   private lastHalfHour = -1;
+  private lastNow = 0;
 
   constructor(nodes: Nodes, buffers: AudioBuffers, bus: Bus) {
     const white = nodes.loop(buffers.white, 1.0);
@@ -51,7 +63,7 @@ export class Bell {
     pan.connect(bus.in);
     this.pan = new PanRamp(pan, 0.1);
 
-    for (let v = 0; v < 3; v++) {
+    for (let v = 0; v < VOICES; v++) {
       const out = nodes.gain(1);
       out.connect(pan);
       const oscs: OscillatorNode[] = [];
@@ -76,6 +88,7 @@ export class Bell {
   }
 
   update(sim: SimView, now: number): void {
+    this.lastNow = now;
     this.pan.set(anchorWorld(sim, ANCHOR.belfry), now);
 
     const half = Math.floor(sim.timeOfDay * 2);
@@ -102,7 +115,8 @@ export class Bell {
     }
   }
 
-  strikeOne(t: number, gain: number): void {
+  strikeOne(t0: number, gain: number): void {
+    const t = Math.max(t0, this.lastNow + LEAD_S);
     let best = -1;
     for (let i = 0; i < this.voices.length; i++) {
       const idx = (this.cursor + i) % this.voices.length;
@@ -111,10 +125,11 @@ export class Bell {
         break;
       }
     }
-    if (best < 0) best = this.cursor % this.voices.length;
+    // Drop it rather than restart a ringing voice. See VOICES.
+    if (best < 0) return;
     this.cursor = (best + 1) % this.voices.length;
     const v = this.voices[best];
-    v.busyUntil = t + 6;
+    v.busyUntil = t + RING_S;
 
     // Strike-to-strike variation: never twice the same bell.
     const detune = 1 + (this.rng() - 0.5) * 0.006;

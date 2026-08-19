@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   directionFrom,
   localToWorld,
+  MAX_AXIS_ELEVATION,
   type CameraContext,
   type CameraMode,
   type CameraSolve,
@@ -48,9 +49,16 @@ const SUBJECT_LOST_YAW = 1.05;
 
 export class BowspritMode implements CameraMode {
   readonly name = 'bowsprit';
-  readonly lookYawLimit = 2.44; // 140 deg either side: you can look right forward
-  readonly lookPitchMin = -0.7;
-  readonly lookPitchMax = 1.0;
+  /**
+   * A full turn. The old 140 deg limit was documented as "you can look right
+   * forward" and it was not true: the composed axis is 172 deg from the bow, so
+   * 140 deg of travel left the view 32 deg shy of dead ahead. Sitting on the
+   * jibboom and looking FORWARD over the head rig is the whole reason a player
+   * climbs out here after the first three seconds, and it was unreachable.
+   */
+  readonly lookYawLimit = Math.PI;
+  readonly lookPitchMin = -MAX_AXIS_ELEVATION - BASE_PITCH;
+  readonly lookPitchMax = MAX_AXIS_ELEVATION - BASE_PITCH;
 
   private sunBias = 0;
   private focusBlend = 0;
@@ -71,7 +79,11 @@ export class BowspritMode implements CameraMode {
     out.position.copy(this.eye);
 
     const yaw = frame.heading + BASE_YAW_OFFSET + this.sunBias + ctx.lookYaw;
-    const pitch = BASE_PITCH + ctx.lookPitch + frame.pitch * 0.8;
+    const pitch = THREE.MathUtils.clamp(
+      BASE_PITCH + ctx.lookPitch + frame.pitch * 0.8,
+      -MAX_AXIS_ELEVATION,
+      MAX_AXIS_ELEVATION,
+    );
     directionFrom(yaw, pitch, this.dir);
     out.target.copy(this.eye).addScaledVector(this.dir, 70);
 

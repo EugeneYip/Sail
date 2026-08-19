@@ -165,11 +165,25 @@ async function collision(page) {
       padBox: box(document.querySelector('.pad-l')),
       miniDisplay: mini ? getComputedStyle(mini).display : 'no mini',
       miniBox: box(mini),
-      // What a screen reader / a human would actually read off the screen.
-      visibleText: [...document.querySelectorAll('.mini, .modesw, .firstrun')]
-        .filter((n) => getComputedStyle(n).visibility !== 'hidden' && +getComputedStyle(n).opacity > 0.05)
-        .map((n) => n.textContent.replace(/\s+/g, ' ').trim())
-        .join(' | '),
+      // What a human would actually read off the screen. Walk to the leaves and
+      // multiply opacity down the chain: `textContent` on a container happily
+      // reports the irons nag that is sitting at opacity 0 waiting its turn,
+      // which had this log claiming the default screen was scolding the player.
+      visibleText: (() => {
+        const out = [];
+        const walk = (n, alpha) => {
+          const cs = getComputedStyle(n);
+          const a = alpha * +cs.opacity;
+          if (cs.display === 'none' || cs.visibility === 'hidden' || a <= 0.05) return;
+          let own = '';
+          for (const c of n.childNodes) if (c.nodeType === 3) own += c.nodeValue;
+          own = own.replace(/\s+/g, ' ').trim();
+          if (own) out.push(own);
+          for (const c of n.children) walk(c, a);
+        };
+        for (const root of document.querySelectorAll('.mini, .modesw, .firstrun')) walk(root, 1);
+        return out.join(' / ');
+      })(),
     };
   });
 }
@@ -372,6 +386,46 @@ for (const [label, viewport] of [
     await page.keyboard.up('ArrowRight');
   }
   notes.push(['zoom pass', `${(await uiCost(page)).toFixed(4)} ms`]);
+  await ctx.close();
+}
+
+/* ------------------------------------------------------------------ *
+ *  flat plates — contrast, measured instead of admired
+ * ------------------------------------------------------------------ */
+
+/* The scene is the wrong instrument for a legibility test: the sky is whatever
+   six other agents left it, and the day the ocean renders black is the day a
+   contrast pass reports 17:1 and means nothing. So hide the canvas and put a
+   flat plate behind the chrome — a blown white sky, a hazy noon sky, sunlit
+   foam, and a night sea. Those four numbers are reproducible, and the white one
+   is the worst case that can physically exist. Frames go out at dpr 1 so the
+   measuring script's rectangles land where it thinks they do. */
+{
+  const { ctx, page } = await boot({ viewport: { width: 1600, height: 900 } }, 'flat');
+  await begin(page);
+  await page.addStyleTag({
+    content: '#viewport{visibility:hidden!important}#app{background:var(--plate)!important}',
+  });
+
+  for (const [label, plate] of [
+    ['white', '#ffffff'],
+    ['sky', '#b9c6d2'],
+    ['foam', '#dfe6ea'],
+    ['night', '#060a0f'],
+  ]) {
+    await page.evaluate((c) => document.documentElement.style.setProperty('--plate', c), plate);
+    // Same reason as the zoom pass: a settle is idle time, and idle fades the
+    // HUD out. Hold the helm and wait for the state, never for the clock.
+    await page.keyboard.down('ArrowRight');
+    try {
+      await page.waitForFunction(() => window.__leeward.world.ext.ui?.hudVisible === true, null, { timeout: 60000 });
+      await page.waitForTimeout(1100);
+      await shot(page, `shots/probe-flat-${label}.png`);
+    } catch {
+      errors.push(`[flat-${label}] the HUD never came back up`);
+    }
+    await page.keyboard.up('ArrowRight');
+  }
   await ctx.close();
 }
 

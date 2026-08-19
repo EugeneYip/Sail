@@ -86,10 +86,12 @@ export class Weather {
     this.patterRate.set(0.85 + 0.3 * rain, now);
     this.patterPan.set(anchorWorld(sim, ANCHOR.deck), now);
 
-    // Drips off the rigging, after the rain has had time to wet it.
+    // Drips off the rigging, after the rain has had time to wet it. A drip is a
+    // 1 ms transient through a Q=16 resonator, i.e. a click with a pitch, so the
+    // rate is capped low and the accumulator cannot bank a burst across a stall.
     if (rain > 0.12) {
-      this.dripAccum += (0.6 + 5 * rain) * dt;
-      while (this.dripAccum > 1) {
+      this.dripAccum = Math.min(1.6, this.dripAccum + (0.25 + 1.1 * rain) * dt);
+      if (this.dripAccum > 1) {
         this.dripAccum -= 1;
         this.drip(sim, now);
       }
@@ -100,7 +102,7 @@ export class Weather {
       this.autoTimer -= dt;
       if (this.autoTimer <= 0) {
         this.autoTimer = 9 + this.rng() * 26;
-        this.thunder(600 + this.rng() * 3400, now);
+        this.thunder(600 + this.rng() * 2600, now);
       }
     }
   }
@@ -109,7 +111,7 @@ export class Weather {
     const r = this.rng();
     const p = toWorld(sim, (r - 0.5) * 12, 4.5 + this.rng() * 3, (this.rng() - 0.5) * 40);
     const req = this.wood.begin(now + this.rng() * 0.08);
-    req.gain = dB(-38) * (0.4 + 0.7 * this.rng());
+    req.gain = dB(-44) * (0.4 + 0.7 * this.rng());
     req.low = 0.15;
     req.high = 0.85;
     req.type = 'bandpass';
@@ -119,8 +121,8 @@ export class Weather {
     req.r1f = 900 + 2400 * this.rng();
     req.r1q = 16;
     req.r1db = 13;
-    req.attack = 0.0008;
-    req.decay = 0.03 + 0.05 * this.rng();
+    req.attack = 0.003;
+    req.decay = 0.035 + 0.05 * this.rng();
     req.x = p.x;
     req.y = p.y;
     req.z = p.z;
@@ -132,7 +134,9 @@ export class Weather {
    * pure rumble arriving up to ten seconds late.
    */
   thunder(distance: number, now: number): void {
-    const d = Math.max(60, Math.min(6000, distance));
+    // Capped at 3.5 km: beyond that the flash-to-bang delay reserves pool voices
+    // for ten seconds for a rumble nobody can hear over a gale.
+    const d = Math.max(60, Math.min(3500, distance));
     const delay = d / SOUND_SPEED;
     const near = smoothstep(2600, 200, d);
     const level = dB(-13) / (1 + d / 1100);
@@ -144,7 +148,7 @@ export class Weather {
 
     if (near > 0.02) {
       const c = this.impacts.begin(now + delay);
-      c.gain = level * near * 1.1;
+      c.gain = level * near * 0.8;
       c.low = 0.5;
       c.high = 1;
       c.type = 'bandpass';
@@ -155,7 +159,7 @@ export class Weather {
       c.r1f = 90;
       c.r1q = 1.1;
       c.r1db = 9;
-      c.attack = 0.002;
+      c.attack = 0.006;
       c.decay = 0.35 + 0.5 * near;
       c.x = px;
       c.y = 24;
@@ -163,8 +167,8 @@ export class Weather {
       this.impacts.fire(now);
     }
 
-    // Three overlapping swells: the roll.
-    const rolls = 3;
+    // Two overlapping swells: the roll. Three tied up most of the impact pool.
+    const rolls = 2;
     for (let i = 0; i < rolls; i++) {
       const off = i === 0 ? 0.06 : 0.4 + i * (0.7 + this.rng() * 0.9);
       const w = i === 0 ? 1 : 0.72 - 0.18 * i;

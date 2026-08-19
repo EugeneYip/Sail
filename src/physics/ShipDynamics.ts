@@ -365,6 +365,7 @@ export class ShipDynamics implements Module {
       this.aero.refSpeed,
       poseHeel(this.pose),
       this.rudder / RUDDER_MAX,
+      this.wby,
       dt,
     );
   }

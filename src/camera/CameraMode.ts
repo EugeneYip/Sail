@@ -88,6 +88,18 @@ export interface CameraContext {
    */
   lookYaw: number;
   lookPitch: number;
+  /**
+   * This frame's RAW look deltas, radians, sign-normalised to the contract
+   * above but neither accumulated nor clamped.
+   *
+   * Only an `ownsLook` mode (the fly-cam) should read these; every other mode
+   * wants `lookYaw`/`lookPitch`, which are accumulated, clamped to the mode's
+   * limits and smoothed. They exist because reading `world.input.lookYaw`
+   * directly bypasses the sign normalisation, which is exactly how the fly-cam
+   * ended up the one mode still inverted after the rest were fixed.
+   */
+  lookYawDelta: number;
+  lookPitchDelta: number;
   /** Seconds since this mode was entered. */
   modeTime: number;
   /**
@@ -123,6 +135,25 @@ export interface CameraMode {
   shift?(dx: number, dy: number, dz: number): void;
 }
 
+/**
+ * How close to straight up or down any look axis may get, radians (83 deg).
+ *
+ * For a first-person view this is the ONLY pitch limit needed. The per-mode neck
+ * limits these modes used to carry (+72 deg at the helm, -60 at the masthead)
+ * were taste dressed up as anatomy, and between them they stopped the player
+ * looking at the one thing a tall ship is for: the rig, directly overhead. What
+ * genuinely must not happen is the axis reaching vertical, where the world-up
+ * basis the rig's `lookAt` uses degenerates and the roll snaps through 180 deg.
+ *
+ * A mode whose composed axis is not level should derive its look limits FROM
+ * this and its own base pitch (`MAX_AXIS_ELEVATION - BASE_PITCH` and
+ * `-MAX_AXIS_ELEVATION - BASE_PITCH`) rather than hard-coding a pair. That way
+ * the player can always reach both poles and never accumulates look angle that
+ * does nothing — which is what a limit set too tight and a limit set too loose
+ * respectively feel like.
+ */
+export const MAX_AXIS_ELEVATION = 1.45;
+
 /** Convert a ship-local offset to world space using the filtered attitude. */
 export function localToWorld(
   frame: ShipFrame,
@@ -138,6 +169,9 @@ export function localToWorld(
  * Place a point relative to the follow anchor using only the filtered heading —
  * no heel or pitch. Detached cameras must not inherit the hull's attitude or
  * they inherit its motion too.
+ *
+ * `side` is metres to STARBOARD, `forward` metres toward the bow, `height`
+ * metres above the anchor (which sits at the hull's filtered mean waterline).
  */
 export function anchorRelative(
   frame: ShipFrame,
@@ -153,6 +187,91 @@ export function anchorRelative(
     frame.anchor.y + height,
     frame.anchor.z + r.z * side + f.z * forward,
   );
+}
+
+/**
+ * Place an AIM POINT relative to the ship's actual position.
+ *
+ * The counterpart to `anchorRelative`, and the difference is the whole reason
+ * both exist. `frame.anchor` is heavily filtered — a 1.4 m dead zone and a
+ * 0.55 s spring — which is right for an EYE, because that filtering is what
+ * stops the camera chasing integrator chatter. It is wrong for a TARGET: the
+ * lag is several metres at speed, and a camera on the beam sees that lag
+ * side-on, so the subject sits permanently off-axis. That is what pushed the
+ * jibboom off the right edge of the `orbit` capture (`DIAGNOSIS.md` section 10).
+ *
+ * So: eyes ride the anchor, aim points ride the ship. The height still comes
+ * from the anchor, because the vertical channel is the one place the filtering
+ * is doing visible good — it is what lets the hull rise and fall inside the
+ * frame instead of being pinned to it.
+ */
+export function subjectRelative(
+  frame: ShipFrame,
+  side: number,
+  forward: number,
+  height: number,
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  const f = frame.forward;
+  const r = frame.right;
+  return out.set(
+    frame.mountPos.x + r.x * side + f.x * forward,
+    frame.anchor.y + height,
+    frame.mountPos.z + r.z * side + f.z * forward,
+  );
+}
+
+/**
+ * Elevation of an orbiting eye after free-look pitch, radians above the anchor.
+ *
+ * The composed pose is given as a horizontal `radius` and a `height`; the eye
+ * then rides the sphere through that point, so zero look reproduces the composed
+ * pose EXACTLY and the framing constants stay meaningful. Positive `lookPitch`
+ * tilts the axis up, which lowers the eye (see the sign contract on
+ * `CameraContext`).
+ *
+ * Both bounds are physical, not taste: `minHeight` is how close to the sea the
+ * lens may get before the water clamp would take over anyway, and `maxElevation`
+ * stops short of vertical, where a world-up look-at basis degenerates.
+ */
+export function orbitElevation(
+  radius: number,
+  height: number,
+  lookPitch: number,
+  minHeight: number,
+  maxElevation: number,
+): number {
+  const r = Math.hypot(radius, height) || 1;
+  const floor = Math.asin(THREE.MathUtils.clamp(minHeight / r, -1, 1));
+  return THREE.MathUtils.clamp(
+    Math.atan2(height, radius) - lookPitch,
+    Math.min(floor, maxElevation),
+    maxElevation,
+  );
+}
+
+/**
+ * The pitch the orbit could NOT absorb, to be spent tilting the AXIS instead.
+ *
+ * Without this, free-look pitch simply dies against the sea floor: the player
+ * drags up, the eye stops descending, and nothing further happens — the exact
+ * "invisible wall" the owner objected to on the yaw axis. With it, the look
+ * continues as a pan, so dragging up from a lens already at sea level stands the
+ * rig against the sky, which is what the player was reaching for.
+ *
+ * `maxTilt` is the only limit that matters here and it IS physical: the target
+ * height goes as `tan(tilt)`, so the axis must stop well short of vertical or
+ * the aim point runs to infinity and the world-up look-at basis degenerates.
+ */
+export function orbitAxisTilt(
+  radius: number,
+  height: number,
+  lookPitch: number,
+  elevation: number,
+  maxTilt: number,
+): number {
+  const want = Math.atan2(height, radius) - lookPitch;
+  return THREE.MathUtils.clamp(elevation - want, -maxTilt, maxTilt);
 }
 
 /** Unit direction from a bearing (0 = north = -Z) and an elevation. */

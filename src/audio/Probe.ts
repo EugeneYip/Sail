@@ -38,10 +38,23 @@ export interface ProbeOptions {
   /** Strike the bell this many times, one second in. */
   bell?: number;
   mute?: BusName[];
+  /** Inverse of `mute`: silence every family EXCEPT these. Attribution tool. */
+  only?: BusName[];
   voiceScale?: number;
   /** Drive heel/pitch/heave sinusoidally so the creak machinery actually runs. */
   motion?: number;
+  /**
+   * Simulate main-thread stalls: freeze the driving loop for `ms` every
+   * `everyMs` of simulated time. The frames inside the stall are never called,
+   * so the next frame sees one enormous `dt` and a target that has jumped — the
+   * exact condition under which bunched-up ramps execute as steps.
+   */
+  stall?: { ms: number; everyMs: number };
+  /** Render `masterPre` directly, so the raw voice sum can be measured. */
+  bypassLimiter?: boolean;
 }
+
+const ALL_BUSES: BusName[] = ['sea', 'ship', 'wind', 'wildlife', 'weather', 'music'];
 
 export interface ProbeResult {
   seconds: number;
@@ -58,11 +71,37 @@ export interface ProbeResult {
   dc: number;
   /** Count of NaN / Inf / denormal-flushed samples. Must be 0. */
   nonFinite: number;
+  /**
+   * Audible discontinuities found by `countClicks`. This is the direct measure
+   * of the owner's complaint: a click IS a sample-to-sample jump the recent past
+   * did not predict.
+   */
+  clicks: number;
+  /** Clicks per second of measured audio. */
+  clickRate: number;
+  /** Largest such jump, dBFS. -240 when none was found. */
+  worstJumpDb: number;
+  /** Largest jump / local jump RMS. Under `CLICK_RATIO` by construction. */
+  worstRatio: number;
   liveNodes: number;
   createdNodes: number;
   usesWorklet: boolean;
   /** Wall-clock cost of the driving loop per simulated frame, ms. */
   driveMsPerFrame: number;
+  /**
+   * Smallest lead, in seconds, between any scheduled `AudioParam` event and the
+   * `ctx.currentTime` the frame that scheduled it was given.
+   *
+   * An `OfflineAudioContext` cannot reproduce the bug this catches: online, the
+   * audio thread has already rendered past `currentTime`, so an event scheduled
+   * at `currentTime + 2 ms` lands in the PAST and is applied at the next sample —
+   * turning a 4 ms attack ramp into a step. Offline nothing has been rendered
+   * yet, so the same code sounds perfect and clicks in the game. Measured by
+   * instrumenting the prototype instead, which is exact.
+   */
+  minLeadS: number;
+  /** Number of automation calls seen. 0 means the instrumentation did not run. */
+  paramWrites: number;
 }
 
 const DEFAULTS = {
@@ -71,6 +110,19 @@ const DEFAULTS = {
   fps: 60,
   warmup: 2,
 };
+
+/**
+ * A jump this many times the local jump RMS counts as a click.
+ *
+ * For band-limited noise the first difference is Gaussian, so the largest value
+ * in a five-second window at 48 kHz sits near 5 sigma. 12 leaves a wide margin
+ * against false positives while still catching an envelope that steps by a few
+ * percent of a narrow-band signal — which is exactly what a stolen voice or a
+ * resonator whose centre frequency snapped sounds like.
+ */
+const CLICK_RATIO = 12;
+/** Jumps quieter than this are inaudible under a sea bed. */
+const CLICK_FLOOR_DB = -66;
 
 /**
  * `OfflineAudioContext` renders synchronously once started, so the whole
@@ -90,11 +142,19 @@ export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult>
   });
   const rig = await Rig.build(ctx, {
     analyser: false,
-    mute: opts.mute,
+    mute: resolveMute(opts),
     voiceScale: opts.voiceScale ?? 1,
+    bypassLimiter: opts.bypassLimiter === true,
   });
 
-  const drive = drive1(rig, opts, seconds, fps);
+  const spy = new LeadSpy();
+  let drive = 0;
+  try {
+    spy.install();
+    drive = drive1(rig, opts, seconds, fps, spy);
+  } finally {
+    spy.restore();
+  }
   const buf = await ctx.startRendering();
   const stats = analyse(buf, warmup);
   rig.dispose();
@@ -107,7 +167,65 @@ export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult>
     createdNodes: rig.nodes.created,
     usesWorklet: rig.usesWorklet,
     driveMsPerFrame: drive,
+    minLeadS: spy.minLead,
+    paramWrites: spy.writes,
   };
+}
+
+/**
+ * Records the smallest lead any frame gave an automation event.
+ *
+ * Patches `AudioParam.prototype` for the duration of one driving loop. That is a
+ * global, so it is installed and removed synchronously around the loop and never
+ * while anything awaits — the live game's own graph is only ever measured, not
+ * scheduled, from here.
+ */
+class LeadSpy {
+  minLead = Infinity;
+  writes = 0;
+  private now = 0;
+  private saved: [string, (...a: never[]) => unknown][] = [];
+
+  /** (method name, index of the time argument). */
+  private static readonly SCHEDULERS: readonly (readonly [string, number])[] = [
+    ['setValueAtTime', 1],
+    ['linearRampToValueAtTime', 1],
+    ['exponentialRampToValueAtTime', 1],
+    ['setTargetAtTime', 1],
+    ['setValueCurveAtTime', 1],
+  ];
+
+  frame(now: number): void {
+    this.now = now;
+  }
+
+  install(): void {
+    if (typeof AudioParam === 'undefined') return;
+    const proto = AudioParam.prototype as unknown as Record<string, (...a: never[]) => unknown>;
+    for (const [name, idx] of LeadSpy.SCHEDULERS) {
+      const orig = proto[name];
+      if (typeof orig !== 'function') continue;
+      this.saved.push([name, orig]);
+      const spy = this;
+      proto[name] = function patched(this: AudioParam, ...args: unknown[]): unknown {
+        const t = args[idx];
+        if (typeof t === 'number' && Number.isFinite(t)) {
+          spy.writes++;
+          const lead = t - spy.now;
+          if (lead < spy.minLead) spy.minLead = lead;
+        }
+        return (orig as unknown as (...a: unknown[]) => unknown).apply(this, args);
+      } as unknown as (...a: never[]) => unknown;
+    }
+  }
+
+  restore(): void {
+    if (typeof AudioParam === 'undefined') return;
+    const proto = AudioParam.prototype as unknown as Record<string, (...a: never[]) => unknown>;
+    for (const [name, orig] of this.saved) proto[name] = orig;
+    this.saved.length = 0;
+    if (this.minLead === Infinity) this.minLead = 0;
+  }
 }
 
 /**
@@ -143,18 +261,45 @@ export async function probeCensus(
  *  Driving
  * ------------------------------------------------------------------ */
 
-function drive1(rig: Rig, opts: ProbeOptions, seconds: number, fps: number): number {
+function resolveMute(opts: ProbeOptions): BusName[] | undefined {
+  if (!opts.only) return opts.mute;
+  const keep = new Set(opts.only);
+  const out = ALL_BUSES.filter((b) => !keep.has(b));
+  for (const m of opts.mute ?? []) if (!out.includes(m)) out.push(m);
+  return out;
+}
+
+/**
+ * The driving loop. `stall` skips whole runs of frames, which is how a
+ * main-thread hitch actually presents to the audio module: `update()` is simply
+ * not called, then it is called once with a huge `dt` and a target that has
+ * moved a long way. Everything downstream must degrade into a slightly stale
+ * value, never a step.
+ */
+function drive1(rig: Rig, opts: ProbeOptions, seconds: number, fps: number, spy?: LeadSpy): number {
   const sim = makeSim(opts);
   const frames = Math.round(seconds * fps);
+  const stall = opts.stall;
+  const stallEvery = stall ? Math.max(1, Math.round((stall.everyMs / 1000) * fps)) : 0;
+  const stallFrames = stall ? Math.max(1, Math.round((stall.ms / 1000) * fps)) : 0;
   const t0 = now();
+  let lastT = 0;
+  let served = 0;
   for (let i = 0; i < frames; i++) {
     const t = i / fps;
+    if (stall && stallEvery > 0 && i % stallEvery >= stallEvery - stallFrames && i > fps) continue;
     step(sim, opts, t, seconds);
+    // dt must reflect the real gap, or the event-rate accumulators silently
+    // under-count and the stall test measures nothing.
+    sim.dt = Math.max(1 / fps, t - lastT);
+    lastT = t;
+    served++;
+    spy?.frame(t);
     rig.update(sim, t);
     if (opts.lightning !== undefined && i === fps) rig.lightning(opts.lightning, t);
     if (opts.bell !== undefined && i === fps) rig.strikeBell(opts.bell, t);
   }
-  return frames > 0 ? (now() - t0) / frames : 0;
+  return served > 0 ? (now() - t0) / served : 0;
 }
 
 function makeSim(opts: ProbeOptions): SimView {
@@ -262,7 +407,12 @@ const FFT_SIZE = 4096;
 function analyse(
   buf: AudioBuffer,
   warmup: number,
-): Omit<ProbeResult, 'seconds' | 'sampleRate' | 'liveNodes' | 'createdNodes' | 'usesWorklet' | 'driveMsPerFrame'> {
+): Omit<
+  ProbeResult,
+  // Supplied by the caller: the first five describe the run, and minLeadS/paramWrites
+  // come from the AudioParam spy — a rendered buffer cannot reveal them.
+  'seconds' | 'sampleRate' | 'liveNodes' | 'createdNodes' | 'usesWorklet' | 'driveMsPerFrame' | 'minLeadS' | 'paramWrites'
+> {
   const start = Math.min(buf.length - 1, Math.floor(warmup * buf.sampleRate));
   const chans: Float32Array[] = [];
   for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
@@ -323,6 +473,17 @@ function analyse(
     if (f >= 2000) high += m;
   }
 
+  let clicks = 0;
+  let worstJump = 0;
+  let worstRatio = 0;
+  for (const d of chans) {
+    const c = countClicks(d, start, buf.sampleRate);
+    clicks += c.clicks;
+    if (c.worstJump > worstJump) worstJump = c.worstJump;
+    if (c.worstRatio > worstRatio) worstRatio = c.worstRatio;
+  }
+  const measured = Math.max(1e-6, (buf.length - start) / buf.sampleRate);
+
   return {
     rms,
     rmsDb: db(rms),
@@ -332,7 +493,75 @@ function analyse(
     highRatio: den > 1e-12 ? high / den : 0,
     dc: n > 0 ? dc / n : 0,
     nonFinite,
+    clicks,
+    clickRate: clicks / measured,
+    worstJumpDb: db(worstJump),
+    worstRatio,
   };
+}
+
+/**
+ * Count audible discontinuities.
+ *
+ * A click is not "a big sample-to-sample difference" — white noise is nothing
+ * but big differences. A click is a difference the RECENT PAST did not predict,
+ * so the threshold is the RMS of the first difference over the preceding 20 ms,
+ * measured up to 1 ms before the candidate so the event cannot raise its own
+ * threshold. That makes the test scale-free and, usefully, roughly
+ * perceptual: the same absolute step is flagged in a narrow-band creak, where it
+ * is plainly audible, and ignored under a broadband foam hiss, where it is not.
+ *
+ * Detections within 3 ms are one click, because one envelope step spreads over
+ * a few samples once it has been through a filter.
+ */
+function countClicks(
+  d: Float32Array,
+  start: number,
+  sampleRate: number,
+): { clicks: number; worstJump: number; worstRatio: number } {
+  const win = Math.max(16, Math.round(0.02 * sampleRate));
+  const guard = Math.max(2, Math.round(0.001 * sampleRate));
+  const group = Math.max(4, Math.round(0.003 * sampleRate));
+  const floor = Math.pow(10, CLICK_FLOOR_DB / 20);
+  const from = Math.max(start, 1);
+  if (d.length - from < win + guard + 4) {
+    return { clicks: 0, worstJump: 0, worstRatio: 0 };
+  }
+
+  // Running sum of squared first differences over [i-guard-win, i-guard).
+  let sum = 0;
+  const diff = (i: number): number => {
+    const a = d[i];
+    const b = d[i - 1];
+    return Number.isFinite(a) && Number.isFinite(b) ? a - b : 0;
+  };
+  const head0 = from;
+  for (let i = head0; i < head0 + win; i++) {
+    const v = diff(i);
+    sum += v * v;
+  }
+
+  let clicks = 0;
+  let worstJump = 0;
+  let worstRatio = 0;
+  let lastAt = -1e9;
+  for (let i = head0 + win + guard; i < d.length; i++) {
+    const local = Math.sqrt(sum / win);
+    const v = Math.abs(diff(i));
+    if (v > floor && local > 1e-9 && v > CLICK_RATIO * local) {
+      if (i - lastAt > group) clicks++;
+      lastAt = i;
+      if (v > worstJump) worstJump = v;
+      const ratio = v / local;
+      if (ratio > worstRatio) worstRatio = ratio;
+    }
+    // Slide the window forward one sample, still ending `guard` behind `i`.
+    const add = diff(i - guard);
+    const drop = diff(i - guard - win);
+    sum += add * add - drop * drop;
+    if (sum < 0) sum = 0;
+  }
+  return { clicks, worstJump, worstRatio };
 }
 
 function db(x: number): number {

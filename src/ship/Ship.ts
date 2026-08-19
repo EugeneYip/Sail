@@ -120,14 +120,106 @@ export class Ship implements Module {
       void set;
     };
 
-    add(bins.copper, tex.copper, { tex: tex.copper, grime: 0.15, env: 1.1 }, 'copper');
-    add(bins.black, tex.black, { tex: tex.black, grime: 0.55, env: 0.9 }, 'black');
-    add(bins.stripe, tex.stripe, { tex: tex.stripe, grime: 0.5, env: 0.75 }, 'stripe');
-    add(bins.buff, tex.buff, { tex: tex.buff, grime: 0.45, env: 0.7 }, 'buff');
-    add(bins.deck, tex.deck, { tex: tex.deck, grime: 0.7, env: 0.6 }, 'deck');
-    add(bins.oak, tex.oak, { tex: tex.oak, grime: 0.5, env: 0.7 }, 'oak');
-    add(bins.iron, tex.iron, { tex: tex.iron, grime: 0.4, env: 1.3 }, 'iron');
-    add(bins.brass, tex.brass, { tex: tex.brass, grime: 0.3, env: 1.5 }, 'brass');
+    add(
+      bins.copper, tex.copper,
+      {
+        tex: tex.copper, grime: 0.15, env: 1.1,
+        // No wood here: rings off, and the fibre tier becomes the fine draw
+        // marks left in rolled sheet copper.
+        detail: { fibrePitch: 0.0022, fibreRelief: 0.00012, fibreAlbedo: 0.05, fibreRough: 0.1 },
+      },
+      'copper',
+    );
+    add(
+      bins.black, tex.black,
+      {
+        tex: tex.black, grime: 0.55, env: 0.9,
+        // Paint fills the grain but does not hide it: a shallow ring figure
+        // telegraphs through, and the seams are payed rather than caulked.
+        detail: {
+          ringPitch: 0.011, ringAlbedo: 0.055, ringRelief: 0.00022, ringRough: 0.11,
+          plankPitch: 0.32, seamWidth: 0.0035, seamDark: 0.45, plankTone: 0.035,
+          fibrePitch: 0.0019, fibreRelief: 0.00009, fibreAlbedo: 0.05,
+          fibreRough: 0.06, plankRough: 0.035,
+        },
+      },
+      'black',
+    );
+    add(
+      bins.stripe, tex.stripe,
+      {
+        tex: tex.stripe, grime: 0.5, env: 0.75,
+        detail: {
+          ringPitch: 0.011, ringAlbedo: 0.05, ringRelief: 0.0002, ringRough: 0.1,
+          plankPitch: 0.32, seamWidth: 0.0035, seamDark: 0.4, plankTone: 0.03,
+          fibrePitch: 0.0019, fibreRelief: 0.00008, fibreAlbedo: 0.045,
+          fibreRough: 0.06, plankRough: 0.03,
+        },
+      },
+      'stripe',
+    );
+    add(
+      bins.buff, tex.buff,
+      {
+        tex: tex.buff, grime: 0.45, env: 0.7,
+        detail: {
+          ringPitch: 0.0105, ringAlbedo: 0.05, ringRelief: 0.0002, ringRough: 0.1,
+          plankPitch: 0.29, seamWidth: 0.003, seamDark: 0.38, plankTone: 0.032,
+          fibrePitch: 0.0018, fibreRelief: 0.00009, fibreAlbedo: 0.05,
+          fibreRough: 0.06, plankRough: 0.03,
+        },
+      },
+      'buff',
+    );
+    add(
+      bins.deck, tex.deck,
+      {
+        tex: tex.deck, grime: 0.7, env: 0.6,
+        // The deck is the surface the player stares at from the helm, so it
+        // gets the strongest grain, real caulk at 3 mm each side of the seam,
+        // and the traffic wear that scrubs the paths pale and smooth.
+        detail: {
+          ringPitch: 0.0095, ringAlbedo: 0.135, ringRelief: 0.00055, ringRough: 0.2,
+          plankPitch: 0.32, seamWidth: 0.0032, seamDark: 0.82, plankTone: 0.055,
+          fibrePitch: 0.0015, fibreRelief: 0.00016, fibreAlbedo: 0.075, wear: 0.16,
+          fibreRough: 0.11, plankRough: 0.06,
+        },
+      },
+      'deck',
+    );
+    add(
+      bins.oak, tex.oak,
+      {
+        tex: tex.oak, grime: 0.5, env: 0.7,
+        // Bare oiled oak: spars, boats, capstan, wheel. Rings and pores read
+        // hardest of all here because there is no paint over them.
+        detail: {
+          ringPitch: 0.0105, ringAlbedo: 0.115, ringRelief: 0.0005, ringRough: 0.19,
+          plankPitch: 0, fibrePitch: 0.0014, fibreRelief: 0.00015, fibreAlbedo: 0.07,
+          fibreRough: 0.1,
+        },
+      },
+      'oak',
+    );
+    add(
+      bins.iron, tex.iron,
+      {
+        tex: tex.iron, grime: 0.4, env: 1.3,
+        // Hammer draw marks on wrought iron: fine, directional, and mostly a
+        // roughness effect — that is what makes a forged fitting read as metal
+        // rather than as dark plastic.
+        detail: { fibrePitch: 0.0018, fibreRelief: 0.00018, fibreAlbedo: 0.06, fibreRough: 0.16 },
+      },
+      'iron',
+    );
+    add(
+      bins.brass, tex.brass,
+      {
+        tex: tex.brass, grime: 0.3, env: 1.5,
+        detail: { fibrePitch: 0.0012, fibreRelief: 0.00007, fibreAlbedo: 0.03, fibreRough: 0.08 },
+      },
+      'brass',
+    );
     add(
       bins.glass,
       tex.brass,

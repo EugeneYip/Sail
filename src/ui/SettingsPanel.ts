@@ -430,15 +430,24 @@ export class SettingsPanel {
     this.add(action(g, 'Save frame', 'png', () => this.onShot()));
   }
 
+  /**
+   * Mode-gated in CSS rather than rebuilt: the panel lives inside `.ui`, which
+   * already wears `m-pro`, so the sail and brace rows come and go with the mode
+   * for no JS at all. In the default mode the list is the four arrow keys and
+   * the interface — which is the entire promise of that mode, kept.
+   */
   private buildControlsDoc(): void {
     const g = group(this.body, 'Controls');
     for (const grp of BINDINGS) {
       add(g, el('div', 'kb-t', grp.title));
       for (const b of grp.items) {
-        const row = add(g, el('div', 'kb'));
+        const row = add(g, el('div', b.pro ? 'kb kb-pro' : 'kb'));
         const keys = add(row, el('span', 'kb-k'));
         for (const k of b.keys) add(keys, el('kbd', undefined, k));
         add(row, el('span', 'kb-l', b.label));
+      }
+      if (grp.title === 'Working the ship') {
+        add(g, el('div', 'kb-min-note', 'The watch trims and braces for you.'));
       }
     }
   }

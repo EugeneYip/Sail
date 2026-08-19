@@ -20,10 +20,21 @@ import { CameraRig } from './CameraRig';
  *   ext.ts         the `world.ext.camera` contract (post + audio read it)
  *
  * STATUS — rig wired, all seven modes live, capture hold implemented. Known
- * gaps are listed at the end of `CameraRig.ts`'s header comment; the honest
- * one is that composition was tuned against a ship whose real geometry was
- * still being built, so the framing constants deserve one more pass once the
- * rig and sails are final.
+ * gaps are listed at the end of `CameraRig.ts`'s header comment.
+ *
+ * FREE LOOK — the one rule everything here depends on: positive `lookYaw`
+ * swings the VIEW to starboard, positive `lookPitch` tilts it UP. Derive a mode's
+ * pose from the view direction, never from where the eye ends up; an orbiting
+ * camera has to move its eye the OPPOSITE way to swing the view, and that
+ * inversion is where every sign error in this directory has come from. The
+ * contract is on `CameraContext` and it is asserted, not eyeballed, by
+ * `.tmp/camdrag.mjs` — four drag directions in seven modes, checked against the
+ * resulting view axis. Run it after touching any look maths.
+ *
+ * Yaw is a full circle in every mode that follows the ship, because a player's
+ * first instinct is to look at the bow. Pitch limits are physical only: the eye
+ * may not go into the sea, and no axis may reach vertical (`MAX_AXIS_ELEVATION`,
+ * where the world-up look-at basis degenerates).
  */
 export function createCameraModules(): Module[] {
   return [new CameraRig()];

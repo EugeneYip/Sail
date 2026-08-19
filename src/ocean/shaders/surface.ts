@@ -437,7 +437,6 @@ void main(){
   N = normalize(N + vec3(fd.g - 0.5, 0.0, fd.b - 0.5) * foam * 1.1);
 
   /* ---- specular ---------------------------------------------------- */
-  float NoV = max(dot(N, V), 1e-3);
   // Two regimes in one lobe: near the camera the normal map really does carry
   // the microfacets, far away it cannot, so widen to the statistical slope
   // distribution (alpha = sqrt(2)*sigma) and use the low-frequency normal. This
@@ -488,10 +487,54 @@ void main(){
   }
 
   /* ---- reflection -------------------------------------------------- */
-  float fres = oceanReflectance(NoV, alpha);
-  vec3 R = reflect(-V, N);
+  // 'oceanReflectance' is a MACRO-surface model: Schlick Fresnel plus a Smith
+  // masking term that already accounts for facets hidden behind their
+  // neighbours, with 'alpha' describing those facets. Feeding it the
+  // point-sampled MICRO normal therefore double counts — and at grazing
+  // incidence it does so catastrophically. The sea's rms slope is 0.1-0.2 while
+  // the grazing sine is 0.09 at 300 m and 0.03 at 900 m, so dot(N, V) goes
+  // NEGATIVE over a large fraction of the surface; 'max(.., 1e-3)' rectifies
+  // that, and G1 at 1e-3 is ~0.03 where the macro answer is ~0.7. The pixel
+  // loses 12x of a reflected sky that carries several hundred times the body
+  // radiance, so it renders nearly black.
+  //
+  // Which side of that rectification a pixel lands on depends only on where
+  // inside its own footprint it happened to sample, so the TAA jitter flips it
+  // every frame; and the fraction of surface affected is a function of the
+  // grazing angle, which on a flat sea is a function of screen ROW. Those two
+  // together are the owner-reported defect exactly: darker horizontal bands in
+  // the mid distance that flicker.
+  //
+  // Measured with the ocean sim clock pinned and the camera static, so wave
+  // motion cannot contribute (.tmp/flick.mjs, noon, 1600x900): temporal std of
+  // the per-row band signal beyond 600 m was 0.38 with the micro normal here and
+  // 0.10 with the macro normal, against a film-grain floor of 0.03; per-pixel
+  // frame delta over the same rows fell 4.67 -> 2.25 on a floor of 2.05. Static
+  // band strength at 130-240 m fell 24%.
+  //
+  // The blend criterion is the failure condition itself: how likely the sampled
+  // facet is to be backfacing, i.e. the slope rms the normal still carries
+  // against the grazing sine. A footprint-area criterion was tried instead and
+  // is worse — it plateaus at 0.56 across 130-250 m, because between the
+  // cascades' pixel fades there is a stretch where no further variance is
+  // dropped, and 130-250 m is exactly where the owner sees the bands. Combining
+  // the two measured identical to this one alone, so this is the whole story.
+  float carried = max(uSlopeRms * uSlopeRms - lostVar, 1e-6);
+  // The 0.25 offset is what keeps the near field untouched: at 40 m the carried
+  // rms is 13% of the grazing sine and cannot rectify anything.
+  float macro = saturate1(sqrt(carried) / max(abs(V.y), 1e-3) - 0.25);
+  vec3 Nmac = normalize(mix(N, Nlow, macro));
+  // Blending a normal toward its own low-pass scales the high-frequency part by
+  // (1 - macro), so it removes (1 - (1-macro)^2) of 'carried' from the geometry.
+  // Put exactly that back as lobe width or the two halves of one specular lobe
+  // disagree about the surface. At macro == 1 this lands on uSlopeRms, which is
+  // what the sun lobe's own wide regime uses, so the two agree at the limit.
+  float km = 1.0 - macro;
+  float alphaR = clamp(max(alpha, sqrt(lostVar + (1.0 - km * km) * carried)), 0.02, 0.95);
+  float fres = oceanReflectance(max(dot(Nmac, V), 1e-3), alphaR);
+  vec3 R = reflect(-V, Nmac);
   R.y = abs(R.y) * 0.55 + R.y * 0.45; // keep grazing rays out of the ground
-  vec3 skyRefl = oceanReflection(normalize(R), alpha);
+  vec3 skyRefl = oceanReflection(normalize(R), alphaR);
   vec3 reflection = skyRefl;
   if (uHasReflection > 0.5) {
     // The mirrored render is valid at the fragment's own screen position for a

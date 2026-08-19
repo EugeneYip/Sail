@@ -111,14 +111,14 @@ export class Wildlife {
     let t = now + 0.05;
     for (let i = 0; i < n; i++) {
       const req = this.clicks.begin(t);
-      req.gain = dB(-33) * (0.5 + 0.6 * this.rng());
+      req.gain = dB(-37) * (0.5 + 0.6 * this.rng());
       req.low = 0;
       req.high = 1;
       req.type = 'bandpass';
       req.freq = 5200 + 4200 * this.rng();
       req.q = 3.5;
-      req.attack = 0.0005;
-      req.decay = 0.008 + 0.01 * this.rng();
+      req.attack = 0.0015;
+      req.decay = 0.01 + 0.01 * this.rng();
       req.x = p.x;
       req.y = p.y;
       req.z = p.z;

@@ -147,9 +147,26 @@ const GAME_KEYS = new Set([
   'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ',
 ]);
 
-/** Exponential approach that is stable at any dt. */
+/**
+ * Below this an axis is snapped to its target. See `approach`.
+ */
+const AXIS_EPSILON = 1e-4;
+
+/**
+ * Exponential approach that is stable at any dt, and that actually ARRIVES.
+ *
+ * A plain exponential never reaches its target. Measured: one second after the
+ * up arrow comes up `sailTrim` is 3.6e-6, after six seconds 1.4e-40, and it then
+ * sits on the smallest denormal for the rest of the session — never zero.
+ * Consumers reasonably read `=== 0` as "no hand on it", and `physics/Trim.ts`
+ * does exactly that to decide whether the player is overriding the watch, so a
+ * residual of 1e-300 read as a hand still on the key forever and pinned the
+ * watch's reef cap. Snapping the last 1e-4 costs nothing and makes "released"
+ * mean released.
+ */
 function approach(current: number, target: number, dt: number, rate: number): number {
-  return THREE.MathUtils.lerp(current, target, 1 - Math.exp(-rate * dt));
+  const next = THREE.MathUtils.lerp(current, target, 1 - Math.exp(-rate * dt));
+  return Math.abs(next - target) < AXIS_EPSILON ? target : next;
 }
 
 export function createInputState(): InputState {

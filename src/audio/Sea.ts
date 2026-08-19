@@ -166,25 +166,35 @@ export class Sea {
     const period = wavePeriod(hs);
 
     // --- swell. Level tracks Hs; modulation depth tracks chop.
-    const swellLevel = dB(-30 + 22 * smoothstep(0, 7, hs));
+    const swellLevel = dB(-21 + 20 * smoothstep(0, 7, hs));
     for (let i = 0; i < this.swell.length; i++) {
       const s = this.swell[i];
-      s.gain.set(swellLevel * (i === 0 ? 1 : 0.75), now);
-      s.freq.set(78 + 26 * smoothstep(0.5, 6, hs), now);
-      this.swellLfoRate[i].set((1 / period) * (i === 0 ? 1 : 0.61), now);
-      this.swellLfoDepth[i].set(swellLevel * (0.25 + 0.4 * sim.choppiness) * (i === 0 ? 1 : 0.7), now);
+      s.gain.set(swellLevel * (i === 0 ? 1 : 0.7), now);
+      s.freq.set(74 + 30 * smoothstep(0.5, 6, hs), now);
+      // One voice on the swell period, one at 0.41 of it: the beat between them
+      // is a long, irregular rise and fall instead of a metronome. A real sea is
+      // never static and never busy.
+      this.swellLfoRate[i].set((1 / period) * (i === 0 ? 1 : 0.41), now);
+      this.swellLfoDepth[i].set(
+        swellLevel * (0.3 + 0.34 * sim.choppiness) * (i === 0 ? 1 : 0.62),
+        now,
+      );
     }
 
-    // --- mid rush
-    this.rush.gain.set(dB(-34 + 21 * smoothstep(0, 7, seaState)), now);
-    this.rush.freq.set(360 + 260 * smoothstep(1, 7, seaState), now);
-    this.rush.shelf?.set(-9 + 9 * smoothstep(2, 8, seaState), now);
+    // --- mid rushing water: the body of the bed, and the loudest layer
+    this.rush.gain.set(dB(-24 + 15 * smoothstep(0, 7, seaState)), now);
+    this.rush.freq.set(330 + 300 * smoothstep(1, 7, seaState), now);
+    this.rush.shelf?.set(-11 + 10 * smoothstep(2, 8, seaState), now);
 
-    // --- breaking crests. Whitecaps begin around force 4 / sea state 3.
-    const breaking = smoothstep(2.2, 7.5, seaState) * smoothstep(3, 12, sim.windSpeed);
-    this.crest.gain.set(dB(-52 + 32 * breaking), now);
+    // --- fine foam hiss. Whitecaps begin around force 4 / sea state 3, and the
+    // wave height decides how much water is actually falling over.
+    const breaking =
+      smoothstep(2.2, 7.5, seaState) * smoothstep(3, 12, sim.windSpeed) * (0.45 + 0.55 * smoothstep(0.4, 5, hs));
+    const foamLevel = dB(-40 + 24 * breaking);
+    this.crest.gain.set(foamLevel, now);
     this.crest.freq.set(2600 - 900 * breaking, now);
-    this.crestDepth.set(dB(-52 + 32 * breaking) * 0.5, now);
+    // Deep, slow modulation: foam arrives in sheets, it does not sit there.
+    this.crestDepth.set(foamLevel * 0.62, now);
 
     // --- hull water: THE speedometer. Level ~ v^1.4, centre frequency and
     // brightness both climb, because faster water is a brighter rush.
@@ -193,7 +203,7 @@ export class Sea {
     for (let i = 0; i < this.hull.length; i++) {
       const h = this.hull[i];
       const trim = i === 0 ? 1 : 0.62;
-      h.gain.set(dB(-46 + 34 * vs) * trim, now);
+      h.gain.set(dB(-38 + 28 * vs) * trim, now);
       h.freq.set((250 + 1150 * Math.pow(v, 0.85)) * (i === 0 ? 1 : 0.72), now);
       h.q?.set(0.85 - 0.25 * v, now);
       h.shelf?.set(-14 + 20 * v, now);
@@ -203,7 +213,7 @@ export class Sea {
 
     // --- wake foam
     const foam = Math.min(1, vs * 1.1 + 0.25 * smoothstep(3, 7, seaState));
-    this.wake.gain.set(dB(-50 + 30 * foam), now);
+    this.wake.gain.set(dB(-42 + 25 * foam), now);
     this.wake.freq.set(2400 + 1600 * v, now);
     this.wakePan.set(anchorWorld(sim, ANCHOR.wake), now);
 
@@ -234,22 +244,26 @@ export class Sea {
 
     // Baseline: in a real sea the bow is working constantly, and the placeholder
     // physics barely heaves, so drive a rate from sea state as well.
-    const bigRate = smoothstep(1.2, 6, hs) * (0.1 + 0.05 * v) + smoothstep(4, 8, sim.seaState) * 0.12;
-    this.bigAccum += bigRate * dt;
+    const bigRate = smoothstep(1.2, 6, hs) * (0.07 + 0.04 * v) + smoothstep(4, 8, sim.seaState) * 0.07;
+    this.bigAccum = Math.min(1.6, this.bigAccum + bigRate * dt);
     if (this.bigAccum > 1) {
-      this.bigAccum = 0;
+      this.bigAccum -= 1;
       mag = Math.max(mag, 0.35 + 0.65 * this.rng() * smoothstep(1, 6.5, hs));
     }
 
     if (mag > 0.08 && this.slamCooldown <= 0) {
       this.slam(sim, now, mag);
-      this.slamCooldown = 0.28 + 0.5 * this.rng();
+      this.slamCooldown = 1.1 + 1.4 * this.rng();
     }
 
-    // Hull slaps: constant chatter of water against the side.
-    const slapRate = (0.25 + 0.42 * sim.seaState) * (0.5 + 0.7 * v) * (0.6 + 0.8 * sim.choppiness);
-    this.slapAccum += slapRate * dt;
-    while (this.slapAccum > 1) {
+    // Hull slaps. This used to run at (0.25 + 0.42*seaState)*... — about five a
+    // second in a gale, into a pool shared with slams, spray, thunder and whales,
+    // which is what exhausted it. The mid-band rush and the foam hiss carry the
+    // same information continuously and without transients, so the slaps are now
+    // occasional punctuation: at most one per frame, and never banked up.
+    const slapRate = (0.1 + 0.075 * sim.seaState) * (0.5 + 0.5 * v) * (0.6 + 0.6 * sim.choppiness);
+    this.slapAccum = Math.min(1.6, this.slapAccum + slapRate * dt);
+    if (this.slapAccum > 1) {
       this.slapAccum -= 1;
       this.slap(sim, now, hs);
     }
@@ -260,7 +274,7 @@ export class Sea {
     const side = r() < 0.5 ? -1 : 1;
     const p = toWorld(sim, side * 4.5, 1.2, -22 - r() * 8);
     const req = this.impacts.begin(now + 0.005 + r() * 0.02);
-    req.gain = dB(-19) * Math.min(1.35, mag);
+    req.gain = dB(-26) * Math.min(1.35, mag);
     req.low = 0.95;
     req.high = 0.45 + 0.3 * mag;
     req.type = 'lowpass';
@@ -274,8 +288,8 @@ export class Sea {
     req.r2f = 2400;
     req.r2q = 0.8;
     req.r2db = 3 + 4 * mag;
-    req.attack = 0.005;
-    req.decay = 0.4 + 0.7 * mag;
+    req.attack = 0.016;
+    req.decay = 0.45 + 0.7 * mag;
     req.x = p.x;
     req.y = p.y;
     req.z = p.z;
@@ -284,7 +298,7 @@ export class Sea {
     // Spray sheet thrown up and blown aft — a swelling hiss, not a transient.
     const sp = toWorld(sim, side * 3, 5 + 4 * mag, -18);
     const s = this.impacts.begin(now + 0.05 + 0.06 * r());
-    s.gain = dB(-26) * mag;
+    s.gain = dB(-31) * mag;
     s.low = 0;
     s.high = 1;
     s.type = 'highpass';
@@ -311,7 +325,7 @@ export class Sea {
     const p = toWorld(sim, side * 6.6, 0.6, -20 + r() * 42);
     const size = 0.3 + 0.7 * r() * smoothstep(0.3, 5, hs);
     const req = this.impacts.begin(now + r() * 0.06);
-    req.gain = dB(-31) * size;
+    req.gain = dB(-36) * size;
     req.low = 0.55;
     req.high = 0.8;
     req.type = 'bandpass';
@@ -322,8 +336,8 @@ export class Sea {
     req.r1f = 160;
     req.r1q = 1.2;
     req.r1db = 5 * size;
-    req.attack = 0.004;
-    req.decay = 0.16 + 0.3 * size;
+    req.attack = 0.014;
+    req.decay = 0.2 + 0.3 * size;
     req.x = p.x;
     req.y = p.y;
     req.z = p.z;

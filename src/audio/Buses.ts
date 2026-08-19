@@ -18,6 +18,25 @@ export interface Bus {
 
 export type BusName = 'sea' | 'ship' | 'wind' | 'wildlife' | 'weather' | 'music';
 
+/**
+ * Static family balance, dB.
+ *
+ * The whole mix used to run into the limiter continuously: measured RMS was
+ * -9.6 dBFS becalmed and -8.3 dBFS in a gale, i.e. a full gale was 1.3 dB louder
+ * than a flat calm, because the compressor was doing the mixing. Everything below
+ * unity here so the limiter is a seat belt and the dynamics are real.
+ *
+ * The sea leads. Everything else is subordinate and quiet — AGENTS.md directive 5.
+ */
+const BASE_TRIM: Record<BusName, number> = {
+  sea: -9,
+  ship: -17,
+  wind: -13,
+  wildlife: -16,
+  weather: -14,
+  music: -14,
+};
+
 /** Per-camera-mode family trim, dB. The mix is the camera's job as much as the rig's. */
 const MODE_TRIM: Record<CameraModeName, Partial<Record<BusName, number>>> = {
   helm: { sea: -2, ship: 3, wind: -5, weather: 1 },
@@ -66,18 +85,32 @@ export class Mixer {
     buffers: AudioBuffers,
     destination: AudioNode,
     withAnalyser: boolean,
+    bypassLimiter = false,
   ) {
     const n = nodes;
     this.masterPre = n.gain(1);
 
-    const limiter = n.compressor(-11, 6, 14, 0.004, 0.22);
-    const clip = n.shaper(softClipCurve(), '2x');
     this.master = n.gain(0.0001);
     this.masterLevel = new Ramp(this.master.gain, 0.25, 2e-4);
 
-    this.masterPre.connect(limiter);
-    limiter.connect(clip);
-    clip.connect(this.master);
+    // Infrasonic guard. The brown-noise swell bed carries real energy below
+    // 20 Hz, which nobody hears but which showed up as a 1.1e-3 DC offset and ate
+    // headroom the audible band could have used.
+    const dcBlock = n.biquad('highpass', 26, 0.7);
+    this.masterPre.connect(dcBlock);
+
+    if (bypassLimiter) {
+      dcBlock.connect(this.master);
+    } else {
+      // A seat belt, not a mix engineer: with BASE_TRIM applied the programme
+      // sits ~14 dB under this threshold, so it only ever catches a slam that
+      // lands on top of a gale.
+      const limiter = n.compressor(-6, 8, 6, 0.008, 0.25);
+      const clip = n.shaper(softClipCurve(), '2x');
+      dcBlock.connect(limiter);
+      limiter.connect(clip);
+      clip.connect(this.master);
+    }
     this.master.connect(destination);
 
     this.analyser = n.analyser(withAnalyser ? 2048 : 32);
@@ -127,11 +160,12 @@ export class Mixer {
     const trim = MODE_TRIM[sim.camMode] ?? {};
     const duck = now < this.duckUntil ? 0.55 : 1;
 
-    this.buses.sea.level.set(dB(trim.sea ?? 0), now);
-    this.buses.ship.level.set(dB(trim.ship ?? 0), now);
-    this.buses.wind.level.set(dB(trim.wind ?? 0), now);
-    this.buses.wildlife.level.set(dB(trim.wildlife ?? 0), now);
-    this.buses.weather.level.set(dB(trim.weather ?? 0), now);
+    this.buses.sea.level.set(dB(BASE_TRIM.sea + (trim.sea ?? 0)), now);
+    this.buses.ship.level.set(dB(BASE_TRIM.ship + (trim.ship ?? 0)), now);
+    this.buses.wind.level.set(dB(BASE_TRIM.wind + (trim.wind ?? 0)), now);
+    this.buses.wildlife.level.set(dB(BASE_TRIM.wildlife + (trim.wildlife ?? 0)), now);
+    this.buses.weather.level.set(dB(BASE_TRIM.weather + (trim.weather ?? 0)), now);
+    this.buses.music.level.set(dB(BASE_TRIM.music) * (sim.musicVolume > 1e-3 ? 1 : 1e-4), now);
 
     // Wetter below the weather deck, drier out in the open.
     this.buses.ship.send.set(0.3 + 0.35 * (1 - sim.exposure), now);

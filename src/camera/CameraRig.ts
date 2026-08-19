@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { CameraModeName, Module, World } from '../types';
-import { clamp01, damp, springDamp, wrapPi } from '../util/math';
+import { clamp01, damp, smoothstep, springDamp, wrapPi } from '../util/math';
 import { defaultAnatomy, readAnatomy, type ShipAnatomy } from './Anatomy';
 import { Autofocus, focalLengthMm, horizonDistance } from './Autofocus';
 import { CameraSolve, type CameraContext, type CameraMode } from './CameraMode';
@@ -77,8 +77,44 @@ const RIG_RADIUS_PAD_M = 1.5;
 /** Free-look: mouse deltas are a step function, this is the anti-alias on it. */
 const LOOK_SMOOTH_TIME = 0.1;
 /** Seconds of no input before a framed mode drifts back to its composed axis. */
-const LOOK_IDLE_SECONDS = 3;
+const LOOK_IDLE_SECONDS = 4;
+/**
+ * Yaw deviation, radians, over which the drift back to the composed axis fades
+ * out completely. Below `LOOK_HOLD_FROM` an accidental nudge tidies itself up;
+ * beyond `LOOK_HOLD_FULL` the player has clearly chosen an angle — parked on the
+ * beam, or looking forward over the bow — and the camera must not creep out of
+ * it while they watch. Taking a deliberate camera placement away from the player
+ * is worse than leaving them slightly off-axis.
+ */
+const LOOK_HOLD_FROM = 0.55;
+const LOOK_HOLD_FULL = 1.1;
 const ZOOM_PER_NOTCH = 0.14;
+
+/**
+ * Signs applied to `input.lookYaw/lookPitch` before anything in this directory
+ * sees them. Normalise ONCE, here, and never read `world.input.look*` again from
+ * anywhere else in `src/camera` — `ctx.lookYawDelta/lookPitchDelta` carry the
+ * corrected raw axes for the modes that need them.
+ *
+ * `input/Input.ts` accumulates BOTH axes as `-= movement`:
+ *
+ *   pendingYaw   -= e.movementX      drag right -> NEGATIVE  -> wrong, flip it
+ *   pendingPitch -= e.movementY      drag up    -> POSITIVE  -> already right,
+ *                                    because screen Y grows downward
+ *
+ * The contract on `CameraContext` is direct manipulation: +lookYaw swings the
+ * view to starboard, +lookPitch tilts it up. So yaw needs the flip and pitch
+ * does not, which is why "everything felt inverted" was never a single sign
+ * error — it was one inverted axis plus four modes deriving their pose from the
+ * EYE instead of the view direction.
+ *
+ * THE REAL YAW FIX IS ONE CHARACTER IN `Input.ts` (`-=` -> `+=` on the movementX
+ * line); that file belongs to another agent, so the flip lives here for now.
+ * When Input.ts is corrected, set this to +1 — and change nothing else, because
+ * every mode is written against the normalised axis, not the raw one.
+ */
+const INPUT_LOOK_YAW_SIGN = -1;
+const INPUT_LOOK_PITCH_SIGN = 1;
 
 /** Continuous shake floor from the sea, at the top of the Douglas scale. */
 const SEA_TREMBLE_MAX = 0.34;
@@ -179,6 +215,8 @@ export class CameraRig implements Module {
       anatomy: this.anatomy,
       lookYaw: 0,
       lookPitch: 0,
+      lookYawDelta: 0,
+      lookPitchDelta: 0,
       modeTime: 0,
       captureHold: false,
       captureTime: 0,
@@ -372,6 +410,8 @@ export class CameraRig implements Module {
     ext.aperture = aperture;
     ext.focusDistance = this.focus.distance;
     ext.captureHold = this.captureArmed;
+    ext.lookYaw = this.lookYaw;
+    ext.lookPitch = this.lookPitch;
     if (cut || dt <= 1e-5) ext.velocity.set(0, 0, 0);
     else ext.velocity.subVectors(this.pos, this.prevPos).multiplyScalar(1 / dt);
     this.prevPos.copy(this.pos);
@@ -398,6 +438,14 @@ export class CameraRig implements Module {
     const input = world.input;
     const mode = this.active;
 
+    // Normalise the input signs once, at the boundary. Everything downstream —
+    // including the fly-cam, which accumulates its own angles — reads these.
+    const yawIn = input.lookYaw * INPUT_LOOK_YAW_SIGN;
+    const pitchIn = input.lookPitch * INPUT_LOOK_PITCH_SIGN;
+    const gate = locked ? 0 : 1;
+    this.ctx.lookYawDelta = yawIn * gate;
+    this.ctx.lookPitchDelta = pitchIn * gate;
+
     const activity = Math.abs(input.lookYaw) + Math.abs(input.lookPitch) + Math.abs(input.zoom);
     if (!locked && (activity > 1e-6 || input.cameraNext || input.keys.size > 0)) {
       this.notePlayerInput();
@@ -408,9 +456,10 @@ export class CameraRig implements Module {
       else this.lookIdle += dt;
 
       if (mode.lookYawLimit > 0) {
-        this.yawRaw += input.lookYaw;
-        // A mode that allows a full turn (a crow's nest) must not be clamped or
-        // it hits an invisible wall; the angle stays continuous instead.
+        this.yawRaw += yawIn;
+        // A mode that allows a full turn (a crow's nest, or the chase camera
+        // swinging round to look at the bow) must not be clamped or it hits an
+        // invisible wall; the angle stays continuous instead.
         if (mode.lookYawLimit < Math.PI) {
           this.yawRaw = THREE.MathUtils.clamp(this.yawRaw, -mode.lookYawLimit, mode.lookYawLimit);
         } else {
@@ -419,7 +468,7 @@ export class CameraRig implements Module {
       }
       if (mode.lookPitchMax > mode.lookPitchMin) {
         this.pitchRaw = THREE.MathUtils.clamp(
-          this.pitchRaw + input.lookPitch,
+          this.pitchRaw + pitchIn,
           mode.lookPitchMin,
           mode.lookPitchMax,
         );
@@ -427,7 +476,10 @@ export class CameraRig implements Module {
 
       const recentre = mode.lookRecentreRate ?? 0;
       if (recentre > 0 && this.lookIdle > LOOK_IDLE_SECONDS) {
-        this.yawRaw = damp(this.yawRaw, 0, recentre, dt);
+        // Pitch always settles — a lifted or dropped eye is a transient. Yaw
+        // only settles while the deviation still reads as a nudge.
+        const hold = smoothstep(LOOK_HOLD_FROM, LOOK_HOLD_FULL, Math.abs(this.yawRaw));
+        if (hold < 1) this.yawRaw = damp(this.yawRaw, 0, recentre * (1 - hold), dt);
         this.pitchRaw = damp(this.pitchRaw, 0, recentre, dt);
       }
 
@@ -441,7 +493,12 @@ export class CameraRig implements Module {
       }
     }
 
-    this.lookYaw = springDamp(this.lookYaw, this.yawRaw, this.vYaw, LOOK_SMOOTH_TIME, dt);
+    // Smooth the yaw along the SHORTEST ARC. `yawRaw` wraps at +-PI in the
+    // 360-degree modes, and a spring chasing the raw value across that seam
+    // would take the long way round — a full unwanted revolution of the camera
+    // at exactly the angle where a player looking over the bow is sitting.
+    const yawWant = this.lookYaw + wrapPi(this.yawRaw - this.lookYaw);
+    this.lookYaw = wrapPi(springDamp(this.lookYaw, yawWant, this.vYaw, LOOK_SMOOTH_TIME, dt));
     this.lookPitch = springDamp(this.lookPitch, this.pitchRaw, this.vPitch, LOOK_SMOOTH_TIME, dt);
   }
 

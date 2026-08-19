@@ -94,16 +94,74 @@ import { ShipDynamics } from './ShipDynamics';
  *     damping and the sail drag were all re-measured against the test.
  *
  * ASSIST — `node scripts/assist-test.mjs`, the playability suite. Same solver,
- * same stepper, `px.assist = true`. 10 m/s true wind unless stated:
+ * same stepper, `px.assist = true`. 10 m/s true wind, flat sea, full press:
  *
  *   TWA       0    20    45    70    90   120   150   180
- *   knots    see the suite output; a reach is still fastest and dead upwind
- *            still makes way, which is the whole point of the mode.
+ *   knots  7.34  8.14 10.70 13.66 15.07 15.72 15.00 14.30
+ *   VMG    7.33  7.61  7.34  4.51 -0.01 -7.76 -13.0 -14.3
+ *
+ * A broad reach is still her best point of sail and beating is still less than
+ * half of it, so the point of sail still matters to the player — but TWA 0 makes
+ * 7.3 kn instead of stopping dead, which is the no-go zone gone. She is never
+ * flagged `inIrons` in assist, because the condition cannot arise.
+ *
+ * Playability, measured: 90 per cent of cruising speed in 11.2 s (Pro takes
+ * 179 s), a steady turn of 4.6 deg/s against Pro's 0.41, 90 deg of heading in
+ * 22.9 s against Pro's 73, 85 per cent of her speed kept through 90 deg of
+ * bearing away, a radius of 1.7 ship lengths, and 90 deg of turn available in
+ * 30 s from a dead stop under bare poles — Pro cannot turn at all there. In a
+ * flat calm she still ghosts at 4.95 kn. Roll period is 9.31 s in BOTH modes, to
+ * two decimal places: the assist changes what she will do, never what she weighs.
+ *
+ * DRIVEN, not just measured — `.tmp/drive.mjs` puts real arrow keys into the live
+ * page and samples every rendered frame, which is the only way to see the two
+ * defects below. On a live 1.8 m sea in 10 m/s of wind, from bare poles and a
+ * standstill: 5 kn at 5.2 s, 10 kn at 9.9 s, 90 per cent of 13.9 kn at 13.8 s,
+ * with one press of the up arrow and no other input. Hard a-port: the wheel is
+ * hard over 1.2 s after the key goes down, 1 deg/s of yaw at 1.7 s, 90 deg of
+ * heading at 23.9 s, a steady 4.7 deg/s, a radius of 1.9 lengths, and 14.2 ->
+ * 11.4 -> 12.8 kn through it. Let go and she steadies on the new course with
+ * under 2 deg/s of residual swing. Held dead upwind she sits at TWA -10..9 doing
+ * 5.9-7.3 kn indefinitely, never in irons, never below 5.9 kn. A storm sea gives
+ * heel -27..+22 deg, pitch -8..+6 deg, heave -6.2..+5.9 m and a 9.6 s roll: she
+ * still weighs 2200 tonnes. Pro, driven with the same keys in the same weather,
+ * never reaches 5 kn in 30 s (top 1.7) and turns 1 deg in 25 s of hard over.
  *
  * The two suites cannot both be right about the same numbers, and that is
  * deliberate: `physics-test.mjs` measures Pro, `assist-test.mjs` measures the
  * default. `px.reset()` always lands in Pro, so the Pro suite never has to know
  * the assist exists.
+ *
+ * TWO DEFECTS THAT ONLY DRIVING FOUND, and they were masking each other:
+ *
+ *   1. THE WATCH STRUCK THE RIG ON EVERY TURN. `Trim`'s second reefing rule
+ *      shortens sail when the rudder is held past 70 per cent of hard over, on
+ *      the reasoning that a pinned rudder means the after sails are overpowering
+ *      the helm. But in assist the player turns by HOLDING the arrow key, so the
+ *      rudder sits at hard over for the whole turn: 25 s on the helm took her
+ *      from 16 sails to storm canvas, cost 5.5 kn, and then wanted 100 s at
+ *      RESET_RATE to shake out again. Fixed by gating the rule on whether she is
+ *      actually answering — a signed, low-passed yaw rate. Pro's 0.41 deg/s with
+ *      the wheel hard over is still "will not steer" and still reefs; the
+ *      assist's 4.6 deg/s is a player turning. Fixing it also bought 15 points of
+ *      speed kept through a turn (70 -> 85 per cent) and lifted the slowest
+ *      moment of a hard circle from 5.8 to 7.0 kn.
+ *
+ *   2. `input.sailTrim` NEVER REACHED ZERO. It is an exponential approach, so one
+ *      second after the up arrow comes up it is 3.6e-6, after six seconds 1.4e-40,
+ *      and it then sits on the smallest denormal for the rest of the session.
+ *      `Trim.update` read `cmd !== 0` as "the player has a hand on the throttle"
+ *      and pinned the reef cap wide open, so after any press of the up arrow the
+ *      watch could not shorten sail at all. That is what hid defect 1 from the
+ *      driving trace: the throttle residual had disabled the reefing that would
+ *      otherwise have wrecked the turn. Fixed at the root in `input/Input.ts`
+ *      (`approach()` now snaps its last 1e-4) with a deadband in `Trim` as well,
+ *      so nothing here depends on another module's epsilon.
+ *
+ * Neither suite could see either one: both drive `w.input.steer` and
+ * `w.input.sailTrim` directly, so neither ever exercised the input smoothing, and
+ * neither watched `px.sailLevel` during a turn. `assist-test.mjs` now asserts
+ * that 30 s of hard-over helm leaves the rig standing.
  *
  * TEST ISOLATION — two defects were found here, both in the HARNESS, neither in
  * the solver. Do not re-chase them:

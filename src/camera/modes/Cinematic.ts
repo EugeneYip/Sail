@@ -3,6 +3,7 @@ import {
   aimOffset,
   anchorRelative,
   localToWorld,
+  MAX_AXIS_ELEVATION,
   type CameraContext,
   type CameraMode,
   type CameraSolve,
@@ -50,13 +51,32 @@ const SEED_QUANTUM = 30;
 /** Where each shot parks for a capture, in its own `u`. */
 const U_HOLD = [0.42, 0.45, 0.5, 0.62, 0.35];
 
+/**
+ * How far a player may pan within a composed shot, radians. Deliberately small
+ * and deliberately non-zero.
+ *
+ * This mode used to declare all three of these as 0, i.e. free-look disabled
+ * outright, on the grounds that an auto-director does not take direction. That
+ * is right about the composition and wrong about the player: `cinematic` is in
+ * the C cycle, so a player lands in it, drags, and gets ABSOLUTELY NOTHING —
+ * which reads as a broken camera, not as an artistic position. A pan of 29 deg
+ * that eases back to the composed axis a few seconds after you let go says "you
+ * can look, the shot is still mine", and no drag in the game is dead any more.
+ *
+ * Kept under the rig's `LOOK_HOLD_FROM` on purpose so the recentre always wins:
+ * beyond that the rig treats a yaw deviation as a deliberate camera placement
+ * and stops taking it back, which is correct for `chase` and wrong here.
+ */
+const PAN_YAW_LIMIT = 0.5;
+const PAN_PITCH_LIMIT = 0.32;
+
 export class CinematicMode implements CameraMode {
   readonly name = 'cinematic';
-  // An auto-director does not take direction. Free-look is disabled outright
-  // rather than clamped so a stray mouse drag cannot break a composed frame.
-  readonly lookYawLimit = 0;
-  readonly lookPitchMin = 0;
-  readonly lookPitchMax = 0;
+  readonly lookYawLimit = PAN_YAW_LIMIT;
+  readonly lookPitchMin = -PAN_PITCH_LIMIT;
+  readonly lookPitchMax = PAN_PITCH_LIMIT;
+  /** Fast: the director should get the frame back promptly. */
+  readonly lookRecentreRate = 1.2;
 
   private rng: () => number = makeRng(1);
   private index = 0;
@@ -118,6 +138,24 @@ export class CinematicMode implements CameraMode {
         break;
       default:
         this.yard(ctx, out, u);
+    }
+
+    // Every shot above is "eye HERE, aimed THERE", so the player's pan is one
+    // rotation of the finished aim about the eye — no shot needs to know about
+    // it. `aimOffset` rotates the AXIS, and rotating the axis to starboard is
+    // exactly what "drag right, look right" means, so `lookYaw` goes in with a
+    // positive sign; safe to pass `out.target` as both subject and output
+    // because it reads the direction before it writes.
+    if (ctx.lookYaw !== 0 || ctx.lookPitch !== 0) {
+      aimOffset(
+        out.position,
+        out.target,
+        ctx.lookYaw,
+        ctx.lookPitch,
+        out.target,
+        -MAX_AXIS_ELEVATION,
+        MAX_AXIS_ELEVATION,
+      );
     }
   }
 

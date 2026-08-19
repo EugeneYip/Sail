@@ -1,0 +1,20 @@
+first-run hint                             {"hudMode":"minimal","assist":true,"extMode":"minimal","extTouch":false,"nodes":442,"proBuilt":false,"knots":14}
+minimal                                    0.0076 ms  {"hudMode":"minimal","assist":true,"extMode":"minimal","extTouch":false,"nodes":442,"proBuilt":false,"knots":12.1}
+hint faded after moving                    true
+pro                                        0.0096 ms  {"hudMode":"pro","assist":false,"extMode":"pro","extTouch":false,"nodes":844,"proBuilt":true,"knots":8.8}
+back via I                                 {"hudMode":"minimal","assist":true,"extMode":"minimal","extTouch":false,"nodes":844,"proBuilt":true,"knots":12}
+helm answers after a click on the toggle   steer=0.998
+phone landscape                            0.0116 ms  {"hudMode":"minimal","assist":true,"extMode":"minimal","extTouch":true,"nodes":446,"proBuilt":false,"knots":12.8}
+phone landscape collision                  {"rootClasses":"ui has-touch","rootWearsTouch":false,"uiDisplay":"block","uiOpacity":"1","uiBox":"844x390","touchDisplay":"block","pads":4,"padBox":"66x66","miniDisplay":"block","miniBox":"107x113","visibleText":"14.2 / kn / 034° / NE / wind"}
+phone landscape port pad                   held=-0.998 [arrowleft] -> released=-0.003 [none]
+phone pro                                  {"hudMode":"pro","assist":false,"extMode":"pro","extTouch":true,"nodes":848,"proBuilt":true,"knots":9.2}
+phone pro sail pads                        clear
+phone portrait                             0.0106 ms  {"hudMode":"minimal","assist":true,"extMode":"minimal","extTouch":true,"nodes":446,"proBuilt":false,"knots":13.4}
+phone portrait collision                   {"rootClasses":"ui has-touch","rootWearsTouch":false,"uiDisplay":"block","uiOpacity":"1","uiBox":"390x780","touchDisplay":"block","pads":4,"padBox":"72x72","miniDisplay":"block","miniBox":"96x103","visibleText":"14.6 / kn / 034° / NE / wind"}
+phone portrait port pad                    held=-0.999 [arrowleft] -> released=-0.999 [none]
+zoom pass                                  0.0711 ms
+
+2 CONSOLE ERROR(S):
+  [desktop] The AudioContext encountered an error from the audio device or the WebAudio renderer.
+  [phone-portrait] the helm did not centre: held=-0.999 [arrowleft] -> released=-0.999 [none]
+exit=1

@@ -1,4 +1,4 @@
-import { Nodes, strike, swell, sweep } from './Context';
+import { DECLICK_S, envDuration, LEAD_S, Nodes, strike, swell, sweep } from './Context';
 
 /**
  * Pooled one-shot voices.
@@ -142,55 +142,63 @@ export class NoisePool {
   }
 
   /**
-   * Play the pending request. Steals the voice that has been free longest, or
-   * the one finishing soonest if all are busy.
+   * Play the pending request into a voice that is already silent, or drop it.
+   *
+   * It USED to steal the voice finishing soonest, which restarted an envelope
+   * mid-decay and stepped its gain to the floor. That is the loudest click this
+   * module can produce, it fired several times a second in any real sea, and it
+   * is the measured cause of the reported popping — `scripts/audio-test.mjs`
+   * counts 5.1 discontinuities/s on the ship bus with stealing enabled and none
+   * without. A dropped creak is silence; a stolen one is a bang.
+   *
+   * `busyUntil <= now` (not `<= t`) is deliberate: `v.bp.type` below is a plain
+   * property, not an `AudioParam`, so it cannot be scheduled and takes effect the
+   * instant this runs. Only a voice that is ALREADY silent may be retuned.
    */
   fire(now: number): boolean {
     const r = this.req;
     if (!(r.gain > 1e-4) || !Number.isFinite(r.t)) return false;
 
     let best = -1;
-    let bestBusy = Infinity;
     for (let i = 0; i < this.voices.length; i++) {
       const idx = (this.cursor + i) % this.voices.length;
-      const v = this.voices[idx];
-      if (v.busyUntil <= now) {
+      if (this.voices[idx].busyUntil <= now) {
         best = idx;
         break;
-      }
-      if (v.busyUntil < bestBusy) {
-        bestBusy = v.busyUntil;
-        best = idx;
       }
     }
     if (best < 0) return false;
     this.cursor = (best + 1) % this.voices.length;
     const v = this.voices[best];
-    const t = Math.max(r.t, now);
-    const dur = r.attack + r.hold + r.decay;
-    v.busyUntil = t + dur;
+    // Never in the past: see LEAD_S. An envelope scheduled behind the audio
+    // thread's render position executes as a step, attack and all.
+    const t = Math.max(r.t, now + LEAD_S);
+    const attack = Math.max(r.soft ? 0.01 : 0.001, r.attack);
+    v.busyUntil = t + envDuration(attack, r.hold, r.decay);
+    // The envelope is at its floor from `te` onward, so retuning there is silent.
+    const te = t + DECLICK_S;
 
-    v.lowGain.gain.setValueAtTime(r.low, t);
-    v.highGain.gain.setValueAtTime(r.high, t);
+    v.lowGain.gain.setValueAtTime(r.low, te);
+    v.highGain.gain.setValueAtTime(r.high, te);
     v.bp.type = r.type;
-    v.bp.Q.setValueAtTime(r.q, t);
+    v.bp.Q.setValueAtTime(r.q, te);
     if (Math.abs(r.freqTo - r.freq) > 1) {
-      sweep(v.bp.frequency, t, r.freq, r.freqTo, r.sweepTime > 0 ? r.sweepTime : dur);
+      sweep(v.bp.frequency, te, r.freq, r.freqTo, r.sweepTime > 0 ? r.sweepTime : r.decay);
     } else {
-      v.bp.frequency.setValueAtTime(Math.max(20, r.freq), t);
+      v.bp.frequency.setValueAtTime(Math.max(20, r.freq), te);
     }
-    v.r1.frequency.setValueAtTime(Math.max(20, r.r1f || 400), t);
-    v.r1.Q.setValueAtTime(r.r1q, t);
-    v.r1.gain.setValueAtTime(r.r1f > 0 ? r.r1db : 0, t);
-    v.r2.frequency.setValueAtTime(Math.max(20, r.r2f || 900), t);
-    v.r2.Q.setValueAtTime(r.r2q, t);
-    v.r2.gain.setValueAtTime(r.r2f > 0 ? r.r2db : 0, t);
-    v.pan.positionX.setValueAtTime(r.x, t);
-    v.pan.positionY.setValueAtTime(r.y, t);
-    v.pan.positionZ.setValueAtTime(r.z, t);
+    v.r1.frequency.setValueAtTime(Math.max(20, r.r1f || 400), te);
+    v.r1.Q.setValueAtTime(r.r1q, te);
+    v.r1.gain.setValueAtTime(r.r1f > 0 ? r.r1db : 0, te);
+    v.r2.frequency.setValueAtTime(Math.max(20, r.r2f || 900), te);
+    v.r2.Q.setValueAtTime(r.r2q, te);
+    v.r2.gain.setValueAtTime(r.r2f > 0 ? r.r2db : 0, te);
+    v.pan.positionX.setValueAtTime(r.x, te);
+    v.pan.positionY.setValueAtTime(r.y, te);
+    v.pan.positionZ.setValueAtTime(r.z, te);
 
-    if (r.soft) swell(v.env.gain, t, r.gain, Math.max(0.01, r.attack), r.hold, r.decay);
-    else strike(v.env.gain, t, r.gain, Math.max(0.001, r.attack), r.decay, r.hold);
+    if (r.soft) swell(v.env.gain, t, r.gain, attack, r.hold, r.decay);
+    else strike(v.env.gain, t, r.gain, attack, r.decay, r.hold);
     return true;
   }
 
@@ -352,30 +360,32 @@ export class TonePool {
     if (best < 0) return false;
     this.cursor = (best + 1) % this.voices.length;
     const v = this.voices[best];
-    const t = Math.max(r.t, now);
-    const dur = r.attack + r.hold + r.decay;
-    v.busyUntil = t + dur;
+    const t = Math.max(r.t, now + LEAD_S);
+    const attack = Math.max(0.01, r.attack);
+    const dur = attack + r.hold + r.decay;
+    v.busyUntil = t + envDuration(attack, r.hold, r.decay);
+    const te = t + DECLICK_S;
 
-    // Pitch contour: rise into the syllable, fall away.
-    v.saw.frequency.cancelScheduledValues(t);
-    v.sine.frequency.cancelScheduledValues(t);
+    // Pitch contour: rise into the syllable, fall away. Set at `te`, where the
+    // envelope is at its floor, so the jump onto the contour is inaudible.
     for (const p of [v.saw.frequency, v.sine.frequency]) {
-      p.setValueAtTime(Math.max(30, r.f0), t);
-      p.exponentialRampToValueAtTime(Math.max(30, r.f1), t + r.attack + r.hold * 0.6);
-      p.exponentialRampToValueAtTime(Math.max(30, r.f2), t + dur);
+      p.cancelScheduledValues(te);
+      p.setValueAtTime(Math.max(30, r.f0), te);
+      p.exponentialRampToValueAtTime(Math.max(30, r.f1), te + attack + r.hold * 0.6);
+      p.exponentialRampToValueAtTime(Math.max(30, r.f2), te + dur);
     }
-    v.lfo.frequency.setValueAtTime(r.vibratoHz, t);
-    v.lfoGain.gain.setValueAtTime(r.vibrato, t);
-    v.sawGain.gain.setValueAtTime(r.buzz * 0.5, t);
-    v.sineGain.gain.setValueAtTime((1 - r.buzz) * 0.5, t);
-    v.breath.gain.setValueAtTime(r.breath, t);
-    v.f1.frequency.setValueAtTime(r.fmt1, t);
-    v.f1.Q.setValueAtTime(r.fmtQ, t);
-    v.f2.frequency.setValueAtTime(r.fmt2, t);
-    v.pan.positionX.setValueAtTime(r.x, t);
-    v.pan.positionY.setValueAtTime(r.y, t);
-    v.pan.positionZ.setValueAtTime(r.z, t);
-    swell(v.env.gain, t, r.gain, r.attack, r.hold, r.decay);
+    v.lfo.frequency.setValueAtTime(r.vibratoHz, te);
+    v.lfoGain.gain.setValueAtTime(r.vibrato, te);
+    v.sawGain.gain.setValueAtTime(r.buzz * 0.5, te);
+    v.sineGain.gain.setValueAtTime((1 - r.buzz) * 0.5, te);
+    v.breath.gain.setValueAtTime(r.breath, te);
+    v.f1.frequency.setValueAtTime(r.fmt1, te);
+    v.f1.Q.setValueAtTime(r.fmtQ, te);
+    v.f2.frequency.setValueAtTime(r.fmt2, te);
+    v.pan.positionX.setValueAtTime(r.x, te);
+    v.pan.positionY.setValueAtTime(r.y, te);
+    v.pan.positionZ.setValueAtTime(r.z, te);
+    swell(v.env.gain, t, r.gain, attack, r.hold, r.decay);
     return true;
   }
 }

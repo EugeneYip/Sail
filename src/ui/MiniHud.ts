@@ -38,8 +38,17 @@ export class MiniHud {
     this.windArrow = add(s, svg('g'));
     // A flow arrow — it points the way the air goes, so a headwind points aft
     // and a fair wind points ahead. Bow is up; drawn pointing up at rotation 0.
+    //
+    // Drawn twice: a dark stroke of the same geometry, wider, underneath. This
+    // is the one live indicator on the default screen and it measured 3.1:1
+    // over sunlit foam — the least legible thing that actually matters. A
+    // filter would re-rasterise as the arrow turns; two static nodes under a
+    // group that only takes a transform cost nothing per frame.
+    const HEAD = 'M12 2.5 L8.6 9.6 L12 7.9 L15.4 9.6 Z';
+    add(this.windArrow, svg('line', { x1: 12, y1: 21, x2: 12, y2: 7, class: 'mw-stem-u' }));
+    add(this.windArrow, svg('path', { d: HEAD, class: 'mw-head-u' }));
     add(this.windArrow, svg('line', { x1: 12, y1: 21, x2: 12, y2: 7, class: 'mw-stem' }));
-    add(this.windArrow, svg('path', { d: 'M12 2.5 L8.6 9.6 L12 7.9 L15.4 9.6 Z', class: 'mw-head' }));
+    add(this.windArrow, svg('path', { d: HEAD, class: 'mw-head' }));
     add(w, el('span', 'mini-wind-l', 'wind'));
 
     this.ironsRow = add(this.root, el('div', 'mini-irons', 'in irons — bear away'));

@@ -13,6 +13,50 @@
 
 export const dB = (db: number): number => Math.pow(10, db / 20);
 
+/**
+ * Every scheduled event is placed this far ahead of `ctx.currentTime`.
+ *
+ * `currentTime` is the START of the last block handed to the audio thread, and
+ * the thread has already rendered some way past it. An event scheduled at
+ * `currentTime + 2 ms` therefore lands in the PAST, and a `setValueAtTime` in
+ * the past is applied at the next sample the thread renders — so a 4 ms attack
+ * ramp collapses into a step, which is a click. 55 ms clears a 128-sample
+ * quantum, a 60 fps frame and a typical 'interactive' output buffer, and it is
+ * far below the ~150 ms at which a delay in an ambient bed becomes noticeable.
+ *
+ * It also makes a main-thread stall degrade correctly: if a frame arrives 120 ms
+ * late, the ramp the PREVIOUS frame scheduled is already running, so the
+ * parameter glides on toward a slightly stale target instead of stepping.
+ */
+export const LEAD_S = 0.055;
+
+/**
+ * A retriggered envelope is faded to silence over this long first. Without it,
+ * restarting a voice that is still sounding steps its gain straight to the floor
+ * — the single loudest click this module can make.
+ */
+export const DECLICK_S = 0.006;
+
+/**
+ * Cancel future automation while keeping the value continuous.
+ *
+ * `cancelScheduledValues` alone leaves the parameter wherever the cancelled
+ * curve had reached and the next `setValueAtTime` steps away from it.
+ * `cancelAndHoldAtTime` is the primitive that exists for precisely this; the
+ * fallback reads the live value, which is close enough when `t` is one lead
+ * ahead.
+ */
+export function holdParam(p: AudioParam, t: number): void {
+  const ext = p as AudioParam & { cancelAndHoldAtTime?: (when: number) => void };
+  if (typeof ext.cancelAndHoldAtTime === 'function') {
+    ext.cancelAndHoldAtTime(t);
+    return;
+  }
+  const v = p.value;
+  p.cancelScheduledValues(t);
+  p.setValueAtTime(Number.isFinite(v) ? v : 0, t);
+}
+
 /** Nodes created per-context, with a live count for leak assertions. */
 export class Nodes {
   live = 0;
@@ -161,7 +205,7 @@ export class Ramp {
     if (!Number.isFinite(v)) return;
     if (Math.abs(v - this.last) < this.eps) return;
     this.last = v;
-    this.p.setTargetAtTime(v, now, this.tau);
+    this.p.setTargetAtTime(v, now + LEAD_S, this.tau);
   }
 
   /** Only legal before the graph is audible. */
@@ -204,9 +248,12 @@ export class PanRamp {
 const FLOOR = 1e-4;
 
 /**
- * Percussive envelope: linear attack then exponential decay to silence.
- * `cancelScheduledValues` + an explicit start value is what keeps a retriggered
- * voice from stepping (and therefore clicking).
+ * Percussive envelope: a `DECLICK_S` fade to silence, then linear attack and
+ * exponential decay. The fade is what makes the envelope safe to schedule on a
+ * parameter that is still moving — it leaves the curve continuous instead of
+ * stepping to the floor, which is the classic retrigger click.
+ *
+ * Audible sound starts at `t0 + DECLICK_S`; `envDuration` gives the total.
  */
 export function strike(
   g: AudioParam,
@@ -217,12 +264,13 @@ export function strike(
   hold = 0,
 ): void {
   const p = Math.max(FLOOR * 2, peak);
-  g.cancelScheduledValues(t0);
-  g.setValueAtTime(FLOOR, t0);
-  g.linearRampToValueAtTime(p, t0 + attack);
-  if (hold > 0) g.setValueAtTime(p, t0 + attack + hold);
-  g.exponentialRampToValueAtTime(FLOOR, t0 + attack + hold + decay);
-  g.setValueAtTime(0, t0 + attack + hold + decay + 0.001);
+  const a = t0 + DECLICK_S;
+  holdParam(g, t0);
+  g.linearRampToValueAtTime(FLOOR, a);
+  g.linearRampToValueAtTime(p, a + attack);
+  if (hold > 0) g.setValueAtTime(p, a + attack + hold);
+  g.exponentialRampToValueAtTime(FLOOR, a + attack + hold + decay);
+  g.linearRampToValueAtTime(0, a + attack + hold + decay + DECLICK_S);
 }
 
 /** Swelling envelope for whooshes, blows and bowed notes. */
@@ -235,15 +283,24 @@ export function swell(
   release: number,
 ): void {
   const p = Math.max(FLOOR * 2, peak);
-  g.cancelScheduledValues(t0);
-  g.setValueAtTime(FLOOR, t0);
-  g.exponentialRampToValueAtTime(p, t0 + attack);
-  g.setValueAtTime(p, t0 + attack + hold);
-  g.exponentialRampToValueAtTime(FLOOR, t0 + attack + hold + release);
-  g.setValueAtTime(0, t0 + attack + hold + release + 0.001);
+  const a = t0 + DECLICK_S;
+  holdParam(g, t0);
+  g.linearRampToValueAtTime(FLOOR, a);
+  g.exponentialRampToValueAtTime(p, a + attack);
+  g.setValueAtTime(p, a + attack + hold);
+  g.exponentialRampToValueAtTime(FLOOR, a + attack + hold + release);
+  g.linearRampToValueAtTime(0, a + attack + hold + release + DECLICK_S);
 }
 
-/** Sweep a filter while the voice is still silent, then glide it. */
+/** Wall-clock length of a `strike`/`swell`, including both de-click fades. */
+export function envDuration(attack: number, hold: number, decay: number): number {
+  return 2 * DECLICK_S + attack + hold + decay;
+}
+
+/**
+ * Sweep a filter. Called at the moment the envelope is at its floor, so the jump
+ * to `from` is inaudible; the glide after it is what the ear hears.
+ */
 export function sweep(p: AudioParam, t0: number, from: number, to: number, dur: number): void {
   p.cancelScheduledValues(t0);
   p.setValueAtTime(Math.max(20, from), t0);

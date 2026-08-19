@@ -161,17 +161,19 @@ export class ShipSounds {
     this.squealVib.set(30 + 90 * load, now);
     this.squealPan.set(anchorWorld(sim, ANCHOR.deck), now);
 
-    // Wheel pawl clicks and sheave knocks.
-    const clickRate = steer * 9 + trim * 5;
-    this.clickAccum += clickRate * dt;
-    while (this.clickAccum > 1) {
+    // Wheel pawl clicks and sheave knocks. A pawl click IS a click, so it is
+    // rate-limited hard and only one may be dispatched per frame: a stalled main
+    // thread must never be able to release a banked-up burst of them.
+    const clickRate = steer * 2.2 + trim * 1.2;
+    this.clickAccum = Math.min(1.6, this.clickAccum + clickRate * dt);
+    if (this.clickAccum > 1) {
       this.clickAccum -= 1;
       const r = this.rng();
       const atWheel = steer > trim;
       const a = atWheel ? ANCHOR.wheel : ANCHOR.deck;
       const p = toWorld(sim, a[0] + (r - 0.5) * 3, a[1], a[2] + (this.rng() - 0.5) * 6);
       const req = this.wood.begin(now + r * 0.03);
-      req.gain = dB(-34) * (0.5 + 0.5 * r);
+      req.gain = dB(-42) * (0.5 + 0.5 * r);
       req.low = 0.3;
       req.high = 0.7;
       req.type = 'bandpass';
@@ -180,8 +182,8 @@ export class ShipSounds {
       req.r1f = 320 + 260 * r;
       req.r1q = 11;
       req.r1db = 10;
-      req.attack = 0.001;
-      req.decay = 0.035 + 0.05 * r;
+      req.attack = 0.004;
+      req.decay = 0.04 + 0.05 * r;
       req.x = p.x;
       req.y = p.y;
       req.z = p.z;
@@ -203,14 +205,18 @@ export class ShipSounds {
       Math.abs(sim.heaveAccel) * 0.035 +
       rigLoad * 0.06;
 
-    const rate = Math.min(9, 0.35 + 26 * dStress);
-    this.creakAccum += rate * dt;
+    // Was min(9, 0.35 + 26*dStress) in clusters of up to four, i.e. up to 36
+    // wood transients a second. That is not a ship working, it is a rattle, and
+    // it is what exhausted the pool. A working hull talks a couple of times a
+    // second at most.
+    const rate = Math.min(1.8, 0.12 + 6 * dStress);
+    this.creakAccum = Math.min(1.6, this.creakAccum + rate * dt);
     if (this.creakAccum <= 1) return;
-    this.creakAccum = 0;
+    this.creakAccum -= 1;
 
-    // A cluster: the hull works several joints in quick succession.
+    // A cluster: the hull works one or two joints in quick succession.
     const heavy = smoothstep(0.06, 0.5, dStress);
-    const count = 1 + Math.floor(this.rng() * (1 + 3 * heavy));
+    const count = 1 + (this.rng() < 0.35 * heavy ? 1 : 0);
     for (let k = 0; k < count; k++) {
       const r = this.rng();
       const spot = CREAK_SPOTS[Math.floor(this.rng() * CREAK_SPOTS.length)];
@@ -218,7 +224,7 @@ export class ShipSounds {
       const size = (0.4 + 0.6 * this.rng()) * (0.55 + 0.75 * heavy) * (1 - 0.55 * (k / count));
       const long = this.rng() < 0.18 + 0.3 * heavy;
       const req = this.wood.begin(now + k * (0.02 + 0.14 * this.rng()));
-      req.gain = dB(-27) * size;
+      req.gain = dB(-33) * size;
       req.low = 0.6;
       req.high = 0.3;
       req.type = 'lowpass';
@@ -231,7 +237,7 @@ export class ShipSounds {
       req.r2f = 480 + 950 * this.rng();
       req.r2q = 7 + 8 * this.rng();
       req.r2db = 10;
-      req.attack = long ? 0.05 : 0.003;
+      req.attack = long ? 0.05 : 0.008;
       req.hold = long ? 0.1 + 0.3 * this.rng() : 0;
       req.decay = long ? 0.5 + 0.9 * this.rng() : 0.1 + 0.35 * this.rng();
       req.soft = long;
@@ -248,8 +254,11 @@ export class ShipSounds {
     if (total < 1) return;
     const luffFrac = sim.luffArea / Math.max(1, total);
     const wind = Math.max(0, sim.windSpeed);
-    const rate = Math.min(16, luffFrac * (1.4 + 0.5 * wind));
-    this.flapAccum += rate * dt;
+    // Was min(16, ...) at dB(-17) — the loudest thing in the game, sixteen times
+    // a second, into an eight-voice pool. Flogging canvas is dramatic but it is
+    // subordinate; three reports a second reads as violent without shredding.
+    const rate = Math.min(3, luffFrac * (0.5 + 0.16 * wind));
+    this.flapAccum = Math.min(1.6, this.flapAccum + rate * dt);
 
     // Which mast is flogging worst — the crack should come from there.
     let worst: SimSail | null = null;
@@ -268,9 +277,8 @@ export class ShipSounds {
       this.prevLuff.set(s.id, s.luff);
     }
 
-    while (this.flapAccum > 1) {
+    if (this.flapAccum > 1 && worst) {
       this.flapAccum -= 1;
-      if (!worst) break;
       this.crack(sim, now, worst, 0.35 + 0.65 * this.rng(), wind);
     }
   }
@@ -283,7 +291,7 @@ export class ShipSounds {
     // Dynamic pressure on the cloth sets how violent the report is.
     const force = Math.min(1.5, (wind * wind) / 320) * size * Math.min(1.3, sail.area / 300);
     const req = this.canvas.begin(now + r * 0.02);
-    req.gain = dB(-17) * force;
+    req.gain = dB(-25) * force;
     req.low = 0.35 + 0.3 * size;
     req.high = 0.95;
     req.type = 'bandpass';
@@ -297,8 +305,8 @@ export class ShipSounds {
     req.r2f = 2400 + 1800 * r;
     req.r2q = 1.1;
     req.r2db = 4;
-    req.attack = 0.0015;
-    req.decay = 0.05 + 0.28 * size;
+    req.attack = 0.004;
+    req.decay = 0.06 + 0.28 * size;
     req.x = p.x;
     req.y = p.y;
     req.z = p.z;
@@ -307,7 +315,7 @@ export class ShipSounds {
     // Big reports come as a double crack — the cloth snaps back.
     if (size > 0.75 && this.rng() < 0.6) {
       const q = this.canvas.begin(now + 0.028 + 0.03 * this.rng());
-      q.gain = dB(-20) * force;
+      q.gain = dB(-28) * force;
       q.low = 0.3;
       q.high = 0.9;
       q.type = 'bandpass';
@@ -350,7 +358,7 @@ export class ShipSounds {
     for (let i = 0; i < n; i++) {
       const p = toWorld(sim, x0 + (this.rng() - 0.5) * 0.6, 4.6, z0 + dz * i * 2);
       const req = this.wood.begin(now + 0.1 + i * gap);
-      req.gain = dB(-33) * (0.7 + 0.5 * this.rng());
+      req.gain = dB(-38) * (0.7 + 0.5 * this.rng());
       req.low = 0.85;
       req.high = 0.25;
       req.type = 'lowpass';

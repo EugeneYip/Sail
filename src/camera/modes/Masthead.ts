@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   directionFrom,
   localToWorld,
+  MAX_AXIS_ELEVATION,
   type CameraContext,
   type CameraMode,
   type CameraSolve,
@@ -36,8 +37,14 @@ const FOV = 74;
 export class MastheadMode implements CameraMode {
   readonly name = 'masthead';
   readonly lookYawLimit = Math.PI; // you are in a crow's nest: look anywhere
-  readonly lookPitchMin = -1.05;
-  readonly lookPitchMax = 0.75;
+  /**
+   * Derived from the composed axis rather than picked, so both poles are exactly
+   * reachable: the axis starts 33 deg DOWN, so the range is asymmetric. The old
+   * +0.75 stopped 40 deg short of the truck — from the crosstrees, with the
+   * topmast and the royal yard right there, that was the wrong 40 deg to lose.
+   */
+  readonly lookPitchMin = -MAX_AXIS_ELEVATION - BASE_PITCH;
+  readonly lookPitchMax = MAX_AXIS_ELEVATION - BASE_PITCH;
 
   private dir = new THREE.Vector3();
   private eye = new THREE.Vector3();
@@ -53,8 +60,8 @@ export class MastheadMode implements CameraMode {
     const yaw = frame.heading + ctx.lookYaw;
     const pitch = THREE.MathUtils.clamp(
       BASE_PITCH + ctx.lookPitch + frame.pitch * 0.9,
-      -1.45,
-      0.6,
+      -MAX_AXIS_ELEVATION,
+      MAX_AXIS_ELEVATION,
     );
     directionFrom(yaw, pitch, this.dir);
     out.target.copy(this.eye).addScaledVector(this.dir, 55);

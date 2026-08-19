@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { directionFrom, type CameraContext, type CameraMode, type CameraSolve } from '../CameraMode';
-import { damp } from '../../util/math';
+import { damp, wrapPi } from '../../util/math';
 
 /**
  * Untethered fly-cam for debugging. WASD to translate, R/F for up/down, mouse
@@ -9,6 +9,14 @@ import { damp } from '../../util/math';
  *
  * Deliberately has no collision, no shake and no framing rules — its whole job
  * is to let you go and look at the thing that is broken.
+ *
+ * It is the one mode that accumulates its own look angles (`ownsLook`), because
+ * a fly-cam's aim is world-absolute and must not recentre or clamp to a ship it
+ * has flown away from. That is also how it stayed inverted after every other
+ * mode was fixed: it read `world.input.lookYaw` directly and so skipped the sign
+ * normalisation in the rig. It now reads `ctx.lookYawDelta`, which is the same
+ * per-frame delta with the signs already corrected. Do not reach past it to
+ * `world.input` again.
  */
 
 const BASE_SPEED = 26; // m/s
@@ -46,9 +54,9 @@ export class FreeMode implements CameraMode {
     const input = world.input;
 
     if (!world.cam.locked && !input.uiFocus) {
-      this.yaw += input.lookYaw;
+      this.yaw = wrapPi(this.yaw + ctx.lookYawDelta);
       this.pitch = THREE.MathUtils.clamp(
-        this.pitch + input.lookPitch,
+        this.pitch + ctx.lookPitchDelta,
         this.lookPitchMin,
         this.lookPitchMax,
       );

@@ -51,6 +51,19 @@ export interface CameraExt {
   /** True while the rig holds a deterministic pose for a screenshot. */
   captureHold: boolean;
   /**
+   * The smoothed free-look axes the active mode was solved with, radians, after
+   * the input sign normalisation and the mode's clamps.
+   *
+   * Published so the drag-direction assertions in `.tmp/camdrag.mjs` can check
+   * the ACCUMULATOR and the resulting view direction separately. A sign error is
+   * trivially easy to "fix" into a different wrong state — two mistakes that
+   * cancel look correct from the outside — and this is what tells them apart.
+   * Per the contract on `CameraContext`: +lookYaw swings the view to starboard,
+   * +lookPitch tilts it up.
+   */
+  lookYaw: number;
+  lookPitch: number;
+  /**
    * INPUT, not output. Set to a cinematic shot id before (or with) a
    * `capture:scene` to pin the director to that shot for the capture:
    * 'waterline' | 'crane' | 'longlens' | 'bowdrop' | 'yard'. Empty means the
@@ -79,6 +92,8 @@ export function createCameraExt(): CameraExt {
     aperture: 4,
     focusDistance: 80,
     captureHold: false,
+    lookYaw: 0,
+    lookPitch: 0,
     requestShot: '',
     bypassFilter: false,
   };

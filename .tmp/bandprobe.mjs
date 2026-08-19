@@ -46,8 +46,8 @@ await page.addInitScript(() => {
   window.WebSocket = function (u, p) { return p === 'vite-hmr' ? new Dead() : new Real(u, p); };
   window.WebSocket.prototype = Real.prototype;
 });
-await page.goto('http://127.0.0.1:5178/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-await page.waitForFunction(() => !!window.__leeward, null, { timeout: 90000 });
+await page.goto('http://127.0.0.1:5178/', { waitUntil: 'domcontentloaded', timeout: 240000 });
+await page.waitForFunction(() => !!window.__leeward, null, { timeout: 300000 });
 
 await page.evaluate(({ env, cam }) => {
   const w = window.__leeward.world;

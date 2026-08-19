@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { InputState, SailState } from '../types';
-import { clamp01, smoothstep } from '../util/math';
+import { clamp01, damp, smoothstep } from '../util/math';
 import { ASSIST_BIAS_DECAY_TIME, ASSIST_HAND_RATE } from './Assist';
 import {
   BRACE_MAX,
@@ -86,6 +86,26 @@ const RESET_RATE = 0.12;
  * something the watch does by itself.
  */
 const STORM_CANVAS = 4;
+/**
+ * Yaw rate, rad/s, between which the watch decides she IS answering her helm
+ * and a pinned rudder therefore means nothing. 0.8 to 2.0 deg/s.
+ *
+ * MEASURED. A Pro ship with the after sails carrying her head to wind holds
+ * 0.40 deg/s with the wheel hard over, and a Pro ship being held on a heading in
+ * a gale holds 0.0 — both are "she will not steer" and both must still shorten
+ * sail. An assisted turn runs at 4.7 deg/s at cruising speed and 1.9 deg/s at
+ * 6 kn, so the same rudder there is a player turning, not a ship in trouble.
+ */
+const ANSWERING_LO = 0.8 * (Math.PI / 180);
+const ANSWERING_HI = 2.0 * (Math.PI / 180);
+/** Seconds of low-pass on the yaw rate, so one wave cannot cancel a reef. */
+const ANSWERING_SMOOTH_TIME = 1.5;
+/**
+ * Below this a trim command is no hand on the key at all. `input.sailTrim` is an
+ * exponential approach and `Input.ts` snaps its last 1e-4, but nothing here
+ * should depend on another module's epsilon.
+ */
+const TRIM_DEADBAND = 1e-3;
 /** Must match SHROUD_FOUL in Aero.ts — the watch and the wind see one rig. */
 const SHROUD_FOUL_TRIM = 0.45;
 
@@ -116,6 +136,13 @@ export class SailTrim {
   /** Player brace offset, radians, decaying back to the watch's trim. */
   bias = 0;
   /**
+   * Low-passed rate at which she is coming round the way the wheel is asking,
+   * rad/s, negative when she is going the other way. Lagged state: it decides
+   * whether a rudder held hard over means she will not steer, or simply that the
+   * player is turning.
+   */
+  private answerRate = 0;
+  /**
    * Assist mode: the watch works the ship `ASSIST_HAND_RATE` times faster.
    * Every rate below is still rate-limited in real seconds — a yard still takes
    * 4 s to come round rather than snapping — so the rig visibly works. What
@@ -143,6 +170,7 @@ export class SailTrim {
    */
   reset(sails: SailState[], wx: number, wz: number, windSpeed: number): void {
     this.bias = 0;
+    this.answerRate = 0;
     for (let i = 0; i < this.count; i++) {
       const target = windSpeed > 0.4 ? this.solveBrace(sails[i], i, wx, wz) : 0;
       this.braceTarget[i] = target;
@@ -177,7 +205,9 @@ export class SailTrim {
   /**
    * One frame of sail handling. `wx`/`wz` are the apparent wind's direction of
    * travel in the ship's body XZ plane; `heel` decides whether the watch starts
-   * letting fly on its own.
+   * letting fly on its own; `yawRate` is the body yaw rate in rad/s, which is how
+   * the watch tells a ship that will not steer from a player putting the wheel
+   * over on purpose.
    */
   update(
     sails: SailState[],
@@ -187,13 +217,15 @@ export class SailTrim {
     windSpeed: number,
     heel: number,
     rudderFrac: number,
+    yawRate: number,
     dt: number,
   ): void {
     const n = this.count;
 
     /* --- how much canvas ------------------------------------------------- */
     const hand = this.assist ? ASSIST_HAND_RATE : 1;
-    const cmd = THREE.MathUtils.clamp(input.sailTrim, -1, 1);
+    const raw = THREE.MathUtils.clamp(input.sailTrim, -1, 1);
+    const cmd = Math.abs(raw) > TRIM_DEADBAND ? raw : 0;
     this.ordered = THREE.MathUtils.clamp(
       this.ordered + cmd * ((n * hand) / SAIL_LEVEL_TIME) * dt,
       0,
@@ -212,7 +244,42 @@ export class SailTrim {
     // Only down to storm canvas: below that there is nothing left to take in
     // that would help, and under bare poles she cannot steer at all — so a rule
     // keyed on the rudder would strike every sail and then keep insisting.
-    const pinned = this.cap > STORM_CANVAS ? clamp01((Math.abs(rudderFrac) - 0.7) / 0.3) : 0;
+    //
+    // AND ONLY IF SHE IS NOT ANSWERING. The rudder alone cannot tell the two
+    // cases apart, and in assist the player turns by HOLDING the arrow key, so
+    // the wheel sits at hard over for the whole turn. Measured before this gate
+    // existed: 25 s on the left arrow took the rig from 16 sails to storm canvas
+    // and cost 5.5 kn, then needed 100 s at RESET_RATE to shake out again — the
+    // watch sabotaging every turn the player asked for. A ship coming round at
+    // 4.7 deg/s is not overpowered; one at 0.4 deg/s with the wheel hard over is.
+    //
+    // SIGNED, not just fast. Positive rudder is a turn to starboard and heading
+    // rate is -wby, so she is answering at -sign(rudder)*yawRate. A broach — the
+    // wheel hard over one way and her head going the other — comes out negative
+    // and the rule still fires, which is the case it was written for.
+    //
+    // ASSIST ONLY, and that is a deliberate retreat from a better rule. Gating
+    // the rule in Pro as well is more honest — Pro's 0.41 deg/s with the wheel
+    // hard over reads as "will not steer" either way — but it is not free:
+    // measured, it moved the heading she holds at 24 m/s from 84 to 86 deg and
+    // the determinism case from 174.21 to 175.93, and that 2 deg of trajectory
+    // was enough to walk the floating-origin case from 4069 m to 4162 m and fail
+    // it. Pro is the calibrated ship and its numbers are a fixed point, so the
+    // gate stops at the mode that needs it. In Pro `answering` is exactly zero
+    // and this whole block reduces to what it was.
+    this.answerRate = damp(
+      this.answerRate,
+      -Math.sign(rudderFrac) * yawRate,
+      1 / ANSWERING_SMOOTH_TIME,
+      dt,
+    );
+    const answering = this.assist
+      ? smoothstep(ANSWERING_LO, ANSWERING_HI, this.answerRate)
+      : 0;
+    const pinned =
+      this.cap > STORM_CANVAS
+        ? clamp01((Math.abs(rudderFrac) - 0.7) / 0.3) * (1 - answering)
+        : 0;
     const shorten = Math.max(over, pinned * 0.8);
     if (shorten > 0) this.cap -= shorten * REEF_RATE * dt;
     else if (Math.abs(heel) < REEF_HEEL * 0.7) this.cap += RESET_RATE * dt;

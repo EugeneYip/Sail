@@ -1,6 +1,6 @@
 import { makeRng, smoothstep } from '../util/math';
 import type { Bus, Mixer } from './Buses';
-import { dB, freqRamp, Nodes, Ramp, strike, swell } from './Context';
+import { dB, envDuration, freqRamp, LEAD_S, Nodes, Ramp, strike, swell } from './Context';
 import type { SimView } from './Sim';
 
 /**
@@ -49,7 +49,7 @@ export class Music {
 
   constructor(
     nodes: Nodes,
-    private readonly bus: Bus,
+    bus: Bus,
     private readonly mixer: Mixer,
   ) {
     this.out = nodes.gain(0.0001);
@@ -114,7 +114,6 @@ export class Music {
     const duck = this.mixer.isDucking(now) ? 0.45 : 1;
     const level = off ? 0.0001 : sim.musicVolume * dB(-15) * (0.22 + 0.78 * this.intensity) * duck;
     this.level.set(level, now);
-    this.bus.level.set(1, now);
 
     if (off) {
       for (const d of this.drones) d.gain.set(0.0001, now);
@@ -128,8 +127,8 @@ export class Music {
       const root = BASE_ROOT_HZ * Math.pow(2, ROOT_STEPS[this.rootIndex] / 12);
       for (const d of this.drones) {
         // Long glissando between roots — you should never hear a note change.
-        d.oscs[0].frequency.setTargetAtTime(root * d.ratio, now, 6);
-        d.oscs[1].frequency.setTargetAtTime(root * d.ratio * 1.0013, now, 6);
+        d.oscs[0].frequency.setTargetAtTime(root * d.ratio, now + LEAD_S, 6);
+        d.oscs[1].frequency.setTargetAtTime(root * d.ratio * 1.0013, now + LEAD_S, 6);
       }
     }
 
@@ -164,7 +163,7 @@ export class Music {
     const octave = 2 + Math.floor(this.rng() * 2.4);
     const f = root * Math.pow(2, degree / 12 + octave);
     const bowed = this.rng() < 0.3;
-    const t = now + 0.02;
+    const t = now + LEAD_S;
 
     p.a.frequency.setValueAtTime(f, t);
     p.b.frequency.setValueAtTime(f * 1.0013, t);
@@ -173,12 +172,14 @@ export class Music {
 
     if (bowed) {
       const dur = 1.6 + this.rng() * 1.4;
-      swell(p.env.gain, t, 0.28, 1.3 + this.rng(), dur, 2.6 + this.rng() * 2);
-      p.busyUntil = t + 1.3 + dur + 4.6;
+      const attack = 1.3 + this.rng();
+      const release = 2.6 + this.rng() * 2;
+      swell(p.env.gain, t, 0.28, attack, dur, release);
+      p.busyUntil = t + envDuration(attack, dur, release);
     } else {
       const decay = 2.6 + this.rng() * 3.4;
       strike(p.env.gain, t, 0.34, 0.012, decay);
-      p.busyUntil = t + decay + 0.1;
+      p.busyUntil = t + envDuration(0.012, 0, decay);
     }
   }
 }

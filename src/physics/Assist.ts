@@ -27,16 +27,30 @@ import {
  *      throttle answers in seconds rather than half a minute.
  *
  * Nothing here touches mass, inertia, added mass, buoyancy, GM, roll or pitch
- * damping, or the sail force model. Heel, pitch, wave-following, the roll
- * period and the sense of 2200 tonnes are the same ship. What changes is what
- * she will do when you ask her.
+ * damping, or the sail force model. Every number that decides how she WEIGHS is
+ * the Pro ship's: the free-decay roll period measures 9.31 s in both modes to
+ * two decimals, and pitch and wave-following in a storm sea are the same
+ * (measured live: heel +/-27 deg, pitch +/-8 deg, heave +/-6 m, a 9.6 s roll).
+ * What changes is what she will do when you ask her.
+ *
+ * She does not, however, heel by the same amount, and that is worth stating
+ * plainly rather than being surprised by later: 16 m/s on a beam reach under a
+ * full press gives 18.6 deg in Pro and 26.0 deg in assist. Assist is doing 15 kn
+ * there against Pro's 11.5, and a ship 4 kn faster meets a stronger and finer
+ * apparent wind, so more of the rig's force lands athwartships. The stability
+ * that resists it is untouched — she is simply being sailed harder. 26 deg is
+ * also exactly `REEF_HEEL`, so in a fresh breeze the assisted ship sits on the
+ * threshold where the watch begins to shorten sail. That is seamanlike, but it
+ * means canvas hunts a little there, and it is the first thing to look at if the
+ * rig ever appears to breathe on its own.
  *
  * WHY A DRIVE FORCE AND NOT MORE SAIL AREA. The obvious "arcade" hack is to
  * multiply the rig force, but the rig's force acts 25 m above the centre of
  * lateral resistance, so multiplying it multiplies heel with it and she lies
  * on her ear at 30 deg. The drive force is applied at the CG, where by
- * definition it produces no torque, so acceleration is decoupled from heel and
- * heel stays exactly as measured. The same argument applies to the turn: a pure
+ * definition it produces no torque, so acceleration adds no heel of its own —
+ * what heel the assist does add arrives the honest way, through the apparent wind
+ * of a faster ship. The same argument applies to the turn: a pure
  * yaw moment turns her without kicking the stern out, and the hull's own
  * lateral force still has to swing the velocity vector round, so the turn is
  * still a coordinated turn with real drift in it.
@@ -115,17 +129,26 @@ export const ASSIST_CALM_HI = 3.5; // m/s
 /**
  * Peak assist yaw moment at hard over, N*m. The rudder alone makes about
  * 5e6 N*m at 7 m/s, and nothing at all at rest, because its force goes as the
- * square of the water speed. This roughly triples the authority at speed and,
- * through ASSIST_TURN_FLOOR, leaves a third of it available when she is barely
- * moving — which is what stops the player from ever being unable to turn.
+ * square of the water speed. This roughly doubles the authority at speed and,
+ * through ASSIST_TURN_FLOOR, leaves well over half of it available when she is
+ * barely moving — which is what stops the player from ever being unable to turn.
  *
- * Tuned by eye as much as by number: 1.5e7 turned her inside her own length,
- * which reads as a skid rather than a turn however good it is for the lap time.
- * At this value she carves about 1.3 lengths of radius at cruising speed.
+ * MEASURED, not guessed. 1.15e7 gave 5.85 deg/s and a radius of 0.7 ship
+ * lengths: she pivots inside her own length, which reads as a skid however good
+ * it is for the lap time, and the scrub cost 31 per cent of her speed through
+ * 90 deg of bearing away. 7.5e6 is the value that puts the radius back outside
+ * her own length while keeping the rate above 4 deg/s. `scripts/assist-test.mjs`
+ * asserts both ends of that window, so if you change this, re-run it.
+ *
+ * ASSIST_TURN_FLOOR rises with it, deliberately: 7.5e6 * 0.58 is the same
+ * 4.4e6 N*m at a standstill that 1.15e7 * 0.38 gave. Relaxing the turn at
+ * cruising speed must not cost the never-immobilised property at rest, so the
+ * two constants are tuned as a pair — the shape of the curve changed, not its
+ * value at the bottom.
  */
-export const ASSIST_TURN = 1.15e7; // N*m
+export const ASSIST_TURN = 7.5e6; // N*m
 /** Fraction of the assist yaw moment available at a standstill. */
-export const ASSIST_TURN_FLOOR = 0.38;
+export const ASSIST_TURN_FLOOR = 0.58;
 /** Water speed at which the assist yaw moment reaches full value, m/s. */
 export const ASSIST_TURN_REF = 4;
 

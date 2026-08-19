@@ -42,6 +42,7 @@ export class UiLayer implements Module {
   private hud: HudView | null = null;
   private dbg!: DebugOverlay;
   private modeSw!: ModeSwitch;
+  private menuEl!: HTMLButtonElement;
   private touch!: TouchControls;
   private title!: Title;
   private firstRun!: FirstRunCard;
@@ -96,12 +97,12 @@ export class UiLayer implements Module {
     add(this.root, this.modeSw.root);
     this.modeSw.onPick = (m) => this.setMode(m, world, true);
 
-    const menu = add(this.root, el('button', 'menu'));
-    menu.type = 'button';
-    menu.setAttribute('aria-label', "Open the ship's book");
-    for (let i = 0; i < 3; i++) add(menu, el('span'));
-    menu.addEventListener('pointerdown', (e) => e.preventDefault());
-    menu.addEventListener('click', () => this.panel.toggleOpen());
+    this.menuEl = add(this.root, el('button', 'menu'));
+    this.menuEl.type = 'button';
+    this.menuEl.setAttribute('aria-label', "Open the ship's book");
+    for (let i = 0; i < 3; i++) add(this.menuEl, el('span'));
+    this.menuEl.addEventListener('pointerdown', (e) => e.preventDefault());
+    this.menuEl.addEventListener('click', () => this.panel.toggleOpen());
 
     this.touch = new TouchControls();
     add(this.root, this.touch.root);
@@ -194,8 +195,13 @@ export class UiLayer implements Module {
     const idle = !this.captureMode && !this.panel.isOpen && t0 - this.lastActivity > IDLE_MS;
     setClass(this.hudRoot, 'off', !visible);
     setClass(this.hudRoot, 'faded', visible && idle);
-    setClass(this.modeSw.root, 'off', !visible);
+    // The floating chrome must stand down when the book is open: it used to
+    // land on the panel's own header, so the switch read as a third item in the
+    // row next to "esc" — and the book already carries a Mode control.
+    const chromeOff = this.panel.isOpen;
+    setClass(this.modeSw.root, 'off', !visible || chromeOff);
     setClass(this.modeSw.root, 'faded', visible && idle);
+    setClass(this.menuEl, 'off', chromeOff || this.photo.active || this.title.active);
     // The helm is not an instrument: hiding the readouts must not strand a
     // player who has no keyboard to press H with.
     setClass(this.touch.root, 'off', this.title.active || this.photo.active || this.paused);

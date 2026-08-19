@@ -166,7 +166,13 @@ body {
   inset: 0;
   background:
     radial-gradient(40% 28% at 0% 100%, rgba(var(--shade), 0.4), transparent 72%),
-    radial-gradient(26% 16% at 100% 0%, rgba(var(--shade), 0.3), transparent 76%);
+    radial-gradient(26% 16% at 100% 0%, rgba(var(--shade), 0.3), transparent 76%),
+    /* A top band, falling off over 90 px. The switch and the menu live up here
+       and a noon sky is the brightest surface in the game; one soft edge across
+       the whole width is a filter over the lens, where a plate behind each
+       control is a box on the screen. Both were tried; this is the one that
+       disappears. */
+    linear-gradient(to bottom, rgba(var(--shade), 0.26), transparent 10%);
 }
 
 .hud.m-pro .hud-scrim {
@@ -427,6 +433,21 @@ body {
 
 .mw-head {
   fill: var(--warm);
+}
+
+/* The dark understroke. Wide enough to leave a hairline of shade all round the
+   warm arrow, so it reads over white water as well as over a night sea. */
+.mw-stem-u {
+  stroke: rgba(var(--shade), 0.8);
+  stroke-width: 4.4;
+  stroke-linecap: round;
+}
+
+.mw-head-u {
+  fill: rgba(var(--shade), 0.8);
+  stroke: rgba(var(--shade), 0.8);
+  stroke-width: 3;
+  stroke-linejoin: round;
 }
 
 .mini-wind-l {
@@ -926,18 +947,46 @@ body {
    HUD's fade, so an idle beauty shot stays empty. */
 .modesw {
   position: absolute;
-  top: calc(var(--mt) + 10px);
-  right: calc(var(--m) + 38px);
+  /* The padding is the shade's canvas, so both offsets are reduced by it and
+     the words stay exactly where they were. Wide on purpose: a shade that
+     fades out in 13 px reads as a lozenge, one that takes 30 px reads as
+     weather. It overlaps the menu's own shade, which is what makes the two
+     controls sit in one pool of shade instead of two blobs. */
+  top: calc(var(--mt) - 10px);
+  right: calc(var(--m) + 8px);
+  padding: 20px 30px 21px;
   display: flex;
   align-items: center;
   gap: 9px;
-  pointer-events: auto;
+  /* The words take the pointer; the shade around them must not eat a drag. */
+  pointer-events: none;
   opacity: 0.9;
   transition: opacity var(--fade) cubic-bezier(0.4, 0, 0.2, 1);
+  /* Measured against a blown noon sky the words came in at 1.8:1 — white ink
+     cannot beat a white sky on opacity alone, no matter how wide the halo.
+     Two additions, both self-effacing:
+
+     A soft ellipse of near-black sized to `closest-side`, so it fades out
+     inside its own padding and never shows a rectangle. Over a bright sky it
+     is worth about two stops; over a night sky, where near-black over
+     near-black is arithmetically a no-op, it costs 5/255 and cannot read as
+     chrome. The vignette does the work exactly when there is work to do.
+
+     And a 2 px outline hugging the stems. The halo was 12 px wide, which
+     lifts a whole region slightly instead of separating a 1 px stem from what
+     is behind it; tight and dark is what makes small type survive foam. */
+  background: radial-gradient(
+    ellipse closest-side at 50% 52%,
+    rgba(var(--shade), 0.5) 0%,
+    rgba(var(--shade), 0.4) 40%,
+    rgba(var(--shade), 0.16) 70%,
+    transparent 100%
+  );
   text-shadow:
-    0 0 3px rgba(var(--shade), 0.55),
-    0 0 12px rgba(var(--shade), 0.6),
-    0 1px 2px rgba(var(--shade), 0.4);
+    0 0 2px rgba(var(--shade), 0.92),
+    0 0 4px rgba(var(--shade), 0.8),
+    0 0 11px rgba(var(--shade), 0.5),
+    0 1px 2px rgba(var(--shade), 0.5);
 }
 
 .modesw:hover {
@@ -965,7 +1014,17 @@ body {
   color: var(--ink-2);
   cursor: pointer;
   line-height: 1;
+  pointer-events: auto;
   transition: color 0.25s;
+}
+
+/* 9 px type gives a 50x16 px target, which is a miss on a phone. Grow the pad,
+   not the word: the negative margins keep the row the same size on screen.
+   Vertical growth is free; horizontal is capped at 4 px a side so the two
+   targets cannot cross the 9 px gap and steal each other's taps. */
+.ui.has-touch .modesw-b {
+  padding: 14px 4px 15px;
+  margin: -14px -4px -15px;
 }
 
 .modesw-b:hover {
@@ -1122,6 +1181,15 @@ body {
   gap: 4px;
   opacity: 0.55;
   transition: opacity 0.3s;
+  /* Same self-effacing vignette as the switch beside it — three 1 px rules
+     measured 1.85:1 over a noon sky, which is not an affordance. */
+  background: radial-gradient(
+    ellipse closest-side at 62% 50%,
+    rgba(var(--shade), 0.55) 0%,
+    rgba(var(--shade), 0.4) 44%,
+    rgba(var(--shade), 0.12) 74%,
+    transparent 100%
+  );
 }
 
 .menu:hover,
@@ -1129,11 +1197,20 @@ body {
   opacity: 1;
 }
 
+/* Stands down whenever something else owns the screen — the book has its own
+   "esc", and photo mode wants a frame with nothing in it. */
+.menu.off {
+  opacity: 0;
+  visibility: hidden;
+}
+
 .menu span {
   display: block;
   height: 1px;
   background: var(--ink);
-  box-shadow: 0 0 4px rgba(var(--shade), 0.7);
+  box-shadow:
+    0 0 2px rgba(var(--shade), 0.95),
+    0 0 5px rgba(var(--shade), 0.7);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -1463,6 +1540,28 @@ body {
 .kb-l {
   font-size: 11px;
   color: var(--ink-3);
+}
+
+/* Sail and brace exist only in Pro; in the default mode the book says so once
+   instead of listing three keys that do nothing. */
+.kb-pro {
+  display: none;
+}
+
+.ui.m-pro .kb-pro {
+  display: flex;
+}
+
+.kb-min-note {
+  font-size: 11px;
+  font-style: italic;
+  font-family: var(--serif);
+  color: var(--ink-3);
+  padding: 3px 0 1px;
+}
+
+.ui.m-pro .kb-min-note {
+  display: none;
 }
 
 /* ------------------------------------------------------------------ *

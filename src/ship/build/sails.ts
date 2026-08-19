@@ -331,6 +331,50 @@ float lwClothLine(float distM, float widthM, float aa) {
 }
 
 /**
+ * The weave.
+ *
+ * This used to be baked into the canvas map as two sinusoids at 190 and 150
+ * cycles across 512 texels — 2.7 texels a cycle, right at Nyquist. What came out
+ * was a beating moiré that averaged to a flat grey-green field: measured, the
+ * baked albedo had a standard deviation of 0.024 at a two-metre viewing
+ * distance, which is a constant with a rounding error on it. That is the whole
+ * of the owner's "the sails read as flat cloth".
+ *
+ * Generated here instead, the pitch is in METRES and holds at any distance. No.1
+ * flax duck is a plain weave of about 2.4 mm warp pitch with a slightly coarser
+ * weft, and it is genuinely visible at arm's length — the ribbed sheen across a
+ * sail is the single strongest cue that it is cloth and not paper.
+ *
+ * Both tiers fade out as their pitch approaches a pixel, which is what stops the
+ * weave becoming the sparkle field a texture at this frequency turns into. The
+ * relief comes back as an analytic slope in 'g', per metre.
+ *
+ *   m  (along the span, across the chord) in metres
+ */
+float lwWeave(vec2 m, vec2 aa, out vec2 g) {
+  const float WARP = 0.0024;
+  const float WEFT = 0.0031;
+  float fw = clamp(WARP / max(aa.y * 2.0, 1e-7) - 1.0, 0.0, 1.0);
+  float ff = clamp(WEFT / max(aa.x * 2.0, 1e-7) - 1.0, 0.0, 1.0);
+
+  float kw = TAU / WARP;
+  float kf = TAU / WEFT;
+  float sw = sin(m.y * kw);
+  float sf = sin(m.x * kf);
+
+  // A plain weave is one set of threads passing over the other, so the two
+  // sinusoids do not add — the crossing where both are up is the high point and
+  // the crossing where both are down is the pit. Multiplying the phases gives
+  // that, and it is still differentiable in closed form.
+  float h = 0.62 * sw * fw + 0.5 * sf * ff + 0.34 * sw * sf * fw * ff;
+  g = vec2(
+    (0.5 * kf * cos(m.x * kf)) * ff + (0.34 * kf * sw * cos(m.x * kf)) * fw * ff,
+    (0.62 * kw * cos(m.y * kw)) * fw + (0.34 * kw * cos(m.y * kw) * sf) * fw * ff
+  );
+  return h;
+}
+
+/**
  * Tension creases fanning out of a corner of the sail.
  *
  * A drawing sail is a membrane hauled at discrete points, so the cloth gathers
@@ -452,6 +496,13 @@ function makeSailMaterial(
           float seam = lwClothLine(seamD, 0.022, aaC);
           // Every cloth is a slightly different bolt of flax.
           float panelTone = hash11(floor(pf) * 0.731 + 3.17);
+          // Two rows of hand stitching, one either side of the overlap, at the
+          // ten-to-the-inch a sailmaker works to. This is the detail that says
+          // the seam is sewn rather than drawn on.
+          float stitchRow = lwClothLine(abs(seamD - 0.016), 0.0016, aaC);
+          float stitch = stitchRow
+            * lwClothLine(min(fract(spanM / 0.0085), 1.0 - fract(spanM / 0.0085)) * 0.0085,
+                          0.0022, aaS);
 
           // Bolt ropes all round the sail, heavier on the leeches.
           float edgeSpanM = min(vSail.y, 1.0 - vSail.y) * vCloth.y;
@@ -510,10 +561,20 @@ function makeSailMaterial(
           float foot = smoothstep(0.5, 1.0, vSail.y);
           vec3 grime = vec3(0.78, 0.79, 0.74);
 
+          // The weave. Relief of 0.11 mm over a 2.4 mm pitch is a peak slope of
+          // 0.29 — a 16-degree tilt, which is what makes a sunlit sail ripple
+          // with light instead of reading as a bent sheet of paper.
+          vec2 weaveG;
+          float weave = lwWeave(vec2(spanM, chordM), vec2(fwidth(spanM), fwidth(chordM)), weaveG);
+          // lwWeave works in (span, chord); lwCreaseG is in (chord, span).
+          lwCreaseG += vec2(weaveG.y, weaveG.x) * 0.00011;
+
           diffuseColor.rgb *= 0.93 + 0.14 * panelTone;
+          diffuseColor.rgb *= 1.0 + 0.055 * weave;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * grime,
                                  foot * 0.4 + smoothstep(0.5, 0.9, stain) * 0.35);
-          diffuseColor.rgb *= 1.0 - seam * 0.28 - band * 0.2 - pts * 0.5;
+          diffuseColor.rgb *= 1.0 - seam * 0.28 - band * 0.2 - pts * 0.5
+                                  - stitch * 0.42;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.45, rope * 0.9);
           diffuseColor.rgb *= 1.0 - cring * 0.5 - reefCring * 0.42;
           // Grime settles in the bottom of a crease.

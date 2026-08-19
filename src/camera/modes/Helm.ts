@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   directionFrom,
   localToWorld,
+  MAX_AXIS_ELEVATION,
   type CameraContext,
   type CameraMode,
   type CameraSolve,
@@ -20,9 +21,11 @@ import { springDamp } from '../../util/math';
  *   of the frame, the horizon a little above centre, and the main course and
  *   lower topsails filling the top third. Everything the brief asks for is in
  *   frame at once, and nothing is centred.
- * - The player can crane up to +72 deg to look at the whole rig and down to
- *   -50 deg at the binnacle, and 150 deg either side to look over a shoulder.
- *   Look angles are stored ship-relative, so the view turns with the ship.
+ * - The player can look ANYWHERE: a full turn on the spot, and up to the trucks
+ *   or down to the binnacle. A helmsman is a person standing on a deck, not a
+ *   head in a vice, and the 150 deg yaw stop this mode used to carry meant you
+ *   could not look at your own wake. Look angles are stored ship-relative, so
+ *   the view turns with the ship and dead ahead stays dead ahead through a tack.
  * - Stopped down to f/5.6. A 26 mm-equivalent lens at f/5.6 is hyperfocal from
  *   about 2 m, so the wheel and the masthead are sharp at the same time. This is
  *   the one view where deep focus is the point.
@@ -53,9 +56,11 @@ const FOCUS_AHEAD_M = 22;
 
 export class HelmMode implements CameraMode {
   readonly name = 'helm';
-  readonly lookYawLimit = 2.62; // 150 deg
-  readonly lookPitchMin = -0.87; // -50 deg
-  readonly lookPitchMax = 1.26; // +72 deg
+  /** A full turn, wrapped rather than clamped: you can look astern. */
+  readonly lookYawLimit = Math.PI;
+  /** Exactly enough to reach both poles from the composed axis, and no more. */
+  readonly lookPitchMin = -MAX_AXIS_ELEVATION - BASE_PITCH;
+  readonly lookPitchMax = MAX_AXIS_ELEVATION - BASE_PITCH;
 
   private sway = 0;
   private vSway = { v: 0 };
@@ -89,7 +94,13 @@ export class HelmMode implements CameraMode {
     out.position.copy(this.eye);
 
     const yaw = frame.heading + ctx.lookYaw;
-    const pitch = BASE_PITCH + ctx.lookPitch + frame.pitch * PITCH_RETAINED;
+    // The hull's residual pitch rides on top of the player's, so the total needs
+    // the vertical guard even though the accumulator was already clamped to it.
+    const pitch = THREE.MathUtils.clamp(
+      BASE_PITCH + ctx.lookPitch + frame.pitch * PITCH_RETAINED,
+      -MAX_AXIS_ELEVATION,
+      MAX_AXIS_ELEVATION,
+    );
     directionFrom(yaw, pitch, this.dir);
     out.target.copy(this.eye).addScaledVector(this.dir, 60);
 

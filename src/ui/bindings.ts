@@ -1,6 +1,12 @@
 export interface Binding {
   keys: string[];
   label: string;
+  /**
+   * Only true in Pro. In the default mode the watch trims and braces, so these
+   * keys do nothing — and a book that lists a key which does nothing is worse
+   * than a book that lists nothing at all.
+   */
+  pro?: boolean;
 }
 
 export interface BindingGroup {
@@ -14,10 +20,10 @@ export const BINDINGS: BindingGroup[] = [
     title: 'Working the ship',
     items: [
       { keys: ['←', '→'], label: 'Helm to port / starboard' },
-      { keys: ['↑', '↓'], label: 'Make sail / take in sail' },
+      { keys: ['↑', '↓'], label: 'Make sail / take in sail', pro: true },
       { keys: ['A', 'D'], label: 'Helm, the other hand' },
-      { keys: ['W', 'S'], label: 'Sail, the other hand' },
-      { keys: ['Q', 'E'], label: 'Brace the yards' },
+      { keys: ['W', 'S'], label: 'Sail, the other hand', pro: true },
+      { keys: ['Q', 'E'], label: 'Brace the yards', pro: true },
     ],
   },
   {

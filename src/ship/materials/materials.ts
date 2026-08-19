@@ -17,11 +17,47 @@ import { GLSL } from '../../util/glsl';
 import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
 import type { SharedUniforms } from '../../types';
 import { PARTS_DECL } from '../shaders/parts';
+import { DETAIL_DECL } from '../shaders/detail';
 import type { TexSet } from './textures';
 
 export interface PartUniforms {
   uPartQ: { value: THREE.Vector4[] };
   uPartP: { value: THREE.Vector3[] };
+}
+
+/**
+ * Per-pixel detail parameters, all in metres or 0..1 amplitudes. See
+ * `shaders/detail.ts` for what each tier does and why it is not in a texture.
+ */
+export interface DetailOptions {
+  /** Oak ring spacing, metres. White oak runs 6-14 mm. */
+  ringPitch?: number;
+  /** How much darker the latewood line is, 0..1 of albedo. */
+  ringAlbedo?: number;
+  /** Relief of the ring figure, metres. */
+  ringRelief?: number;
+  /** Roughness swing across a ring, 0..1. */
+  ringRough?: number;
+  /** Plank width, metres. 0 leaves the surface unplanked. */
+  plankPitch?: number;
+  /** Half-width of a caulked seam, metres. Real caulk is 3 mm each side. */
+  seamWidth?: number;
+  /** How dark the caulk is, 0..1. */
+  seamDark?: number;
+  /** Relief of the fibre tier, metres. */
+  fibreRelief?: number;
+  /** Fibre / pore spacing, metres. */
+  fibrePitch?: number;
+  /** Albedo swing of the fibre tier, 0..1. */
+  fibreAlbedo?: number;
+  /** Per-board tonal spread, 0..1. */
+  plankTone?: number;
+  /** Traffic wear: scrubbed pale and smooth along the paths, 0..1. */
+  wear?: number;
+  /** Roughness swing from the fibre tier — the whole story on metals. */
+  fibreRough?: number;
+  /** Per-board roughness spread, 0..1. */
+  plankRough?: number;
 }
 
 export interface ShipMatOptions {
@@ -37,6 +73,7 @@ export interface ShipMatOptions {
   /** Strength of the analytic sky reflection. */
   env?: number;
   color?: number;
+  detail?: DetailOptions;
 }
 
 const VERT_HEAD = /* glsl */ `
@@ -57,8 +94,16 @@ varying vec3 vShipWN;
 varying vec3 vShipWP;
 uniform float uGrime;
 uniform float uEnvAmount;
+uniform vec2 uTileM;
+uniform vec4 uDetailA;
+uniform vec4 uDetailB;
+uniform vec4 uDetailC;
+uniform vec2 uDetailD;
 ${GLSL_COMMON_SAFE}
+${GLSL.noise2d}
 ${GLSL.brdf}
+${GLSL.surface}
+${DETAIL_DECL}
 `;
 
 /**
@@ -95,11 +140,35 @@ export function makeShipMaterial(
   const grime = { value: o.grime ?? 0.5 };
   const envAmount = { value: o.env ?? 1 };
 
+  const d = o.detail ?? {};
+  const tileM = { value: new THREE.Vector2(tile[0], tile[1]) };
+  const detailA = {
+    value: new THREE.Vector4(
+      d.ringPitch ?? 0.009, d.ringAlbedo ?? 0, d.ringRelief ?? 0, d.ringRough ?? 0,
+    ),
+  };
+  const detailB = {
+    value: new THREE.Vector4(
+      d.plankPitch ?? 0, d.seamWidth ?? 0.003, d.seamDark ?? 0, d.fibreRelief ?? 0,
+    ),
+  };
+  const detailC = {
+    value: new THREE.Vector4(
+      d.fibrePitch ?? 0.0016, d.fibreAlbedo ?? 0, d.plankTone ?? 0, d.wear ?? 0,
+    ),
+  };
+  const detailD = { value: new THREE.Vector2(d.fibreRough ?? 0, d.plankRough ?? 0) };
+
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uPartQ = parts.uPartQ;
     shader.uniforms.uPartP = parts.uPartP;
     shader.uniforms.uGrime = grime;
     shader.uniforms.uEnvAmount = envAmount;
+    shader.uniforms.uTileM = tileM;
+    shader.uniforms.uDetailA = detailA;
+    shader.uniforms.uDetailB = detailB;
+    shader.uniforms.uDetailC = detailC;
+    shader.uniforms.uDetailD = detailD;
     shader.uniforms.uSkyColor = shared.uSkyColor;
     shader.uniforms.uGroundColor = shared.uGroundColor;
     shader.uniforms.uWetness = shared.uWetness;
@@ -125,6 +194,20 @@ export function makeShipMaterial(
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        // Declared at function scope so the roughness, AO and normal stages
+        // below consume the same evaluation instead of running it four times.
+        vec2 lwDetG = vec2(0.0);
+        float lwDetRgh = 0.0;
+        float lwDetAo = 1.0;
+        {
+          // vMapUv is in tile units; uTileM converts it to metres, which is the
+          // only frame in which a 6 mm caulk seam or a 9 mm growth ring can be
+          // asked to hold its size independently of the texture resolution.
+          float lwDetAlb;
+          lwWoodDetail(vMapUv * uTileM, uDetailA, uDetailB, uDetailC, uDetailD,
+                       lwDetAlb, lwDetRgh, lwDetAo, lwDetG);
+          diffuseColor.rgb *= lwDetAlb;
+        }
         {
           // Salt and grime settle on anything that faces up, and rain darkens it.
           float up = clamp(vShipWN.y, 0.0, 1.0);
@@ -140,7 +223,37 @@ export function makeShipMaterial(
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
+        roughnessFactor = clamp(roughnessFactor + lwDetRgh, 0.04, 1.0);
         roughnessFactor = mix(roughnessFactor, 0.14, uWetness * (0.3 + 0.7 * clamp(vShipWN.y, 0.0, 1.0)));`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#ifdef USE_NORMALMAP_TANGENTSPACE
+        {
+          // The baked map carries everything down to a centimetre; the detail
+          // tier carries the grain, pores and seam grooves below that. Layering
+          // them with reoriented normal mapping keeps the baked slope intact
+          // instead of the base being flattened by a whitened detail average,
+          // which is what a naive add or overwrite does.
+          vec3 mapN = texture2D(normalMap, vNormalMapUv).xyz * 2.0 - 1.0;
+          mapN.xy *= normalScale;
+          // tbn[0] is the unit world direction of +u, so lwDetG — a slope per
+          // metre in the same (along, across) frame — needs no rescaling.
+          vec3 detN = normalize(vec3(-lwDetG.x, -lwDetG.y, 1.0));
+          normal = normalize(tbn * blendNormalRNM(normalize(mapN), detN));
+        }
+        #endif`,
+      )
+      .replace(
+        '#include <aomap_fragment>',
+        `#include <aomap_fragment>
+        {
+          float lwAo = lwDetAo;
+          reflectedLight.indirectDiffuse *= lwAo;
+          #if defined( USE_ENVMAP ) && defined( STANDARD )
+            reflectedLight.indirectSpecular *= lwAo;
+          #endif
+        }`,
       )
       .replace(
         '#include <lights_fragment_end>',

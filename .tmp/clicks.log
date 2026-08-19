@@ -1,0 +1,15 @@
+
+WHOLE MIX, no stall
+  calm                           clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -3.10 dB  rms   -9.6  dc -7.3e-5  nf 0
+  noon                           clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -3.07 dB  rms   -9.5  dc 5.8e-5  nf 0
+  gale                           clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -2.64 dB  rms   -8.3  dc 9.0e-5  nf 0
+  worst                          clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -0.49 dB  rms   -5.5  dc 1.1e-3  nf 0
+
+PER-FAMILY (gale, motion, some luff), no stall
+  sea                            clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -2.76 dB  rms   -9.6  dc 2.5e-3  nf 0
+  wind                           clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak  -15.23 dB  rms  -28.4  dc -8.0e-5  nf 0
+  ship                           clicks    33  (   5.1/s)  worstJump   -26.3 dB  ratio    27  peak  -16.51 dB  rms  -33.4  dc -7.6e-5  nf 0
+  weather                        clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -5.96 dB  rms  -15.7  dc 3.2e-7  nf 0
+  wildlife                       clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak -240.00 dB  rms -240.0  dc 0.0e+0  nf 0
+  music                          clicks     0  (   0.0/s)  worstJump  -240.0 dB  ratio     0  peak   -3.03 dB  rms   -8.8  dc -6.9e-5  nf 0
+EXIT 0
