@@ -288,6 +288,15 @@ export class CameraRig implements Module {
    * for why this is here and not in `input/Input.ts`, where it belongs. Mirrors
    * that module exactly: primary button only, on the canvas only, and released
    * on `pointercancel` and on window blur so a drag cannot be left latched on.
+   *
+   * ONE LOAD-BEARING DEPENDENCY, because getting it wrong latches the flag on
+   * forever and permanently disables the recentre: a `pointerup` that lands
+   * outside the canvas only reaches these listeners because `Input.ts` calls
+   * `setPointerCapture` on the SAME element (`world.renderer.domElement`), which
+   * retargets the release to it. This module deliberately does not call it too —
+   * two owners of one capture is worse — so if that call ever leaves `Input.ts`,
+   * a drag released off-canvas latches `pointerLooking` true. Moving the flag
+   * into `Input.ts`, where the capture already is, removes the coupling entirely.
    */
   private watchLookGrip(world: World): void {
     const dom = world.renderer.domElement;

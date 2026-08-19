@@ -7,7 +7,7 @@ import {
   type CameraMode,
   type CameraSolve,
 } from '../CameraMode';
-import { damp, springDamp } from '../../util/math';
+import { damp, smoothstep, springDamp, wrapPi } from '../../util/math';
 
 /**
  * The default view: behind and above, looking slightly down.
@@ -64,6 +64,12 @@ import { damp, springDamp } from '../../util/math';
  * physical ones (`MIN_EYE_ABOVE_SEA_M`, `MAX_EYE_ELEVATION`, `MAX_AXIS_TILT`).
  * Signs follow the contract on `CameraContext`: drag right, the view goes right;
  * drag up, it looks up.
+ *
+ * What does NOT come round with the eye is the COMPOSITION. The lateral offset
+ * and the leading room above are rules about the shot from astern, and carrying
+ * them rigidly to the bow put the head rig off the frame edge; they fade over the
+ * first quarter turn instead. See `FRAMING_FADE_FROM`. The fade is exactly 1 at
+ * zero look, so the composed shot and every capture of it are unchanged.
  */
 
 /** Yaw rate treated as a full-rudder turn, rad/s. */
@@ -139,6 +145,21 @@ const MAX_SHIP_NDC = 0.3;
 const SHIP_NDC_FLIP = 0.07;
 const LEAD_BASE_M = 6;
 const LEAD_PER_SPEED_M = 26;
+
+/**
+ * How far the player must yaw off the composed axis before the framing offsets
+ * start giving way, and where they finish giving way — radians of look yaw.
+ *
+ * FROM is past any accidental nudge, so the composed shot and everything near it
+ * is untouched. FULL is a quarter turn, by which point the player is plainly
+ * aiming the camera themselves rather than looking at the shot the mode composed.
+ * See the fade in `solve` for why the rules cannot simply rotate with the eye.
+ */
+const FRAMING_FADE_FROM = 0.45;
+const FRAMING_FADE_FULL = 1.6;
+/** What is left of the framing offsets at and beyond FULL. Not zero: a residual
+ *  keeps the subject off the centreline instead of dead-centre and symmetrical. */
+const FRAMING_AT_HALF_TURN = 0.35;
 
 const FOV_BASE = 58;
 const FOV_AT_TOP_SPEED = 64.5;
@@ -254,21 +275,50 @@ export class ChaseMode implements CameraMode {
     // what the player was reaching for.
     const tilt = orbitAxisTilt(d, eyeY, ctx.lookPitch, elev, MAX_AXIS_TILT);
 
+    // The two FRAMING offsets — the lateral placement and the leading room — fade
+    // out as the player yaws away from the composed shot. The orbit itself does
+    // not; only the composition rules do.
+    //
+    // Both rules are statements about the shot from ASTERN, and rotating them
+    // rigidly round to the bow carries them somewhere they mean nothing. Leading
+    // room is the plainer case: it exists to hold the water she is sailing INTO,
+    // and at half a turn that water is behind the lens, so the rotated form aims
+    // the camera astern of its own subject. The lateral offset fails less visibly
+    // and hurts more. It is set in NDC at the composed distance, where the near
+    // end of the subject is the taffrail 49 m off; swing round to the bow and the
+    // near end is the jibboom at 33 m, so the same metres of offset subtend half
+    // again the angle and push the head rig clean off the frame edge. Measured on
+    // `shots/cam-bow-chase.png`: the ship crushed against the left edge with the
+    // jibboom and headsails clipped, and two thirds of the frame empty sea. That
+    // is `RUBRIC.md`'s "awkwardly clipped at the frame edge", arrived at by
+    // obeying a composition rule outside the shot it was written for.
+    //
+    // It fades TO a fraction and not to zero, so the bow shot is off the
+    // centreline rather than a dead-symmetrical head-on mirror. At lookYaw = 0
+    // the factor is exactly 1, so the composed shot — and every capture of it —
+    // is arithmetically unchanged.
+    const framing =
+      1 -
+      (1 - FRAMING_AT_HALF_TURN) *
+        smoothstep(FRAMING_FADE_FROM, FRAMING_FADE_FULL, Math.abs(wrapPi(ctx.lookYaw)));
+    const sideF = sideM * framing;
+    const leadF = this.lead * framing;
+
     // Yaw rotates the whole composed offset — eye AND target — about the anchor.
     // Positive lookYaw carries the eye to PORT, which is what swings the view to
     // starboard; rotating the target with it is what keeps the ship framed at
     // every angle instead of sliding off at a quarter turn.
     const cy = Math.cos(ctx.lookYaw);
     const sy = Math.sin(ctx.lookYaw);
-    const tgtSideM = sideM * TARGET_SIDE_FOLLOW;
-    const eyeSide = sideM * cy - horiz * sy;
-    const eyeFwd = -horiz * cy - sideM * sy;
-    const tgtSide = tgtSideM * cy + this.lead * sy;
-    const tgtFwd = this.lead * cy - tgtSideM * sy;
+    const tgtSideM = sideF * TARGET_SIDE_FOLLOW;
+    const eyeSide = sideF * cy - horiz * sy;
+    const eyeFwd = -horiz * cy - sideF * sy;
+    const tgtSide = tgtSideM * cy + leadF * sy;
+    const tgtFwd = leadF * cy - tgtSideM * sy;
 
     anchorRelative(frame, eyeSide, eyeFwd, eyeUp, this.eye);
     out.position.copy(this.eye);
-    anchorRelative(frame, tgtSide, tgtFwd, lookY + (horiz + this.lead) * Math.tan(tilt), out.target);
+    anchorRelative(frame, tgtSide, tgtFwd, lookY + (horiz + leadF) * Math.tan(tilt), out.target);
 
     out.roll = this.roll;
     out.fov = this.fov;
