@@ -498,3 +498,32 @@ git fetch <worktree-path> leeward-standalone && git reset --hard FETCH_HEAD
 Do NOT delete the worktree until the standalone repo is verified building — the
 worktree is where every agent is currently working, and `leeward-standalone` must
 be re-split after their work lands to pick up the final commits.
+
+## 19. Audio: chains of noise, popping and distortion (owner, 2026-08-19)
+
+The owner reports that when sound appears it is "連環的雜音炸音破音" — successive
+bursts of noise, popping and clipping. They also note it may relate to frame
+stutter, which is a plausible partial cause: when the main thread stalls, queued
+`AudioParam` ramps bunch up and what should be a smooth glide executes as a step,
+which is audible as a click. The game was running at 10-30 fps for much of its
+life, so this hypothesis is credible — but it is unlikely to be the only cause.
+
+Other candidates, all of which the original spec warned against:
+- bare `.value =` assignments on running nodes instead of
+  `setTargetAtTime`/ramps (the classic click)
+- voice-pool exhaustion or restarting a `AudioBufferSourceNode` that is already
+  playing
+- summing many voices without headroom so the master exceeds 0 dBFS
+- denormals or NaN entering a filter/resonator chain and never leaving
+- an `AudioWorklet` (the rigging resonator bank) producing values outside
+  [-1, 1] or going unstable at high wind speeds
+
+**Direction change:** see AGENTS.md directive 5. Comfort outranks sophistication.
+A calm sea bed is the deliverable; anything that cannot be made clean should be
+cut rather than defended.
+
+**This must be verified numerically, not by ear** — no agent can hear the output.
+Render through an `OfflineAudioContext` and assert: peak <= 0 dBFS with margin,
+no sample-to-sample discontinuity above a threshold (that is what a click *is*),
+no DC offset, no NaN/denormal, and a bounded live `AudioNode` count. Then repeat
+the test **with simulated main-thread stalls** to reproduce the owner's condition.

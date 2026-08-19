@@ -350,17 +350,26 @@ for (const [label, viewport] of [
       window.__leeward.world.bus.emit('settings:changed');
     }, env);
     await settle(page, label === 'dark' ? 4 : 9);
-    // The idle fade is 9 s, and a settle IS idle: the first version of this pass
-    // shot an empty corner and called it a legibility result. Nudge the pointer
-    // so the readouts are up, then let the fade transition finish.
-    await page.mouse.move(800, 450);
-    await page.mouse.move(802, 452);
-    await page.waitForTimeout(1200);
-    const up = await page.evaluate(() => window.__leeward.world.ext.ui?.hudVisible);
-    if (!up) errors.push(`[zoom-${label}] the HUD was faded out — nothing to judge`);
-    for (const [c, clip] of Object.entries(corners)) {
-      await shot(page, `shots/probe-zoom-${label}-${c}.png`, { clip });
+    // The idle fade is 9 s and a settle IS idle, so the first two versions of
+    // this pass shot an empty corner and called it a legibility result. A
+    // pointer nudge was not enough either — it depends on an event arriving in
+    // a frame, and frames are exactly what a loaded machine is not delivering.
+    // Hold the helm instead: `update()` re-arms `lastActivity` from `input.steer`
+    // inside the frame itself, so this cannot race. Then WAIT for the state
+    // rather than guessing a duration.
+    await page.keyboard.down('ArrowRight');
+    let up = true;
+    try {
+      await page.waitForFunction(() => window.__leeward.world.ext.ui?.hudVisible === true, null, { timeout: 60000 });
+      await page.waitForTimeout(1100); // the 0.85 s fade-in, plus slack
+    } catch {
+      up = false;
+      errors.push(`[zoom-${label}] the HUD never came back up — nothing to judge`);
     }
+    for (const [c, clip] of Object.entries(corners)) {
+      if (up) await shot(page, `shots/probe-zoom-${label}-${c}.png`, { clip });
+    }
+    await page.keyboard.up('ArrowRight');
   }
   notes.push(['zoom pass', `${(await uiCost(page)).toFixed(4)} ms`]);
   await ctx.close();

@@ -76,7 +76,16 @@ export interface CameraContext {
   dt: number;
   frame: ShipFrame;
   anatomy: ShipAnatomy;
-  /** Free-look, ship-relative, already clamped to the mode's limits. */
+  /**
+   * Free-look, ship-relative, already clamped to the mode's limits.
+   *
+   * SIGN CONTRACT — direct manipulation, and every mode must obey it:
+   * positive `lookYaw` swings the VIEW to starboard (dragging right looks
+   * right), positive `lookPitch` tilts the view UP (dragging up looks up).
+   * For an orbiting mode "the view swings to starboard" means the EYE travels
+   * to port and the eye DROPS to look up, which is where the sign errors keep
+   * coming from — derive it from the view direction, never from the eye.
+   */
   lookYaw: number;
   lookPitch: number;
   /** Seconds since this mode was entered. */

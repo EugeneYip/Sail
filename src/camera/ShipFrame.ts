@@ -56,7 +56,15 @@ export class ShipFrame {
   readonly mountPos = new THREE.Vector3();
   /** Heavily filtered follow anchor (dead zone + spring) for detached cameras. */
   readonly anchor = new THREE.Vector3();
-  /** Unit basis from the filtered heading only — never tilted. */
+  /**
+   * Unit basis from the filtered heading only — never tilted. `right` is
+   * STARBOARD, i.e. 90 deg clockwise from `forward` seen from above, matching
+   * the ship-local +X of `types/index.ts`. It used to be built as
+   * `(forward.z, 0, -forward.x)`, which is port, and every mode in this
+   * directory was written against the documented starboard convention — so the
+   * chase offset, the orbit's sunlit-side choice and four of the five cinematic
+   * shots were all silently mirrored. Do not "simplify" this back.
+   */
   readonly forward = new THREE.Vector3(0, 0, -1);
   readonly right = new THREE.Vector3(1, 0, 0);
   /** Filtered world velocity, m/s. */
@@ -69,7 +77,7 @@ export class ShipFrame {
   pitch = 0;
   /** Filtered yaw rate, rad/s. Positive = turning to starboard. */
   turnRate = 0;
-  /** Filtered lateral acceleration in ship space, m/s^2. */
+  /** Filtered lateral acceleration in ship space, m/s^2. Positive = to starboard. */
   lateralAccel = 0;
   /** Filtered speed over ground, m/s, and 0..1 against 13 kn. */
   speed = 0;
@@ -145,7 +153,7 @@ export class ShipFrame {
     }
 
     this.forward.set(Math.sin(this.heading), 0, -Math.cos(this.heading));
-    this.right.set(this.forward.z, 0, -this.forward.x);
+    this.right.set(-this.forward.z, 0, this.forward.x);
 
     // --- attitude: two cascaded slerps == 2nd-order, -40 dB/decade.
     const k = 1 - Math.exp(-ATTITUDE_RATE * dt);
@@ -228,7 +236,7 @@ export class ShipFrame {
     this.speed = this.velocity.length();
     this.speedNorm = clamp01(this.speed / TOP_SPEED_MS);
     this.forward.set(Math.sin(this.heading), 0, -Math.cos(this.heading));
-    this.right.set(this.forward.z, 0, -this.forward.x);
+    this.right.set(-this.forward.z, 0, this.forward.x);
     this.vAnchorX.v = 0;
     this.vAnchorZ.v = 0;
     this.vHeaveLow.v = 0;

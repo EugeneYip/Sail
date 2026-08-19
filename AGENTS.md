@@ -37,6 +37,14 @@ vessels of varied types crossing, and at appropriate moments a distant landmark
 such as Boston harbour on the horizon. The point is that something interesting
 keeps appearing over the horizon.
 
+**5. Audio must be comfortable before it is clever.** The owner reports the
+current audio produces **chains of noise, popping and distortion**. The direction
+is: a calm, pleasant **sea** bed first — waves and water are the point. Everything
+else (rigging, creaking, blocks, bells, crew) is subordinate and quiet, and any
+element that cannot be made clean should be **cut rather than defended**. If music
+is present it should be ocean-flavoured, sparse and unobtrusive. An elaborate
+synthesis model that clicks is worse than a simple one that soothes.
+
 **4. It ships as a browser game on GitHub Pages.** Keep the build a pure static
 bundle: `base: './'` (already set), no server dependency, no runtime asset
 fetches. Watch bundle size and cold-load time, and keep `npm run build` green.

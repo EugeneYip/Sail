@@ -1753,15 +1753,18 @@ body {
   stroke-width: 1.6;
 }
 
+/* One stop brighter than a standing label. This card appears once, over sunlit
+   wake, and has one job — at --ink-3 the italic line all but vanished into the
+   foam. It earns the extra presence precisely because it is not permanent. */
 .chip-l {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .chip-note {
   font-family: var(--serif);
   font-size: 14px;
   font-style: italic;
-  color: var(--ink-3);
+  color: var(--ink-1);
   letter-spacing: 0;
   text-transform: none;
   flex-basis: 100%;
