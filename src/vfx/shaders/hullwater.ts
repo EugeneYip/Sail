@@ -265,8 +265,14 @@ void main(){
   // THE BREAKING EDGE. Water at the point of breaking is brightest in a thin
   // line along the crest, not uniformly across the sheet, and it is that line
   // the eye uses to tell breaking water from a painted highlight.
-  float lip = exp(-sq((field - thr) / 0.075)) * smoothstep(0.22, 0.80, vJ);
-  lit += sun * wrap * disperse * lip * 0.60;
+  //
+  // Two factors, and both have to be narrow. The first picks out the coverage
+  // CONTOUR — the film edge, wherever it happens to fall. The second confines it
+  // to the band of j where the sheet is actually overturning: with the old
+  // 'smoothstep(0.22, 0.80, vJ)' the highlight was smeared over more than half
+  // the sheet's width, which is a wash, not a crest line.
+  float lip = exp(-sq((field - thr) / 0.060)) * exp(-sq((vJ - 0.62) / 0.19));
+  lit += sun * wrap * disperse * lip * 0.85;
 
   // FOAM MUST REMOVE GLOSS, NOT JUST ADD WHITE. Unbroken water is a mirror;
   // aerated water is a diffuse scattering medium with no coherent reflection. So

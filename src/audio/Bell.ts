@@ -115,8 +115,14 @@ export class Bell {
     }
   }
 
-  strikeOne(t0: number, gain: number): void {
-    const t = notBefore(t0, this.lastNow);
+  /**
+   * `now` is the frame clock the caller built `t0` from. It is a parameter rather
+   * than `this.lastNow` because `Rig.strikeBell` can be called from outside the
+   * frame loop, where `lastNow` is a frame old — and a backstop checked against a
+   * stale clock is a backstop that cannot fire.
+   */
+  strikeOne(t0: number, gain: number, now = this.lastNow): void {
+    const t = notBefore(t0, now);
     let best = -1;
     for (let i = 0; i < this.voices.length; i++) {
       const idx = (this.cursor + i) % this.voices.length;

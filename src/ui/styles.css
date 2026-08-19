@@ -587,10 +587,16 @@ body {
   margin-top: 8px;
 }
 
+/* Full ink, not 0.78. On a mid-tone sea — ground around sRGB 120, which is what
+   the captures actually put under this corner — the physical ceiling for white
+   ink is 4.5:1 and for a black outline 4.7:1, so there is nothing to spend: 0.78
+   measured 1.8:1 against that ground where 0.93 measures 4.0:1. The heading is
+   the second thing a helmsman looks at and it was the weakest of the three.
+   Hierarchy against the speed numeral is 13 px against 40 px, which is plenty. */
 .mini-deg {
   font-size: 13px;
   font-weight: 400;
-  color: var(--ink-1);
+  color: var(--ink);
 }
 
 /* The cardinal and the wind label are the two smallest marks on the default

@@ -328,9 +328,10 @@ export function makeFleckTexture(size = 128): THREE.DataTexture {
       const nx = ((x - c) / c) * (1 + 0.5 * w);
       const ny = ((y - c) / c) * (1 - 0.4 * w);
       const radial = sat(1 - Math.hypot(nx, ny));
+      // k scales with the cell count — see the note in makeFoamTexture.
       const cells =
-        cellCore(u * 6, v * 6, 6, raft1, 2.3) * 0.58 +
-        cellCore(u * 15, v * 15, 15, raft2, 3.0) * 0.42;
+        cellCore(u * 6, v * 6, 6, raft1, 7.5) * 0.58 +
+        cellCore(u * 15, v * 15, 15, raft2, 18.8) * 0.42;
       const torn = 1 - Math.abs(g * 2 - 1);
       const mask = radial * (0.34 + 1.05 * cells) * (0.62 + 0.66 * torn);
       const alpha = sstep(0.19, 0.36, mask);

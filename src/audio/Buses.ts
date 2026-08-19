@@ -254,13 +254,19 @@ export class Mixer {
     }
   }
 
-  /** Momentary dip on the music bus so thunder and slams have room. */
-  duck(now: number, seconds: number): void {
-    this.duckUntil = Math.max(this.duckUntil, now + seconds);
+  /**
+   * Momentary dip on the music bus so thunder and slams have room. `at` is when
+   * the sound ARRIVES, which for thunder is up to ten seconds after the strike:
+   * the window is [at, at + seconds), not [now, at + seconds), or the music
+   * ducked for a bang that had not happened yet.
+   */
+  duck(at: number, seconds: number): void {
+    if (at < this.duckFrom || this.duckUntil <= at) this.duckFrom = at;
+    this.duckUntil = Math.max(this.duckUntil, at + seconds);
   }
 
   isDucking(now: number): boolean {
-    return now < this.duckUntil;
+    return now >= this.duckFrom && now < this.duckUntil;
   }
 
   /** Live measurement off the master tap — used by the audio test smoke check. */

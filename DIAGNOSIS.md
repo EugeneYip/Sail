@@ -791,3 +791,73 @@ produced a plausible, confidently-stated number that was wrong:
 - Two-sided bands, not one-sided sign checks — a one-sided check passed happily
   while chase was losing 70% of the drag.
 - Check whether enabling the instrumentation changes the thing being measured.
+
+## 26. Camera Run 4: the unverified changes are now proven
+
+**The `Chase.ts` framing fade works** — this was the biggest open risk, and it also
+settles the instrument question from §25 conclusively:
+
+| ship at the bow | Run B (box instrument, pre-fade) | Run 4 (vertex instrument, post-fade) |
+|---|---|---|
+| ndc x range | −4.506 … −0.073 **FAIL** | **−0.332 … +0.107 PASS** |
+| worst offender | `ship-oak` at −4.51 | `ship-oak` at **−0.33** |
+| off centreline | not asserted | **−0.113 PASS** |
+
+Measured on **6237 real vertex samples, 0 behind the lens**. Same mesh, same shot:
+−4.51 from a bounding-box corner versus −0.33 from its actual vertices. **The box
+was lying AND the clipping was real** — the screenshot was right to prompt the look.
+`noon` composition survived as the arithmetic promised (centre −0.185, rig top at
+ndc y 1.213, decisively cropped).
+
+Re-confirmed a third time: all 24 player-mode drag directions, full 360° yaw in all
+five modes, pitch saturation 4/4 with no dead band and the lens out of the sea.
+
+### Three residual failures, all diagnosed
+
+1. **`cinematic` yaw over-delivers, and it is REAL** — previously blamed on probe
+   contamination, now retracted again in the other direction. The accumulator is
+   exact (±0.500, gain 1.00) but the view rotates +0.935/−0.730: differential 0.833
+   against a 0.5 rad clamp, **gain 1.67**. The director contributed only +0.102 this
+   run, so contamination cannot explain it. Likely the rig's independent
+   position/target smoothing amplifying `aimOffset`'s bearing rotation while the
+   shot dollies. Lowest priority — auto-director, not a mode you sail in.
+2. **`chase / stall after release`** was the harness scoring itself: its own `view()`
+   round trip plus a 600 ms wait exceeded the 4 s idle threshold at load 340, so the
+   recentre fired legitimately. Patched to a cheap marker sample; patch unverified.
+   **But it exposed a real feel question:** at 0.84 rad the hold factor is only
+   0.54, so `rate = 0.5 × 0.46 = 0.23/s` and a player who parks at **48° and watches
+   for ~10 s loses most of it**. 3.14 rad (the bow) is fully protected and 0.42 rad
+   correctly decays, but the middle is soft. `LOOK_HOLD_FROM = 0.55` is probably too
+   high a threshold for "deliberate". **Deliberately not retuned** — changing a feel
+   constant blind, on a machine that cannot verify it, is how this defect arrived.
+   Lower it once the machine is quiet.
+3. **`bowsprit / look forward`** read −37.0° versus −7.7° in Run B on identical code
+   — a dropped pointer move at load 340 costs 45° of look. Load flake, not a
+   regression; capability independently proven by the full-circle pass.
+
+## 27. "typecheck clean" does NOT mean the shaders compile
+
+Two runtime shader errors were live in the tree while `npm run typecheck` reported
+clean, and they poison **all** visual QA for every agent:
+
+- `ERROR: 'uHazeBeta' : redefinition` — twice, two materials. `src/sky` declares it
+  in `atmosphere.ts` and a material pulls that chunk in twice. **Third instance of
+  this exact class** after `luminance` and `D_GGX`/`F_Schlick`. The fix is an
+  include guard, which `src/util/glsl.ts` already uses on every snippet
+  (`#ifndef LEEWARD_x / #define / #endif`) — sky's own chunks lack them.
+- `ERROR: 'vAback' : undeclared identifier` in `MeshDepthMaterial` — the sails-aback
+  state landed and the sail shader writes the varying, but the **depth/shadow pass
+  compiles a separate program** that never sees the declaration, so sail shadows
+  are broken.
+
+`scripts/check-glsl.mjs` catches only the backtick-in-template-text bug. It cannot
+catch a redefinition, an undeclared varying, or anything on an alternate material
+path. **The only thing that catches these is a runtime compile:**
+
+```bash
+node scripts/capture.mjs --out shots/x --scene noon --console
+python3 -c "import re,collections;t=open('shots/x-console.log',errors='replace').read();print(collections.Counter(re.findall(r'ERROR: \d+:\d+: (.*)',t)).most_common());print(sorted(set(re.findall(r'Material Name: (.*)\nMaterial Type: (.*)',t))))"
+```
+
+Both relayed to their owners. **Any capture taken while these are live is poisoned**
+— check the console log for `ERROR:` before trusting a frame.

@@ -59,7 +59,16 @@ const float AERIAL_MAX_KM    = ${f(AERIAL_MAX_KM)};
  * deck is a ray not worth marching, and the two must agree or the march would
  * cull cloud the sky still shows. Extinction in EXCESS of clear air, 1/m, so it
  * is exactly 0 on a 30 km day and every one of these terms folds away.
+ *
+ * Guarded SEPARATELY from SKY_ATMOSPHERE. The outer guard already makes a double
+ * include harmless, but this block is the one that moved between files, and a
+ * half-applied hot reload — new atmosphere chunk, cached sky shader that still
+ * carried its own copy — is enough to produce a fatal 'uHazeBeta : redefinition'
+ * on both materials that compile SKY_FRAG. A second guard costs nothing and
+ * makes that impossible instead of merely unlikely.
  */
+#ifndef SKY_WEATHER_HAZE
+#define SKY_WEATHER_HAZE
 uniform float uHazeBeta;
 const float HAZE_H = ${f(HAZE_SCALE_HEIGHT_M)};
 const float HAZE_CULL_TAU = ${f(HAZE_CULL_TAU)};
@@ -68,6 +77,7 @@ const float HAZE_CULL_TAU = ${f(HAZE_CULL_TAU)};
 float hazeColumnTau(float dirY){
   return uHazeBeta * (HAZE_H / max(abs(dirY), 0.015));
 }
+#endif
 
 // Half-texel guards so a LUT edge sample lands on the extreme parameter value
 // rather than half a texel inside it (Hillaire's fromUnitToSubUvs).
