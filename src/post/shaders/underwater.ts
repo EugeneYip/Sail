@@ -33,7 +33,11 @@ uniform float uAmount;
 uniform float uTime;
 uniform float uAspect;
 uniform vec3  uAbsorb;     // 1/m, per channel
-uniform vec3  uScatter;    // medium colour, scene-linear, already exposed
+uniform vec3  uScatter;    // medium colour, scene-linear, PRE-exposure
+// 1x1 adaptation state. Everything downstream of 'prepare' is in exposed units,
+// so the medium colour has to be brought into the same space here rather than
+// on the CPU, which no longer knows the exact exposure.
+uniform sampler2D tExposure;
 uniform float uDistort;    // pixels
 uniform float uBlur;       // pixels
 varying vec2 vUv;
@@ -61,7 +65,7 @@ void main() {
   float dist = min(linearDepth(d, uDepthRange.x, uDepthRange.y), 140.0);
 
   vec3 trans = exp(-uAbsorb * dist);
-  col = col * trans + uScatter * (1.0 - trans);
+  col = col * trans + uScatter * texture2D(tExposure, vec2(0.5)).g * (1.0 - trans);
 
   // Mask of the visible aperture: a diver's field of view is a dark oval.
   float edge = cos4Vignette(vUv, uAspect, 0.9);

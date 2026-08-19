@@ -6,6 +6,42 @@ the USS Constitution instead of driving.
 
 Read `src/types/index.ts` in full before writing anything. It is the contract.
 
+## Design direction — playability first (set by the owner 2026-08-18)
+
+These override earlier assumptions where they conflict. Read them before you
+optimise for realism.
+
+**1. Handling feel beats physical realism.** The game is about going wherever you
+want and seeing beautiful things on the way. Movement must feel responsive and
+consequential. The realistic 6-DOF solver is NOT to be deleted — it is measured,
+asserted and good — but it becomes **Pro mode**. The DEFAULT is an assist layer on
+top of it:
+- meaningfully quicker acceleration and a higher sense of speed
+- a much tighter, more responsive turn
+- a forgiving or absent no-go zone; never leave the player stuck in irons by
+  default, and never let them sit becalmed with nothing to do
+- the assist must be a layer over the solver (extra forces / relaxed limits),
+  not a second physics model, so Pro mode stays exactly what it is today
+
+**2. A simple default UI.** A new player should sit down and drive with the
+**arrow keys** and nothing else. The current full instrument HUD — compass ribbon,
+wind rose, sail plan, inclinometer, chart, watch bells — is excellent, but it
+becomes **Pro mode**. The default is minimal: speed, heading, and little else.
+Sail trim should be automatic in the default mode. Make the toggle discoverable
+but unobtrusive.
+
+**3. A richer world, a finer ship.** The ship model needs more refinement — it is
+the thing on screen constantly. The world needs more to sail toward: islands,
+marine life appearing occasionally (whales, dolphins, seabirds, fish), other
+vessels of varied types crossing, and at appropriate moments a distant landmark
+such as Boston harbour on the horizon. The point is that something interesting
+keeps appearing over the horizon.
+
+**4. It ships as a browser game on GitHub Pages.** Keep the build a pure static
+bundle: `base: './'` (already set), no server dependency, no runtime asset
+fetches. Watch bundle size and cold-load time, and keep `npm run build` green.
+Consider touch/pointer input and smaller viewports as real targets.
+
 ## Non-negotiables
 
 1. **Modules talk only through the blackboard.** Never import another

@@ -150,7 +150,14 @@ void main(){
     float d = length(world - s.xy);
     inject += s.w * (1.0 - smoothstep(s.z * 0.35, s.z, d));
   }
-  f = min(1.0, f + inject * uDt * 3.4);
+  // Top up with a MAX, not by integrating a rate. Accumulating against the decay
+  // made the equilibrium a runaway function of how often the fold dips, and the
+  // two ends of the wind range came out nowhere near each other: measured by
+  // reading this buffer back, a fresh breeze settled at 0.01% coverage and a gale
+  // saturated at 54%, where Monahan asks for about 1% and 15%. A max blend makes
+  // a texel mean 'this patch has broken within the last tau seconds', which is
+  // what persistent foam physically is, and it cannot run away.
+  f = max(f, min(1.0, inject));
   age = min(1.0, max(age, f));
 
   gl_FragColor = vec4(f, age, 0.0, 1.0);
@@ -193,7 +200,15 @@ void main(){
     // and a gale must be covered. Bias the fold threshold rather than scaling
     // the output, so what foam there is stays physically placed.
     const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(windSpeed, 0.5), 3.41) * 24);
-    u.uThreshold.value = 0.54 + 0.44 * cover;
+    // The SAME threshold the surface shader uses. This is one physical question —
+    // is this patch of surface breaking — and answering it two different ways gave
+    // two absurd answers. Measured by reading this buffer back: the old
+    // 0.54 + 0.44*cover put a fresh breeze at 0.66, below the entire fold
+    // distribution (min fold 0.717), so the buffer stayed exactly empty and every
+    // whitecap inside the window came out at 45% strength; and it put a gale at
+    // 0.98, above half the distribution, so the buffer saturated at 60% coverage
+    // where Monahan asks for about 15%.
+    u.uThreshold.value = 0.79 + 0.1 * cover;
     u.uInject.value = 0.8 + 2.4 * cover;
 
     for (let i = 0; i < MAX_SOURCES; i++) {

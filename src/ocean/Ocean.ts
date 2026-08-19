@@ -218,6 +218,7 @@ export class Ocean implements Module, IOcean {
       uHasReflection: { value: 0 },
       uFoamAmount: { value: 1 },
       uFoamThreshold: { value: 0.79 },
+      uFoamSoftness: { value: 0.08 },
       uWake: { value: this.stub },
       uWakeMatrix: { value: new THREE.Matrix3() },
       uWakeStrength: { value: 0 },
@@ -302,6 +303,14 @@ export class Ocean implements Module, IOcean {
     // ~0.2% coverage in a moderate breeze and ~15% in a full gale, which is what
     // the Monahan law above actually asks for.
     this.material.uniforms.uFoamThreshold.value = 0.79 + 0.1 * cover;
+    // Width of the fold ramp. The threshold above says WHICH surface is breaking;
+    // this says how fast it turns white, and it has to track the width of the
+    // fold distribution or the answer is meaningless. Measured on a 500 m grid:
+    // the fold histogram is roughly 0.15 wide at a fresh breeze and 0.25 in a
+    // gale, so a fixed ramp handed the gale's breaking 18% an opacity of about
+    // 0.1 and the breakup field then subtracted more than that, leaving a full
+    // gale with no whitecaps at all.
+    this.material.uniforms.uFoamSoftness.value = 0.055 + 0.06 * cover;
     // OPACITY, not gain. The threshold above is what carries the coverage now, so
     // scaling the mask as well double-counts the wind: at 1.9 this saturated a
     // gale to 100% foam and turned the whole sea into a white sheet with the
@@ -421,6 +430,8 @@ export class Ocean implements Module, IOcean {
           wakeMatrix?: THREE.Matrix3;
           wakeStrength?: number;
           wakeWorldSize?: number;
+          centre?: THREE.Vector2;
+          fadeRadius?: number;
         }
       | undefined;
     const tex = ext?.wakeTexture ?? null;
@@ -436,9 +447,18 @@ export class Ocean implements Module, IOcean {
     (u.uWakeMatrix.value as THREE.Matrix3).copy(mat as THREE.Matrix3);
     u.uWakeStrength.value = ext?.wakeStrength ?? 1;
     // The field wraps at wakeWorldSize, so anything past about half of that is
-    // the wake showing through from the far side. Fade it before then.
+    // the wake showing through from the far side. VFX publishes the authoritative
+    // pair for that fade — `centre` is the newest end of the track, which is the
+    // bow and NOT the ship origin, and `fadeRadius` is sized to the actual ribbon.
+    // Guessing them from the ship position and the tile size, as this used to,
+    // puts the fade circle astern of where the wake really is.
+    const c = ext?.centre;
     const p = world.ship.position;
-    (u.uWakeAnchor.value as THREE.Vector3).set(p.x, p.z, (ext?.wakeWorldSize ?? 1024) * 0.45);
+    (u.uWakeAnchor.value as THREE.Vector3).set(
+      c ? c.x : p.x,
+      c ? c.y : p.z,
+      ext?.fadeRadius ?? (ext?.wakeWorldSize ?? 1024) * 0.45,
+    );
   }
 
   /**

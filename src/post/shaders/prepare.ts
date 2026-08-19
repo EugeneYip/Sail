@@ -19,7 +19,9 @@ export const PREPARE_FRAG = /* glsl */ `
 precision highp float;
 ${GLSL.common}
 uniform sampler2D tScene;
-uniform float uExposure;
+// 1x1 adaptation state written by exposure/adapt. Sampled rather than passed as
+// a uniform so that no stage of the frame ever reads a target back to the CPU.
+uniform sampler2D tExposure;
 uniform float uClampMax;
 varying vec2 vUv;
 
@@ -27,7 +29,7 @@ void main() {
   vec3 c = texture2D(tScene, vUv).rgb;
   c = mix(c, vec3(0.0), vec3(notEqual(c, c)));            // NaN
   c = min(max(c, vec3(0.0)), vec3(65000.0));              // Inf
-  c *= uExposure;
+  c *= texture2D(tExposure, vec2(0.5)).g;
   // Firefly clamp, in exposed units: +6 stops over white still blooms hard but
   // cannot survive a neighbourhood variance test on its own.
   gl_FragColor = vec4(min(c, vec3(uClampMax)), 1.0);

@@ -111,7 +111,7 @@ export class AntiAliasing {
     velocity: THREE.Texture | null,
     dst: THREE.WebGLRenderTarget,
     jitterPixels: THREE.Vector2,
-    historyScale: number,
+    exposureTex: THREE.Texture,
   ): THREE.Texture {
     const tx = 1 / this.width;
     const ty = 1 / this.height;
@@ -179,7 +179,7 @@ export class AntiAliasing {
         (u.uTexelSize.value as THREE.Vector2).set(tx, ty);
         (u.uResolution.value as THREE.Vector2).set(this.width, this.height);
         (u.uJitterPixels.value as THREE.Vector2).copy(jitterPixels);
-        u.uHistoryScale.value = historyScale;
+        u.tExposure.value = exposureTex;
         u.uReset.value = this.reset ? 1 : 0;
         p.render(renderer, histNext);
 
@@ -211,7 +211,7 @@ export class AntiAliasing {
         uFeedbackMax: { value: 0.92 },
         uVarianceGamma: { value: 1.05 },
         uFilterWidth: { value: 0.85 },
-        uHistoryScale: { value: 1 },
+        tExposure: { value: null },
         uReset: { value: 1 },
       });
     }

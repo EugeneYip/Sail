@@ -24,6 +24,20 @@ const SCENES = {
     env: { timeOfDay: 12.7, windSpeed: 10.5, cloudCover: 0.38, cloudType: 0.8, turbidity: 2.0, rain: 0, visibility: 34000, seaState: 4, waveHeight: 2.0, choppiness: 0.6 },
     cam: { mode: 'chase', distance: 74 },
   },
+  storm: {
+    env: { timeOfDay: 15.0, windSpeed: 22.0, cloudCover: 0.98, cloudType: 0.95, turbidity: 6.0, rain: 0.85, visibility: 5200, seaState: 7, waveHeight: 6.5, choppiness: 0.85 },
+    cam: { mode: 'chase', distance: 70 },
+  },
+  // Same gale with the haze pulled back, so "flat because fogged" and "flat
+  // because the surface really has no relief" stop looking identical.
+  stormclear: {
+    env: { timeOfDay: 15.0, windSpeed: 22.0, cloudCover: 0.98, cloudType: 0.95, turbidity: 2.0, rain: 0, visibility: 34000, seaState: 7, waveHeight: 6.5, choppiness: 0.85 },
+    cam: { mode: 'chase', distance: 70 },
+  },
+  waterline: {
+    env: { timeOfDay: 13.8, windSpeed: 12.0, cloudCover: 0.35, cloudType: 0.8, turbidity: 2.0, rain: 0, visibility: 34000, seaState: 5, waveHeight: 3.0, choppiness: 0.7 },
+    cam: { mode: 'cinematic' },
+  },
 };
 
 const b = await chromium.launch({

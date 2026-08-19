@@ -152,3 +152,72 @@ void main() {
   gl_FragColor = vec4(wsum > 0.0 ? sum / wsum : 0.0, total, 0.0, 1.0);
 }
 `;
+
+/**
+ * Pass 4 — adaptation, entirely on the GPU.
+ *
+ * This exists so that nothing ever reads a render target back to the CPU. Any
+ * synchronous GL query — 'readPixels' to a JS array, or 'getBufferSubData' on a
+ * pixel-pack buffer, fenced or not — is a blocking round trip to Chrome's GPU
+ * process. Measured here: 0.2 ms when the box is idle and **117 ms per call**
+ * at load average 100, which is unbounded latency sitting in the middle of the
+ * frame. A fence cannot fix it, because the stall is the IPC, not the GPU.
+ *
+ * So the whole adaptation state lives in a 1x1 RGBA32F texture that ping-pongs
+ * with itself, and 'prepare', TAA and the underwater pass sample it directly:
+ *
+ *   r = adapted stops       g = exposure multiplier
+ *   b = previous frame's exposure multiplier (the TAA history rescale)
+ *   a = the log2 luminance that was metered
+ *
+ * One fragment per frame, so it is free. The CPU keeps only an ESTIMATE of the
+ * exposure, from the sky model, for the HUD and for probes; the GPU value is
+ * authoritative and the two are reconciled only under 'settings.debug'.
+ */
+export const EXPOSURE_ADAPT_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D tState;    // last frame's state, same layout as the output
+uniform sampler2D tResult;   // (meanLog2Luminance, totalWeight, 0, 1)
+uniform vec2  uRange;        // histogram (minLog, maxLog)
+uniform vec4  uCurve;        // (keyLog2, knee, slope, unused)
+uniform vec2  uClamp;        // (minStops, maxStops)
+uniform vec2  uRate;         // (brighten, darken) per second
+uniform float uDt;
+uniform float uBias;         // 2^exposureBias
+uniform float uAuto;         // 0 = manual exposure, exposure is just the bias
+uniform float uSeedLog;      // CPU sky-model estimate; seeds and covers an empty histogram
+uniform float uReset;        // 1 = discard history (first frame, settings change, cut)
+varying vec2 vUv;
+
+void main() {
+  vec4 prev = texture2D(tState, vec2(0.5));
+  vec2 res = texture2D(tResult, vec2(0.5)).rg;
+
+  // One fragment a frame, so plain branches are free and say what they mean.
+  // An empty or NaN histogram means the metering passes have not run yet; the
+  // CPU sky-model estimate covers that frame rather than a black meter reading.
+  float measured = uSeedLog;
+  if (res.g > 1e-6 && res.r == res.r) measured = clamp(res.r, uRange.x, uRange.y);
+
+  float stops = uCurve.x - measured;
+  // Above the knee, compensation is only partly applied: full compensation maps
+  // a moonlit sea to the same middle grey as noon, which is the classic "night
+  // is grey mush" failure.
+  if (stops > uCurve.y) stops = uCurve.y + (stops - uCurve.y) * uCurve.z;
+  stops = clamp(stops, uClamp.x, uClamp.y);
+
+  // A cleared target reads (0,0,0,0), and a valid exposure is always positive,
+  // so prev.g is the sentinel for "this state has never been written".
+  bool fresh = uReset > 0.5 || !(prev.g > 0.0);
+  float prevStops = fresh ? stops : prev.r;
+  // Asymmetric: brightens in ~0.4 s, darkens in ~1.5 s, so ducking below deck
+  // reads immediately and coming back up gives the momentary flare a real eye has.
+  float rate = stops > prevStops ? uRate.x : uRate.y;
+  float adapted = prevStops + (stops - prevStops) * (1.0 - exp(-rate * uDt));
+
+  float exposure = uAuto > 0.5 ? exp2(adapted) * uBias : uBias;
+  float previous = fresh ? exposure : prev.g;
+
+  gl_FragColor = vec4(adapted, exposure, previous, measured);
+}
+`;
