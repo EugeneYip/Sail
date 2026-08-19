@@ -58,6 +58,14 @@ export interface DetailOptions {
   fibreRough?: number;
   /** Per-board roughness spread, 0..1. */
   plankRough?: number;
+  /** Coarse figure (ray fleck, streaking) spacing, metres. 0 disables. */
+  figurePitch?: number;
+  /** Albedo swing of the figure tier, 0..1. */
+  figureAlbedo?: number;
+  /** Relief of the figure tier, metres. */
+  figureRelief?: number;
+  /** Roughness swing of the figure tier, 0..1. */
+  figureRough?: number;
 }
 
 export interface ShipMatOptions {
@@ -99,6 +107,7 @@ uniform vec4 uDetailA;
 uniform vec4 uDetailB;
 uniform vec4 uDetailC;
 uniform vec2 uDetailD;
+uniform vec4 uDetailE;
 ${GLSL_COMMON_SAFE}
 ${GLSL.noise2d}
 ${GLSL.brdf}
@@ -158,6 +167,14 @@ export function makeShipMaterial(
     ),
   };
   const detailD = { value: new THREE.Vector2(d.fibreRough ?? 0, d.plankRough ?? 0) };
+  // The tier that carries the surface at a two-metre viewing distance, where the
+  // fibre tier above has already faded to nothing. Off by default so a family
+  // that has no business having wood figure (glass) simply omits it.
+  const detailE = {
+    value: new THREE.Vector4(
+      d.figurePitch ?? 0, d.figureAlbedo ?? 0, d.figureRelief ?? 0, d.figureRough ?? 0,
+    ),
+  };
 
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uPartQ = parts.uPartQ;
@@ -169,6 +186,7 @@ export function makeShipMaterial(
     shader.uniforms.uDetailB = detailB;
     shader.uniforms.uDetailC = detailC;
     shader.uniforms.uDetailD = detailD;
+    shader.uniforms.uDetailE = detailE;
     shader.uniforms.uSkyColor = shared.uSkyColor;
     shader.uniforms.uGroundColor = shared.uGroundColor;
     shader.uniforms.uWetness = shared.uWetness;
@@ -205,18 +223,25 @@ export function makeShipMaterial(
           // asked to hold its size independently of the texture resolution.
           float lwDetAlb;
           lwWoodDetail(vMapUv * uTileM, uDetailA, uDetailB, uDetailC, uDetailD,
-                       lwDetAlb, lwDetRgh, lwDetAo, lwDetG);
+                       uDetailE, lwDetAlb, lwDetRgh, lwDetAo, lwDetG);
           diffuseColor.rgb *= lwDetAlb;
         }
         {
           // Salt and grime settle on anything that faces up, and rain darkens it.
           float up = clamp(vShipWN.y, 0.0, 1.0);
           float n = hash13(floor(vShipWP * 3.7));
-          float acc = smoothstep(0.42, 0.95, up) * (0.55 + 0.45 * n) * uGrime;
+          float acc = smoothstep(0.42, 0.95, up) * (0.72 + 0.28 * n) * uGrime;
           // Linear albedo of a dried salt crust. 0.78 was brighter than fresh
-          // snow and chalked every up-facing surface on the ship.
-          vec3 salt = vec3(0.50, 0.51, 0.52);
-          diffuseColor.rgb = mix(diffuseColor.rgb, mix(diffuseColor.rgb * 0.72, salt, 0.35), acc);
+          // snow and chalked every up-facing surface on the ship; 0.50 mixed at
+          // 0.35 still did, just less. The deck faces up more squarely than
+          // anything else on the ship, so it took the full dose — and pulling a
+          // third of the way to a NEUTRAL grey is what killed it: it desaturated
+          // the timber until the grain had nothing left to be visible against,
+          // which read in the frame as bleached lavender board. A holystoned
+          // deck is pale, but it is pale OAK. Salt mostly dulls and darkens; the
+          // lightening is the small part of it.
+          vec3 salt = vec3(0.44, 0.45, 0.46);
+          diffuseColor.rgb = mix(diffuseColor.rgb, mix(diffuseColor.rgb * 0.78, salt, 0.18), acc);
           diffuseColor.rgb *= mix(1.0, 0.66, uWetness * (0.35 + 0.65 * up));
         }`,
       )
@@ -254,6 +279,20 @@ export function makeShipMaterial(
             reflectedLight.indirectSpecular *= lwAo;
           #endif
         }`,
+      )
+      .replace(
+        '#include <lights_fragment_maps>',
+        `#include <lights_fragment_maps>
+        #if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )
+          // 'env' is the per-family reflection strength: 1.5 on brass, 0.6 on a
+          // painted deck. It used to scale the analytic lobe below, which is now
+          // compiled out whenever scene.environment is bound — and sky/EnvProbe
+          // binds it unconditionally, so the option had gone silently inert and
+          // every family was reflecting at 1.0. Scale three's own specular IBL
+          // instead. Deliberately NOT iblIrradiance: 'env' has always meant
+          // reflection, and the diffuse ambient belongs to the grade.
+          radiance *= uEnvAmount;
+        #endif`,
       )
       .replace(
         '#include <lights_fragment_end>',

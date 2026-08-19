@@ -1,4 +1,4 @@
-import { DECLICK_S, envDuration, LEAD_S, Nodes, strike, swell, sweep } from './Context';
+import { DECLICK_S, envDuration, Nodes, notBefore, strike, swell, sweep } from './Context';
 
 /**
  * Pooled one-shot voices.
@@ -170,9 +170,11 @@ export class NoisePool {
     if (best < 0) return false;
     this.cursor = (best + 1) % this.voices.length;
     const v = this.voices[best];
-    // Never in the past: see LEAD_S. An envelope scheduled behind the audio
-    // thread's render position executes as a step, attack and all.
-    const t = Math.max(r.t, now + LEAD_S);
+    // Backstop. Callers build their times with `eventTime`, so this should never
+    // bind; if it does, `schedule.late` says so and the test fails. An envelope
+    // scheduled behind the audio thread's render position executes as a step,
+    // attack and all.
+    const t = notBefore(r.t, now);
     const attack = Math.max(r.soft ? 0.01 : 0.001, r.attack);
     v.busyUntil = t + envDuration(attack, r.hold, r.decay);
     // The envelope is at its floor from `te` onward, so retuning there is silent.
@@ -360,7 +362,7 @@ export class TonePool {
     if (best < 0) return false;
     this.cursor = (best + 1) % this.voices.length;
     const v = this.voices[best];
-    const t = Math.max(r.t, now + LEAD_S);
+    const t = notBefore(r.t, now);
     const attack = Math.max(0.01, r.attack);
     const dur = attack + r.hold + r.decay;
     v.busyUntil = t + envDuration(attack, r.hold, r.decay);

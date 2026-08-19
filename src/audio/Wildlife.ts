@@ -1,6 +1,6 @@
 import { makeRng, smoothstep } from '../util/math';
 import { toWorld } from './Anchors';
-import { dB } from './Context';
+import { dB, eventTime } from './Context';
 import type { SimView } from './Sim';
 import type { NoisePool, TonePool } from './Voices';
 
@@ -51,7 +51,7 @@ export class Wildlife {
     );
     const n = 2 + Math.floor(this.rng() * 3);
     const base = 950 + this.rng() * 750;
-    let t = now + 0.1;
+    let t = eventTime(now, 0.1);
     for (let i = 0; i < n; i++) {
       const fall = Math.pow(0.88, i);
       const req = this.tones.begin(t);
@@ -82,7 +82,7 @@ export class Wildlife {
     const side = this.rng() < 0.5 ? -1 : 1;
     const dist = 25 + this.rng() * 70;
     const p = toWorld(sim, side * dist, 1, (this.rng() - 0.5) * 60);
-    const req = this.impacts.begin(now + 0.05);
+    const req = this.impacts.begin(eventTime(now, 0.05));
     req.gain = dB(-24) * (0.6 + 0.5 * this.rng());
     req.low = 0.55;
     req.high = 0.95;
@@ -108,7 +108,7 @@ export class Wildlife {
   private dolphins(sim: SimView, now: number): void {
     const p = toWorld(sim, (this.rng() - 0.5) * 12, 0.5, -24 - this.rng() * 10);
     const n = 4 + Math.floor(this.rng() * 6);
-    let t = now + 0.05;
+    let t = eventTime(now, 0.05);
     for (let i = 0; i < n; i++) {
       const req = this.clicks.begin(t);
       req.gain = dB(-37) * (0.5 + 0.6 * this.rng());

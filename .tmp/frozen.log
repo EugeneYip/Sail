@@ -1,0 +1,35 @@
+control (nothing hidden, two frames apart): 13 px changed  [677,654,295,48]
+00-ship-copper                     changed=     418 bbox=[373,54,618,648] mean=172
+01-ship-black                      changed=    7700 bbox=[93,26,953,676] mean=184.5
+02-ship-stripe                     changed=    2047 bbox=[0,23,991,679] mean=88
+03-ship-buff                       changed=    2069 bbox=[0,23,1298,679] mean=108.8
+04-ship-deck                       changed=    2201 bbox=[0,17,1299,685] mean=79.7
+05-ship-oak                        changed=    8491 bbox=[0,15,1298,687] mean=136.3
+06-ship-iron                       changed=    2866 bbox=[0,14,1300,688] mean=59.4
+07-ship-brass                      changed=    2503 bbox=[0,14,1454,688] mean=38.8
+08-ship-glass                      changed=    2653 bbox=[0,13,1455,689] mean=36.4
+09-ship-rigging                    changed=    8566 bbox=[0,13,1473,689] mean=45.2
+10-ship-sail-cloth                 changed=   56131 bbox=[0,13,1473,689] mean=123.5
+11-vfx-bow-wave                    changed=    5233 bbox=[0,13,1473,709] mean=72.9
+12-vfx-hull-skirt                  changed=    4669 bbox=[0,13,1474,689] mean=57.5
+13-_anon_ocean-surface_            changed=    4199 bbox=[0,13,1474,887] mean=37.2
+14-_anon_ocean-surface_            changed=  183049 bbox=[0,12,1600,888] mean=103.7
+15-_anon_ocean-surface_            changed=  147601 bbox=[0,13,1600,818] mean=130
+16-_anon_ocean-surface_            changed=   60457 bbox=[0,12,1600,690] mean=132
+17-_anon_ocean-surface_            changed=   32294 bbox=[0,12,1600,690] mean=125.1
+18-_anon_ocean-surface_            changed=   17987 bbox=[0,12,1600,690] mean=117
+19-_anon_ocean-surface_            changed=   11388 bbox=[0,12,1597,690] mean=92.5
+20-_anon_ocean-surface_            changed=    8559 bbox=[0,12,1600,690] mean=63.5
+21-_anon_ocean-surface_            changed=    5727 bbox=[0,12,1600,690] mean=48.8
+22-_anon_ocean-surface_            changed=    4176 bbox=[0,12,1566,690] mean=39
+23-_anon_ocean-surface_            changed=    4888 bbox=[0,11,1570,691] mean=38.8
+24-sky                             changed=  828381 bbox=[0,0,1600,900] mean=394.5
+27-vfx-particles                   changed=    7115 bbox=[0,12,1474,690] mean=63.2
+32-island-2-land                   changed=    5189 bbox=[0,12,1476,690] mean=41.2
+33-island-2-shore                  changed=    4130 bbox=[0,12,1475,690] mean=38.6
+34-island-3-land                   changed=    4120 bbox=[0,12,1504,690] mean=38.5
+35-island-3-shore                  changed=    4129 bbox=[0,11,1504,691] mean=38.6
+40-island-6-land                   changed=    4130 bbox=[0,11,1475,691] mean=38.6
+41-island-6-shore                  changed=    4126 bbox=[0,11,1475,691] mean=38.6
+
+done -> /tmp/frozen 

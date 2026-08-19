@@ -1,70 +1,81 @@
 
-=== 1. drag directions ===
-  PASS  chase / drag right -> view starboard           d_yaw +0.615 rad (need > +0.25), accum lookYaw 0.533
-  PASS  chase / drag left -> view port                 d_yaw -0.259 rad (need < -0.25), accum lookYaw -0.219
-  PASS  chase / drag up -> view up                     d_elev +0.740 rad (need > +0.18), eye 27.73->4.53 m
-  PASS  chase / drag down -> view down                 d_elev -0.665 rad (need < -0.18), eye 27.49->76.14 m
-  PASS  helm / drag right -> view starboard            d_yaw +0.845 rad (need > +0.25), accum lookYaw 0.840
-  PASS  helm / drag left -> view port                  d_yaw -0.839 rad (need < -0.25), accum lookYaw -0.840
-  PASS  helm / drag up -> view up                      d_elev +0.820 rad (need > +0.18), eye 8.54->8.91 m
-  PASS  helm / drag down -> view down                  d_elev -0.843 rad (need < -0.18), eye 6.95->9.24 m
-  PASS  bowsprit / drag right -> view starboard        d_yaw +0.833 rad (need > +0.25), accum lookYaw 0.840
-  PASS  bowsprit / drag left -> view port              d_yaw -0.852 rad (need < -0.25), accum lookYaw -0.840
-  PASS  bowsprit / drag up -> view up                  d_elev +0.828 rad (need > +0.18), eye 10.46->11.4 m
-  PASS  bowsprit / drag down -> view down              d_elev -0.859 rad (need < -0.18), eye 11.82->9.08 m
-  PASS  masthead / drag right -> view starboard        d_yaw +0.849 rad (need > +0.25), accum lookYaw 0.840
-  PASS  masthead / drag left -> view port              d_yaw -0.835 rad (need < -0.25), accum lookYaw -0.840
-  PASS  masthead / drag up -> view up                  d_elev +0.871 rad (need > +0.18), eye 25.49->23.59 m
-  PASS  masthead / drag down -> view down              d_elev -0.818 rad (need < -0.18), eye 25.51->24.25 m
-  PASS  orbit / drag right -> view starboard           d_yaw +0.647 rad (need > +0.25), accum lookYaw 0.840
-  PASS  orbit / drag left -> view port                 d_yaw -1.256 rad (need < -0.25), accum lookYaw -0.840
-  PASS  orbit / drag up -> view up                     d_elev +0.684 rad (need > +0.18), eye 27.36->3.74 m
-  PASS  orbit / drag down -> view down                 d_elev -0.868 rad (need < -0.18), eye 27.24->129.12 m
-  FAIL  cinematic / drag right -> view starboard       d_yaw -0.478 rad (need > +0.3), accum lookYaw 0.500
-  PASS  cinematic / drag left -> view port             d_yaw -0.973 rad (need < -0.3), accum lookYaw -0.017
-  FAIL  cinematic / drag up -> view up                 d_elev -0.418 rad (need > +0.15), eye 1.4->17.36 m
-  PASS  cinematic / drag down -> view down             d_elev -0.346 rad (need < -0.15), eye 9.48->1.04 m
-  PASS  free / drag right -> view starboard            d_yaw +0.840 rad (need > +0.25), accum lookYaw 0.000
-  PASS  free / drag left -> view port                  d_yaw -0.840 rad (need < -0.25), accum lookYaw 0.000
-  PASS  free / drag up -> view up                      d_elev +0.840 rad (need > +0.18), eye 27.91->27.91 m
-  PASS  free / drag down -> view down                  d_elev -0.840 rad (need < -0.18), eye 27.77->27.77 m
+=== 1. drag directions (300 px = 0.840 rad of raw look) ===
+  PASS  chase / drag right -> view starboard                 +0.832 rad of +0.840 (gain 0.99, need 0.65-1.35)
+  PASS  chase / drag left -> view port                       -0.836 rad of -0.840 (gain 0.99, need 0.65-1.35)
+  PASS  chase / drag up -> view up                           +0.747 rad of +0.840 (gain 0.89, need 0.65-1.35)
+  PASS  chase / drag down -> view down                       -0.669 rad of -0.840 (gain 0.80, need 0.65-1.35)
+  PASS  helm / drag right -> view starboard                  +0.865 rad of +0.840 (gain 1.03, need 0.65-1.35)
+  PASS  helm / drag left -> view port                        -0.832 rad of -0.840 (gain 0.99, need 0.65-1.35)
+  PASS  helm / drag up -> view up                            +0.859 rad of +0.840 (gain 1.02, need 0.65-1.35)
+  PASS  helm / drag down -> view down                        -0.847 rad of -0.840 (gain 1.01, need 0.65-1.35)
+  PASS  bowsprit / drag right -> view starboard              +0.833 rad of +0.840 (gain 0.99, need 0.65-1.35)
+  PASS  bowsprit / drag left -> view port                    -0.850 rad of -0.840 (gain 1.01, need 0.65-1.35)
+  PASS  bowsprit / drag up -> view up                        +0.827 rad of +0.840 (gain 0.98, need 0.65-1.35)
+  PASS  bowsprit / drag down -> view down                    -0.838 rad of -0.840 (gain 1.00, need 0.65-1.35)
+  PASS  masthead / drag right -> view starboard              +0.845 rad of +0.840 (gain 1.01, need 0.65-1.35)
+  PASS  masthead / drag left -> view port                    -0.838 rad of -0.840 (gain 1.00, need 0.65-1.35)
+  PASS  masthead / drag up -> view up                        +0.842 rad of +0.840 (gain 1.00, need 0.65-1.35)
+  PASS  masthead / drag down -> view down                    -0.870 rad of -0.840 (gain 1.04, need 0.65-1.35)
+  FAIL  orbit / drag right -> view starboard                 +0.054 rad of +0.840 (gain 0.06, need 0.65-1.35)
+  FAIL  orbit / drag left -> view port                       -2.171 rad of -0.840 (gain 2.58, need 0.65-1.35)
+  PASS  orbit / drag up -> view up                           +0.732 rad of +0.840 (gain 0.87, need 0.65-1.35)
+  PASS  orbit / drag down -> view down                       -0.943 rad of -0.840 (gain 1.12, need 0.65-1.35)
+  FAIL  cinematic / drag right -> view starboard             +0.679 rad of +0.500 (gain 1.36, need 0.65-1.35)
+  PASS  cinematic / drag left -> view port                   -0.407 rad of -0.500 (gain 0.81, need 0.65-1.35)
+  PASS  cinematic / drag up -> view up                       +0.313 rad of +0.320 (gain 0.98, need 0.65-1.35)
+  PASS  cinematic / drag down -> view down                   -0.301 rad of -0.320 (gain 0.94, need 0.65-1.35)
+  PASS  free / drag right -> view starboard                  +0.840 rad of +0.840 (gain 1.00, need 0.65-1.35)
+  PASS  free / drag left -> view port                        -0.840 rad of -0.840 (gain 1.00, need 0.65-1.35)
+  PASS  free / drag up -> view up                            +0.840 rad of +0.840 (gain 1.00, need 0.65-1.35)
+  PASS  free / drag down -> view down                        -0.840 rad of -0.840 (gain 1.00, need 0.65-1.35)
 
 === 2. full 360 yaw ===
-  PASS  chase / yaw reaches a full circle              view travelled 7.85 rad of 6.28 (need > 5.6)
-  PASS  helm / yaw reaches a full circle               view travelled 7.85 rad of 6.28 (need > 5.6)
-  PASS  bowsprit / yaw reaches a full circle           view travelled 8.01 rad of 6.28 (need > 5.6)
-  PASS  masthead / yaw reaches a full circle           view travelled 7.84 rad of 6.28 (need > 5.6)
-  PASS  orbit / yaw reaches a full circle              view travelled 6.60 rad of 6.28 (need > 5.6)
+  PASS  chase / yaw reaches a full circle                    view travelled 7.86 rad of 6.28 (need > 5.6)
+  PASS  helm / yaw reaches a full circle                     view travelled 7.84 rad of 6.28 (need > 5.6)
+  PASS  bowsprit / yaw reaches a full circle                 view travelled 6.89 rad of 6.28 (need > 5.6)
+  PASS  masthead / yaw reaches a full circle                 view travelled 7.83 rad of 6.28 (need > 5.6)
+  FAIL  orbit / yaw reaches a full circle                    view travelled 5.27 rad of 6.28 (need > 5.6)
 
-=== 3. the bow ===
-  PASS  chase / half a turn puts the eye AHEAD of the ship eye is 70.7 m forward of the hull (was -81.6 m), lookYaw -3.14 rad
-  FAIL  chase / ship still framed with the eye on the bow ndc x -2.382..0.877, y -5.885..1.849, 1 corners behind lens
-  PASS  bowsprit / can look forward over the bow       view is 21.8 deg off dead ahead (need < 34)
+=== 3. the recentre ===
+  PASS  chase / a 6 s motionless HOLD mid-drag keeps the whole drag lookYaw 0.840 of 0.840 rad (need > 0.75), 105 frames
+  PASS  chase / an injected 3 s machine STALL mid-drag keeps the drag lookYaw 0.840 of 0.840 (need > 0.75), longest frame 3.00 s (need > 1)
+  PASS  chase / a 3 s stall AFTER release does not arm the recentre lookYaw 0.828 of 0.840 (need > 0.75), longest frame 6.02 s
+  PASS  chase / the recentre IS still alive once the player lets go lookYaw 0.420 -> 0.004 over 11 s idle (need < half)
+  PASS  chase / a player parked on the bow STAYS parked      lookYaw -3.14 -> -3.14 rad over 11 s idle (need |x| > 2.6)
 
-=== 4. pitch saturation has no dead band ===
-  PASS  chase / a nudge down after saturating up moves the view d_elev -0.116 rad from a 70 px nudge (lookPitch 1.15 -> 0.95)
-  PASS  chase / the lens stays out of the sea at full look-up eye 5.57 m above the water
-  PASS  orbit / a nudge down after saturating up moves the view d_elev -0.040 rad from a 70 px nudge (lookPitch 1.15 -> 0.95)
-  PASS  orbit / the lens stays out of the sea at full look-up eye 4.61 m above the water
+=== 4. the bow ===
+  PASS  chase / half a turn puts the eye AHEAD of the ship   eye is 68.3 m forward of the hull (was -83.8 m), lookYaw -3.14 rad
+  FAIL  chase / ship still framed with the eye on the bow    ndc x -3.598..-0.067, y -1.858..5.863, 0 corners behind lens
+  PASS  bowsprit / can look forward over the bow             view is -15.6 deg off dead ahead (need < 34)
 
-=== 5. composition ===
-  PASS  chase / ship clear of both frame edges         ndc x -0.868..0.567 (need inside -0.94..0.94), d 76 m
-  PASS  chase / ship is off the centreline             ndc centre -0.151 (need |x| > 0.10)
-  PASS  orbit / ship clear of both frame edges         ndc x -0.629..0.75 (need inside -0.94..0.94), d 76 m
+=== 5. pitch saturation has no dead band ===
+  PASS  chase / a nudge down after saturating up moves the view d_elev -0.183 rad from a 70 px nudge (lookPitch 1.15 -> 0.95)
+  PASS  chase / the lens stays out of the sea at full look-up eye 5.06 m above the water
+  PASS  orbit / a nudge down after saturating up moves the view d_elev -0.083 rad from a 70 px nudge (lookPitch 1.15 -> 0.95)
+  PASS  orbit / the lens stays out of the sea at full look-up eye 4.43 m above the water
+
+=== 6. composition ===
+  PASS  chase / ship clear of both frame edges               ndc x -0.648..0.164 (need inside -0.90..0.90), d 76 m
+  PASS  chase / ship is off the centreline                   ndc centre -0.242 (need |x| > 0.06)
+  PASS  orbit / ship clear of both frame edges               ndc x -0.497..0.462 (need inside -0.90..0.90), d 76 m
+  FAIL  orbit / ship is off the centreline                   ndc centre -0.017 (need |x| > 0.06)
 
 === view rotation per 300 px drag, radians ===
 mode        right     left       up     down
-chase       0.615   -0.259     0.74   -0.665
-helm        0.845   -0.839     0.82   -0.843
-bowsprit    0.833   -0.852    0.828   -0.859
-masthead    0.849   -0.835    0.871   -0.818
-orbit       0.647   -1.256    0.684   -0.868
-cinematic  -0.478   -0.973   -0.418   -0.346
+chase       0.832   -0.836    0.747   -0.669
+helm        0.865   -0.832    0.859   -0.847
+bowsprit    0.833    -0.85    0.827   -0.838
+masthead    0.845   -0.838    0.842    -0.87
+orbit       0.054   -2.171    0.732   -0.943
+cinematic   0.679   -0.407    0.313   -0.301
 free         0.84    -0.84     0.84    -0.84
 
-40/43 assertions passed
+43/49 assertions passed
 
 FAILURES:
-  cinematic / drag right -> view starboard — d_yaw -0.478 rad (need > +0.3), accum lookYaw 0.500
-  cinematic / drag up -> view up — d_elev -0.418 rad (need > +0.15), eye 1.4->17.36 m
-  chase / ship still framed with the eye on the bow — ndc x -2.382..0.877, y -5.885..1.849, 1 corners behind lens
+  orbit / drag right -> view starboard — +0.054 rad of +0.840 (gain 0.06, need 0.65-1.35)
+  orbit / drag left -> view port — -2.171 rad of -0.840 (gain 2.58, need 0.65-1.35)
+  cinematic / drag right -> view starboard — +0.679 rad of +0.500 (gain 1.36, need 0.65-1.35)
+  orbit / yaw reaches a full circle — view travelled 5.27 rad of 6.28 (need > 5.6)
+  chase / ship still framed with the eye on the bow — ndc x -3.598..-0.067, y -1.858..5.863, 0 corners behind lens
+  orbit / ship is off the centreline — ndc centre -0.017 (need |x| > 0.06)

@@ -126,7 +126,11 @@ export class Ship implements Module {
         tex: tex.copper, grime: 0.15, env: 1.1,
         // No wood here: rings off, and the fibre tier becomes the fine draw
         // marks left in rolled sheet copper.
-        detail: { fibrePitch: 0.0022, fibreRelief: 0.00012, fibreAlbedo: 0.05, fibreRough: 0.1 },
+        detail: {
+          fibrePitch: 0.0022, fibreRelief: 0.00012, fibreAlbedo: 0.05, fibreRough: 0.1,
+          // Planishing: the overlapping hammer dishes left in a beaten sheet.
+          figurePitch: 0.03, figureAlbedo: 0.06, figureRelief: 0.0008, figureRough: 0.13,
+        },
       },
       'copper',
     );
@@ -141,6 +145,7 @@ export class Ship implements Module {
           plankPitch: 0.32, seamWidth: 0.0035, seamDark: 0.45, plankTone: 0.035,
           fibrePitch: 0.0019, fibreRelief: 0.00009, fibreAlbedo: 0.05,
           fibreRough: 0.06, plankRough: 0.035,
+          figurePitch: 0.05, figureAlbedo: 0.06, figureRelief: 0.0009, figureRough: 0.1,
         },
       },
       'black',
@@ -154,6 +159,7 @@ export class Ship implements Module {
           plankPitch: 0.32, seamWidth: 0.0035, seamDark: 0.4, plankTone: 0.03,
           fibrePitch: 0.0019, fibreRelief: 0.00008, fibreAlbedo: 0.045,
           fibreRough: 0.06, plankRough: 0.03,
+          figurePitch: 0.05, figureAlbedo: 0.055, figureRelief: 0.00085, figureRough: 0.095,
         },
       },
       'stripe',
@@ -167,6 +173,7 @@ export class Ship implements Module {
           plankPitch: 0.29, seamWidth: 0.003, seamDark: 0.38, plankTone: 0.032,
           fibrePitch: 0.0018, fibreRelief: 0.00009, fibreAlbedo: 0.05,
           fibreRough: 0.06, plankRough: 0.03,
+          figurePitch: 0.048, figureAlbedo: 0.058, figureRelief: 0.00085, figureRough: 0.095,
         },
       },
       'buff',
@@ -174,15 +181,19 @@ export class Ship implements Module {
     add(
       bins.deck, tex.deck,
       {
-        tex: tex.deck, grime: 0.7, env: 0.6,
+        tex: tex.deck, grime: 0.45, env: 0.6,
         // The deck is the surface the player stares at from the helm, so it
         // gets the strongest grain, real caulk at 3 mm each side of the seam,
         // and the traffic wear that scrubs the paths pale and smooth.
         detail: {
           ringPitch: 0.0095, ringAlbedo: 0.135, ringRelief: 0.00055, ringRough: 0.2,
-          plankPitch: 0.32, seamWidth: 0.0032, seamDark: 0.82, plankTone: 0.055,
+          plankPitch: 0.32, seamWidth: 0.0032, seamDark: 0.82, plankTone: 0.12,
           fibrePitch: 0.0015, fibreRelief: 0.00016, fibreAlbedo: 0.075, wear: 0.16,
-          fibreRough: 0.11, plankRough: 0.06,
+          fibreRough: 0.11, plankRough: 0.11,
+          // The tier that actually carries the deck at the two metres the helm
+          // camera sits at: ray fleck, colour streaking and holystone scrub.
+          // Amplitudes set by measurement, not by eye — see shaders/detail.ts.
+          figurePitch: 0.042, figureAlbedo: 0.17, figureRelief: 0.0016, figureRough: 0.2,
         },
       },
       'deck',
@@ -197,6 +208,7 @@ export class Ship implements Module {
           ringPitch: 0.0105, ringAlbedo: 0.115, ringRelief: 0.0005, ringRough: 0.19,
           plankPitch: 0, fibrePitch: 0.0014, fibreRelief: 0.00015, fibreAlbedo: 0.07,
           fibreRough: 0.1,
+          figurePitch: 0.038, figureAlbedo: 0.19, figureRelief: 0.0017, figureRough: 0.21,
         },
       },
       'oak',
@@ -208,7 +220,12 @@ export class Ship implements Module {
         // Hammer draw marks on wrought iron: fine, directional, and mostly a
         // roughness effect — that is what makes a forged fitting read as metal
         // rather than as dark plastic.
-        detail: { fibrePitch: 0.0018, fibreRelief: 0.00018, fibreAlbedo: 0.06, fibreRough: 0.16 },
+        detail: {
+          fibrePitch: 0.0018, fibreRelief: 0.00018, fibreAlbedo: 0.06, fibreRough: 0.16,
+          // Mill scale and the dents of the smith's hammer, at the 2-3 cm the
+          // hammer face actually leaves.
+          figurePitch: 0.028, figureAlbedo: 0.08, figureRelief: 0.001, figureRough: 0.18,
+        },
       },
       'iron',
     );
@@ -216,7 +233,10 @@ export class Ship implements Module {
       bins.brass, tex.brass,
       {
         tex: tex.brass, grime: 0.3, env: 1.5,
-        detail: { fibrePitch: 0.0012, fibreRelief: 0.00007, fibreAlbedo: 0.03, fibreRough: 0.08 },
+        detail: {
+          fibrePitch: 0.0012, fibreRelief: 0.00007, fibreAlbedo: 0.03, fibreRough: 0.08,
+          figurePitch: 0.022, figureAlbedo: 0.02, figureRelief: 0.00025, figureRough: 0.05,
+        },
       },
       'brass',
     );

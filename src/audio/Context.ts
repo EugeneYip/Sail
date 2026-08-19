@@ -31,6 +31,41 @@ export const dB = (db: number): number => Math.pow(10, db / 20);
 export const LEAD_S = 0.055;
 
 /**
+ * The only legal way to turn a frame time into an event time.
+ *
+ * `delay` is how far after "now" the event is wanted — a jitter, a syllable gap,
+ * a flash-to-bang delay. The lead is added on top, so a caller cannot express an
+ * event with insufficient lead even by accident, and the jitter it asked for
+ * survives instead of being flattened by a downstream clamp.
+ */
+export function eventTime(now: number, delay = 0): number {
+  return now + LEAD_S + (delay > 0 ? delay : 0);
+}
+
+/**
+ * Shortfalls caught by the pools' backstop clamp.
+ *
+ * Every pool re-checks the lead before it schedules, because being wrong here is
+ * inaudible in the offline render and a click in the game. If `late` is ever
+ * non-zero, some caller computed an event time without `eventTime()` and this is
+ * the proof: `scripts/audio-test.mjs` asserts on it. `worstLeadS` is the smallest
+ * lead any caller asked for, so the number tells you how badly.
+ */
+export const schedule = { late: 0, worstLeadS: Infinity };
+
+/** Clamp an event time to the minimum lead, recording the shortfall. */
+export function notBefore(t: number, now: number): number {
+  const floor = now + LEAD_S;
+  if (!(t >= floor)) {
+    const lead = t - now;
+    if (lead < schedule.worstLeadS) schedule.worstLeadS = lead;
+    schedule.late++;
+    return floor;
+  }
+  return t;
+}
+
+/**
  * A retriggered envelope is faded to silence over this long first. Without it,
  * restarting a voice that is still sounding steps its gain straight to the floor
  * — the single loudest click this module can make.
@@ -143,16 +178,6 @@ export class Nodes {
     return this.track(n);
   }
 
-  compressor(threshold: number, knee: number, ratio: number, attack: number, release: number): DynamicsCompressorNode {
-    const n = this.ctx.createDynamicsCompressor();
-    n.threshold.value = threshold;
-    n.knee.value = knee;
-    n.ratio.value = ratio;
-    n.attack.value = attack;
-    n.release.value = release;
-    return this.track(n);
-  }
-
   shaper(curve: Float32Array<ArrayBuffer>, oversample: OverSampleType = '2x'): WaveShaperNode {
     const n = this.ctx.createWaveShaper();
     n.curve = curve;
@@ -205,7 +230,7 @@ export class Ramp {
     if (!Number.isFinite(v)) return;
     if (Math.abs(v - this.last) < this.eps) return;
     this.last = v;
-    this.p.setTargetAtTime(v, now + LEAD_S, this.tau);
+    this.p.setTargetAtTime(v, eventTime(now), this.tau);
   }
 
   /** Only legal before the graph is audible. */

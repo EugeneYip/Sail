@@ -527,3 +527,72 @@ Render through an `OfflineAudioContext` and assert: peak <= 0 dBFS with margin,
 no sample-to-sample discontinuity above a threshold (that is what a click *is*),
 no DC offset, no NaN/denormal, and a bounded live `AudioNode` count. Then repeat
 the test **with simulated main-thread stalls** to reproduce the owner's condition.
+
+## 20. Assist mode landed (2026-08-19). Two findings worth not re-chasing.
+
+Both suites green: `physics-test.mjs` 32/32 (Pro unchanged), `assist-test.mjs`
+45/45. Solver 0.074 ms assisted / 0.165 ms Pro against a 2.5 ms budget.
+
+| | Pro | assist |
+|---|---|---|
+| cruising speed | 12.8 kn (hull-speed wall) | 15.5 kn |
+| 90% of cruise from rest | — | 11.2 s |
+| steady turn rate | 0.40 deg/s | **4.62 deg/s** |
+| 90 deg turn | 73 s | 22.9 s |
+| turn radius | — | 92 m = 1.7 ship lengths |
+| dead upwind (TWA 0) | in irons, stops | 7.3 kn, never in irons |
+| free-decay roll period | 9.31 s | **9.31 s** (mass preserved) |
+
+Pro is provably untouched: in Pro the gate's `answering` term is exactly `0`, so
+the expression is a multiplication by exactly `1.0` — bit-identical in IEEE 754.
+
+### A RETRACTED measurement — do not trust single runs of this suite
+
+The previous session reported "gating the rule in Pro moved heading 84 -> 86 deg
+and walked the floating-origin case 4069 -> 4162 m". **That was noise.** Two runs
+of *identical committed code* gave floating origin **4083 m then 226 m**, and the
+24 m/s row **11.49 kn/held 86 then 11.33 kn/held 84**. The origin case samples the
+phase of a 4 km sawtooth (`shiftOrigin` rebases past ~4 km), so the result depends
+entirely on where the run stops relative to a rebase. Any conclusion drawn from a
+single run of that case is worthless.
+
+### Test-isolation leak, deliberately NOT fixed
+
+`sail.luff` — 16 floats of lagged state written only by `Aero.ts` — survives
+`SailTrim.reset()`, which covers `brace`, `bias` and `answerRate` but not `luff`.
+Same class as the brace leak already fixed. Left alone because `luff` feeds the
+force path (`draw = 1 - sail.luff`), so touching it moves Pro's calibrated numbers.
+Also: `px.reset()` deliberately lands in Pro, so **set the mode AFTER the reset** —
+a probe that sets `assist = true` first silently measures Pro and reproduces the
+Pro polar to two decimals.
+
+### USER-VISIBLE BUG: the rig has no "aback" state
+
+Assist, 10 m/s, full press — drawing area by true wind angle:
+
+| TWA | 0 | 30 | 45 | 70 | 135 |
+|---|---|---|---|---|---|
+| drawing m2 | **2996** | 906 | **629** | 2203 | 2996 |
+
+Dead into the wind the model reports the *entire* sail plan full and drawing;
+beating at 10.7 kn it reports four fifths of it flogging. Both are wrong and they
+are the wrong way round. Cause: `luffTarget` uses `|alpha|`, so it cannot
+distinguish a sail that is drawing from one pressed backwards against the mast —
+**there is no aback state**. `sail.luff` feeds the sail shader directly, so this is
+what the player actually sees on the canvas.
+
+Fixing it properly means adding a real aback state, which is *more* physically
+correct but moves Pro's calibration. That is a judgement call, not a mechanical
+fix: either gate the new state to assist (cheap, leaves Pro subtly wrong) or add it
+for both and re-measure Pro's polar (correct, costs a calibration pass).
+
+### NON-BUGS — verified, do not chase
+
+- The `IN IRONS` badge appearing in HUD text dumps. `.irons-tag` is
+  `opacity: 0` by default and `innerText` reads hidden text. The physics flag
+  measured correct in all three states.
+- Two transient build breaks seen mid-session (`src/camera/modes/Free.ts`
+  undefined `MAX_AXIS_ELEVATION` in a class field initialiser, which stopped the
+  app booting entirely; `src/vfx/textures.ts` `worley is not defined`) were fixed
+  by their owners. Noted only because live verification is fragile while several
+  agents edit concurrently.

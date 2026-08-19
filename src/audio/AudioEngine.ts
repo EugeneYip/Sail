@@ -1,5 +1,6 @@
 import type { Module, QualityTier, World } from '../types';
-import { autoplayAllowed, onFirstGesture } from './Context';
+import { ClickWatcher, type WatchStats } from './ClickProbe';
+import { autoplayAllowed, onFirstGesture, schedule } from './Context';
 import type { ProbeOptions, ProbeResult } from './Probe';
 import { Rig } from './Rig';
 import { createSimView, SimTracker, type SimView } from './Sim';
@@ -44,6 +45,21 @@ export interface AudioExt {
   render(opts?: ProbeOptions): Promise<ProbeResult>;
   /** Run the driving loop for `minutes` of simulated time and count nodes. */
   stress(minutes?: number, opts?: ProbeOptions): Promise<CensusResult>;
+  /**
+   * Tap a per-sample discontinuity detector off the master. This is the only
+   * measurement that can see a scheduling defect, because the bug only exists
+   * when there is a real audio thread that has already rendered past
+   * `currentTime` — see `ClickProbe.ts`. Off by default; nothing is created
+   * until a test asks.
+   */
+  watch(on: boolean): Promise<boolean>;
+  /** Read the detector. `reset` restarts the measurement window. */
+  watched(reset?: boolean): Promise<WatchStats | null>;
+  /**
+   * Events that had to be pushed forward because a caller left too little lead,
+   * and the worst such shortfall in seconds. Both must stay at zero / Infinity.
+   */
+  lateEvents(): { late: number; worstLeadS: number };
 }
 
 export interface CensusResult {
@@ -82,6 +98,8 @@ export class AudioEngine implements Module {
   private suspendTimer = 0;
   private readonly detach: (() => void)[] = [];
   private warned = false;
+  /** Only ever non-null while `scripts/audio-test.mjs` is measuring. */
+  private watcher: ClickWatcher | null = null;
 
   init(world: World): void {
     this.world = world;
@@ -141,6 +159,8 @@ export class AudioEngine implements Module {
     for (const d of this.detach) d();
     this.detach.length = 0;
     clearTimeout(this.suspendTimer);
+    this.watcher?.detach();
+    this.watcher = null;
     this.rig?.dispose();
     this.rig = null;
     const ctx = this.ctx;
@@ -260,7 +280,23 @@ export class AudioEngine implements Module {
         const { probeCensus } = await import('./Probe');
         return probeCensus(minutes ?? 5, opts ?? {});
       },
+      watch: (on: boolean) => self.watch(on),
+      watched: async (reset?: boolean) => (await self.watcher?.stats(reset === true)) ?? null,
+      lateEvents: () => ({ late: schedule.late, worstLeadS: schedule.worstLeadS }),
     };
+  }
+
+  private async watch(on: boolean): Promise<boolean> {
+    if (!on) {
+      this.watcher?.detach();
+      this.watcher = null;
+      return false;
+    }
+    if (this.watcher) return true;
+    const ctx = this.ctx;
+    if (!ctx || !this.rig || ctx.state !== 'running') return false;
+    this.watcher = await ClickWatcher.attach(ctx, this.rig.mixer.master);
+    return this.watcher !== null;
   }
 }
 

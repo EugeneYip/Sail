@@ -56,22 +56,22 @@ let cloth = await glslFrom('src/ship/build/sails.ts', 'CLOTH_DETAIL');
 const FAMILY = {
   deck: {
     A: [0.0095, 0.135, 0.00055, 0.2], B: [0.32, 0.0032, 0.82, 0.00016],
-    C: [0.0015, 0.075, 0.055, 0.16], D: [0.11, 0.06],
+    C: [0.0015, 0.075, 0.12, 0.16], D: [0.11, 0.11], E: [0.042, 0.17, 0.0016, 0.2],
     base: [0.52, 0.46, 0.36], rough: 0.6, tile: [3.2, 1.28],
   },
   oak: {
     A: [0.0105, 0.115, 0.0005, 0.19], B: [0, 0.003, 0, 0.00015],
-    C: [0.0014, 0.07, 0, 0], D: [0.1, 0],
+    C: [0.0014, 0.07, 0, 0], D: [0.1, 0], E: [0.038, 0.19, 0.0017, 0.21],
     base: [0.44, 0.36, 0.27], rough: 0.65, tile: [3.2, 1.28],
   },
   black: {
     A: [0.011, 0.055, 0.00022, 0.11], B: [0.32, 0.0035, 0.45, 0.00009],
-    C: [0.0019, 0.05, 0.035, 0], D: [0.06, 0.035],
+    C: [0.0019, 0.05, 0.035, 0], D: [0.06, 0.035], E: [0.05, 0.035, 0.0006, 0.06],
     base: [0.14, 0.14, 0.145], rough: 0.6, tile: [3.2, 1.28],
   },
   copper: {
     A: [0.009, 0, 0, 0], B: [0, 0.003, 0, 0.00012],
-    C: [0.0022, 0.05, 0, 0], D: [0.1, 0],
+    C: [0.0022, 0.05, 0, 0], D: [0.1, 0], E: [0.03, 0.035, 0.0005, 0.09],
     base: [0.3, 0.27, 0.19], rough: 0.65, tile: [3.2, 1.28],
   },
 };
@@ -90,6 +90,7 @@ uniform vec4 uDetailA;
 uniform vec4 uDetailB;
 uniform vec4 uDetailC;
 uniform vec2 uDetailD;
+uniform vec4 uDetailE;
 uniform vec3 uBase;
 uniform float uRough;
 uniform int uMode;
@@ -102,16 +103,19 @@ void main(){
   vec2 vMapUv = vXy / uTileM;
   vec3 col;
   if (uMode == 3) {
-    vec2 g;
-    float w = lwWeave(vXy, vec2(fwidth(vXy.x), fwidth(vXy.y)), g);
-    vec3 n = normalize(vec3(-g.y * 0.00011, -g.x * 0.00011, 1.0));
+    vec2 aa = vec2(fwidth(vXy.x), fwidth(vXy.y));
+    vec2 gw, gs;
+    float w = lwWeave(vXy, aa, gw);
+    float sl = lwClothSlub(vXy, aa, gs);
+    vec2 sg = gw * 0.00011 + gs * 0.0018;
+    vec3 n = normalize(vec3(-sg.y, -sg.x, 1.0));
     vec3 L = normalize(vec3(0.42, 0.30, 0.86));
     float d = max(dot(n, L), 0.0);
-    col = vec3(0.70, 0.675, 0.61) * (1.0 + 0.055 * w) * (0.22 + 0.78 * d);
+    col = vec3(0.70, 0.675, 0.61) * (1.0 + 0.055 * w + 0.085 * sl) * (0.22 + 0.78 * d);
   } else {
     float alb, rgh, ao;
     vec2 g;
-    lwWoodDetail(vXy, uDetailA, uDetailB, uDetailC, uDetailD, alb, rgh, ao, g);
+    lwWoodDetail(vXy, uDetailA, uDetailB, uDetailC, uDetailD, uDetailE, alb, rgh, ao, g);
     if (uMode == 0) {
       // Albedo only, times AO, so the caulk and tone read on their own.
       col = uBase * alb * ao;
@@ -183,6 +187,7 @@ void main(){ vXy = (aP * 0.5 + 0.5) * uM; gl_Position = vec4(aP, 0.0, 1.0); }`;
     gl.uniform4fv(U('uDetailB'), f.B);
     gl.uniform4fv(U('uDetailC'), f.C);
     gl.uniform2fv(U('uDetailD'), f.D);
+    gl.uniform4fv(U('uDetailE'), f.E);
     gl.uniform3fv(U('uBase'), f.base);
     gl.uniform1f(U('uRough'), f.rough);
     const shots = {};

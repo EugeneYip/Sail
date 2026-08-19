@@ -2,7 +2,7 @@ import { makeRng, smoothstep } from '../util/math';
 import { ANCHOR, anchorWorld, toWorld } from './Anchors';
 import type { AudioBuffers } from './Buffers';
 import type { Bus } from './Buses';
-import { dB, freqRamp, Nodes, PanRamp, Ramp } from './Context';
+import { dB, eventTime, freqRamp, Nodes, PanRamp, Ramp } from './Context';
 import type { SimSail, SimView } from './Sim';
 import type { NoisePool, TonePool } from './Voices';
 
@@ -172,7 +172,7 @@ export class ShipSounds {
       const atWheel = steer > trim;
       const a = atWheel ? ANCHOR.wheel : ANCHOR.deck;
       const p = toWorld(sim, a[0] + (r - 0.5) * 3, a[1], a[2] + (this.rng() - 0.5) * 6);
-      const req = this.wood.begin(now + r * 0.03);
+      const req = this.wood.begin(eventTime(now, r * 0.03));
       req.gain = dB(-42) * (0.5 + 0.5 * r);
       req.low = 0.3;
       req.high = 0.7;
@@ -223,7 +223,7 @@ export class ShipSounds {
       const p = toWorld(sim, spot[0] + (r - 0.5) * 2, spot[1], spot[2] + (this.rng() - 0.5) * 4);
       const size = (0.4 + 0.6 * this.rng()) * (0.55 + 0.75 * heavy) * (1 - 0.55 * (k / count));
       const long = this.rng() < 0.18 + 0.3 * heavy;
-      const req = this.wood.begin(now + k * (0.02 + 0.14 * this.rng()));
+      const req = this.wood.begin(eventTime(now, k * (0.02 + 0.14 * this.rng())));
       req.gain = dB(-33) * size;
       req.low = 0.6;
       req.high = 0.3;
@@ -290,7 +290,7 @@ export class ShipSounds {
     const p = toWorld(sim, (r - 0.5) * 14, a[1] * tier, a[2] + (this.rng() - 0.5) * 8);
     // Dynamic pressure on the cloth sets how violent the report is.
     const force = Math.min(1.5, (wind * wind) / 320) * size * Math.min(1.3, sail.area / 300);
-    const req = this.canvas.begin(now + r * 0.02);
+    const req = this.canvas.begin(eventTime(now, r * 0.02));
     req.gain = dB(-25) * force;
     req.low = 0.35 + 0.3 * size;
     req.high = 0.95;
@@ -314,7 +314,7 @@ export class ShipSounds {
 
     // Big reports come as a double crack — the cloth snaps back.
     if (size > 0.75 && this.rng() < 0.6) {
-      const q = this.canvas.begin(now + 0.028 + 0.03 * this.rng());
+      const q = this.canvas.begin(eventTime(now, 0.028 + 0.03 * this.rng()));
       q.gain = dB(-28) * force;
       q.low = 0.3;
       q.high = 0.9;
@@ -357,7 +357,7 @@ export class ShipSounds {
     const gap = 0.3 + this.rng() * 0.16;
     for (let i = 0; i < n; i++) {
       const p = toWorld(sim, x0 + (this.rng() - 0.5) * 0.6, 4.6, z0 + dz * i * 2);
-      const req = this.wood.begin(now + 0.1 + i * gap);
+      const req = this.wood.begin(eventTime(now, 0.1 + i * gap));
       req.gain = dB(-38) * (0.7 + 0.5 * this.rng());
       req.low = 0.85;
       req.high = 0.25;
@@ -383,7 +383,7 @@ export class ShipSounds {
   private hail(sim: SimView, now: number): void {
     const p = toWorld(sim, (this.rng() - 0.5) * 10, 6, (this.rng() - 0.5) * 34);
     const syllables = 1 + Math.floor(this.rng() * 2);
-    let t = now + 0.15;
+    let t = eventTime(now, 0.15);
     for (let i = 0; i < syllables; i++) {
       const base = 110 + this.rng() * 70;
       const req = this.tones.begin(t);
@@ -414,7 +414,7 @@ export class ShipSounds {
   private pipe(sim: SimView, now: number): void {
     const p = toWorld(sim, (this.rng() - 0.5) * 6, 5.5, 8 + this.rng() * 10);
     const f = 1900 + this.rng() * 700;
-    const req = this.tones.begin(now + 0.1);
+    const req = this.tones.begin(eventTime(now, 0.1));
     req.gain = dB(-34);
     req.f0 = f * 0.72;
     req.f1 = f;
@@ -434,7 +434,7 @@ export class ShipSounds {
     req.z = p.z;
     this.tones.fire(now);
 
-    const up = this.tones.begin(now + 0.72);
+    const up = this.tones.begin(eventTime(now, 0.72));
     up.gain = dB(-35);
     up.f0 = f;
     up.f1 = f * 1.5;

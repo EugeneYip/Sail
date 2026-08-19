@@ -159,15 +159,38 @@ varying float vStream;
 void main(){
   if (vThick < 0.004) discard;
 
-  // Foam detail flows aft at the ship's speed relative to the hull.
+  // Foam detail flows aft at the ship's speed relative to the hull. u runs ALONG
+  // the flow, which is the axis the foam texture's filaments are stretched on.
   float flow = uTime * (2.0 + uSpeedN * 9.0);
   vec2 uvA = vec2(vStream * 0.055 - flow * 0.05, (vJ + vSide * 0.5) * 0.6);
   vec2 uvB = vec2(vStream * 0.145 - flow * 0.11, vJ * 1.7 + vSide);
+  // A third, much finer octave. The sheet is a few hundred triangles, so the
+  // extra tap is nothing, and without it there is no structure left to see once
+  // the camera is at the rail — which is exactly where the foam was being
+  // described as a mass of soft blobs.
+  vec2 uvC = vec2(vStream * 0.40 - flow * 0.29, vJ * 4.6 - vSide * 0.5);
   vec4 fa = texture2D(tFoam, uvA);
   vec4 fb = texture2D(tFoam, uvB);
-  float bubbles = fa.r * 0.55 + fb.r * 0.45;
-  float streaks = fa.g * 0.6 + fb.b * 0.4;
-  float cover = saturate1(vAer * (0.55 + 0.75 * bubbles) + streaks * 0.25);
+  vec4 fc = texture2D(tFoam, uvC);
+  float bubbles = fa.r * 0.42 + fb.r * 0.34 + fc.r * 0.24;
+  // G is the filament channel at every scale. This used to read fb.b, the
+  // isotropic grain, as if it were a streak, which cost the effect its
+  // directionality — half the reason the foam did not read as moving water.
+  float streaks = saturate1(fa.g * 0.52 + fb.g * 0.32 + fc.g * 0.30);
+  float grain = fc.b * 0.62 + fb.b * 0.38;
+
+  // Aeration field, then a NARROW threshold on it. A wide ramp
+  // ('smoothstep(0.10, 0.45, cover)', which is what used to close this shader)
+  // fades every blob out across its whole radius, and a field of soft-edged
+  // blobs is cotton wool however it is lit. Real aerated water has a film edge
+  // millimetres thick: at this range that is a pixel, so the ramp has to be
+  // narrow and the raggedness has to come from the field instead.
+  float field = vAer * (0.40 + 0.88 * bubbles) + streaks * 0.34 + fa.a * 0.22
+                + grain * 0.10;
+  // The lip tears: the threshold climbs towards the free edge, so the outer
+  // fringe breaks into filaments rather than ending on a smooth contour.
+  float thr = 0.30 + 0.42 * smoothstep(0.35, 1.0, vJ);
+  float cover = smoothstep(thr - 0.085, thr + 0.085, field);
 
   // Aerated water is a bright, strongly forward-scattering medium.
   vec3 view = normalize(uCameraPos - vWorld);
@@ -194,11 +217,27 @@ void main(){
   lit += sun * forward * (1.0 - vThick) * 0.40 * cover * disperse;
   lit += uMoonColor * uMoonIntensity * INV_PI * 0.2;
 
-  float edge = smoothstep(0.0, 0.12, vJ) * (1.0 - smoothstep(0.80, 1.0, vJ));
+  // THE BREAKING EDGE. Water at the point of breaking is brightest in a thin
+  // line along the crest, not uniformly across the sheet, and it is that line
+  // the eye uses to tell breaking water from a painted highlight.
+  float lip = exp(-sq((field - thr) / 0.075)) * smoothstep(0.22, 0.80, vJ);
+  lit += sun * wrap * disperse * lip * 0.60;
+
+  // FOAM MUST REMOVE GLOSS, NOT JUST ADD WHITE. Unbroken water is a mirror;
+  // aerated water is a diffuse scattering medium with no coherent reflection. So
+  // the sheet carries a sharp sun glint at its root, where the water is still a
+  // coherent film, and the glint dies exactly where the foam takes over. Adding
+  // brightness without taking the specular away is what makes foam read as paint.
+  float gloss = (1.0 - cover) * (1.0 - smoothstep(0.12, 0.60, vJ));
+  vec3 half3 = normalize(view + uSunDirection);
+  // A mirror returns sun RADIANCE, so this is scaled against 'sun * PI'.
+  lit += sun * PI * pow(saturate1(half3.y), 46.0) * gloss * 0.5;
+
+  float edge = smoothstep(0.0, 0.06, vJ) * (1.0 - smoothstep(0.86, 1.0, vJ));
   if (vPart > 0.5) edge = 1.0 - smoothstep(0.55, 1.0, vT);
-  float a = saturate1(vThick * cover * edge * uOpacity * 1.7);
-  // Sparse holes so the sheet reads as torn spray rather than a solid skin.
-  a *= smoothstep(0.10, 0.45, cover);
+  // 'cover' is already a narrow threshold; ramping it a second time here is what
+  // put the soft halo back on every blob.
+  float a = saturate1(vThick * cover * edge * uOpacity * 1.9);
 
   float dist = length(uCameraPos - vWorld);
   lit = applyAerial(lit, dist, -view, uSunDirection, uFogColor, uSunColor,
@@ -267,22 +306,35 @@ varying float vStream;
 
 void main(){
   float flow = uTime * (1.5 + uSpeedN * 11.0);
-  // Streaks are long along the hull and thin vertically.
+  // Streaks are long along the hull and thin vertically. Three scales: this is
+  // the surface the owner is closest to, so it is the one that most needs detail
+  // that survives magnification.
   vec2 uvA = vec2(vStream * 0.028 - flow * 0.055, vD * 0.22 + vSide * 0.5);
   vec2 uvB = vec2(vStream * 0.085 - flow * 0.13, vD * 0.55 + vSide);
+  vec2 uvC = vec2(vStream * 0.25 - flow * 0.33, vD * 1.7 + vSide * 0.25);
   float s1 = texture2D(tFoam, uvA).g;
-  float s2 = texture2D(tFoam, uvB).b;
+  // Was tFoam.b — the isotropic grain channel — which produced blotches
+  // instead of streaks. All three taps now read the filament channel.
+  float s2 = texture2D(tFoam, uvB).g;
+  float s3 = texture2D(tFoam, uvC).g;
   float bub = texture2D(tFoam, uvB * vec2(2.0, 3.0)).r;
+  float grain = texture2D(tFoam, uvC).b;
 
-  // Boot top: the strip that has just been wetted, riding the local surface.
-  float wetBand = (1.0 - smoothstep(0.0, 0.55 + uChop * 0.5, vD)) * step(-1.6, vD);
+  // Boot top: the strip that has just been wetted, riding the local surface. The
+  // wetted line on a real hull is a sharp, ragged edge; a plain gradient over
+  // half a metre reads as an airbrushed band.
+  float wetEdge = (grain - 0.5) * (0.10 + 0.18 * uChop);
+  float wetBand = (1.0 - smoothstep(0.0, 0.20 + uChop * 0.28, vD + wetEdge))
+                  * step(-1.6, vD);
   float submerged = 1.0 - smoothstep(-0.9, 0.05, vD);
 
   // Foam streaks: born at the bow shoulder, dragged aft, strongest at the
-  // waterline and climbing higher the faster we go.
+  // waterline and climbing higher the faster we go. Thresholded rather than
+  // rescaled, so there is clear water between the filaments.
   float bowGain = 0.35 + 1.5 * exp(-vT * 4.5);
   float climb = 1.0 - smoothstep(0.15 + uSpeedN * 1.5, 0.9 + uSpeedN * 2.6, vD);
-  float streak = saturate1((s1 * 0.65 + s2 * 0.5) * 1.55 - 0.42) * bowGain * climb;
+  float streakField = s1 * 0.44 + s2 * 0.32 + s3 * 0.24;
+  float streak = smoothstep(0.30, 0.46, streakField) * bowGain * climb;
   float foamA = saturate1(streak * smoothstep(0.05, 0.32, uSpeedN) * 1.5
                           + wetBand * bub * 0.22 * uSpeedN);
 
@@ -290,11 +342,19 @@ void main(){
   float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.5);
   vec3 sun = uSunColor * uSunIntensity * INV_PI;
   // Same foam albedo as the bow sheet and the ocean surface — see the note there.
-  vec3 foamCol = vec3(0.44, 0.47, 0.49) * (sun * wrap + uSkyColor * 0.9);
-  // Wet paint: darker, much glossier. A sharp specular sells it — and a mirror
-  // returns sun RADIANCE, so this term is scaled against 'sun * PI', not 'sun'.
-  float spec = pow(saturate1(dot(reflect(-uSunDirection, vec3(0.0, 1.0, 0.0)), view)), 26.0);
-  vec3 wetCol = uSkyColor * 0.55 + sun * spec * 7.0;
+  // The bubble raft modulates it: a raft is not one flat tone.
+  vec3 foamCol = vec3(0.44, 0.47, 0.49) * (0.82 + 0.30 * bub)
+                 * (sun * wrap + uSkyColor * 0.9);
+  // FOAM KILLS GLOSS. Aerated water scatters; it does not reflect. So foam has to
+  // take the specular AWAY, not merely add white over the top of it — and where
+  // the foam is only partial it roughens what is left, so the lobe widens as it
+  // dims rather than staying a hard pinpoint.
+  float glossy = 1.0 - 0.94 * foamA;
+  float lobe = mix(8.0, 26.0, glossy);
+  // Wet paint: darker, much glossier. A mirror returns sun RADIANCE, so this
+  // term is scaled against 'sun * PI', not 'sun'.
+  float spec = pow(saturate1(dot(reflect(-uSunDirection, vec3(0.0, 1.0, 0.0)), view)), lobe);
+  vec3 wetCol = uSkyColor * (0.55 - 0.16 * foamA) + sun * spec * 7.0 * glossy;
 
   float wetA = (wetBand * 0.5 + submerged * 0.34) * (0.35 + 0.65 * uWetness * 0.5 + 0.4);
   wetA = saturate1(wetA * uOpacity);

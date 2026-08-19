@@ -30,6 +30,62 @@
   --m: 26px;
   --mt: 20px;
   --fade: 0.85s;
+
+  /* ---------------------------------------------------------------- *
+   *  legibility
+   * ---------------------------------------------------------------- *
+   *
+   * Measured, not admired. `.tmp/uigrade.mjs` mounts this stylesheet over a
+   * flat white plate — the brightest ground that can physically exist, and the
+   * only one with no texture to hide a gradient in — and reports the largest
+   * sRGB step across any 32 px window. That slope, not the peak darkening, is
+   * what makes soft shading read as an object: the eye finds edges by
+   * differentiating, so a ramp disappears exactly when its slope stays under
+   * the banding threshold everywhere. Under ~4 levels/32 px is quiet.
+   *
+   * Which settles an argument this file lost twice. A scrim CANNOT make white
+   * ink legible on a white sky. To buy even one stop locally it needs ~0.5
+   * alpha, and 0.5 alpha inside a 150 px box is an 80-levels-per-32 px cliff —
+   * a lozenge, exactly what shipped here and exactly what had to come out. So
+   * the two jobs are split and given to the tools that can actually do them:
+   *
+   *   the CONTOUR carries legibility.  Tight, dark, hugging the letterforms,
+   *     scaled to the type it defends. Glyph-shaped shading reads as
+   *     typography; a 150x48 ellipse reads as a panel someone forgot to draw.
+   *   the SCRIM carries composition.  Wide, weak, and worth about a fifth of a
+   *     stop. It sits the chrome in a calmer field and behaves like a
+   *     graduated filter over the lens. It is not a legibility device and is
+   *     no longer asked to be one.
+   */
+
+  /* Doubling the 1 px shadow is deliberate: stacking two identical blurs
+     squares the transmittance, which is how you get a solid ring out of a
+     blur without widening it. Over a night sea near-black on near-black is
+     arithmetically a no-op, so this costs nothing where nothing is needed. */
+  --contour:
+    0 0 1px rgba(var(--shade), 0.95),
+    0 0 1px rgba(var(--shade), 0.9),
+    0 0 2.5px rgba(var(--shade), 0.75),
+    0 0 5px rgba(var(--shade), 0.4),
+    0 1px 1.5px rgba(var(--shade), 0.55);
+
+  /* The same idea proportioned for the 34-40 px numeral. A contour has to
+     scale with its type or it stops being a contour and becomes a cloud. */
+  --contour-lg:
+    0 0 1.5px rgba(var(--shade), 0.9),
+    0 0 3px rgba(var(--shade), 0.8),
+    0 0 7px rgba(var(--shade), 0.45),
+    0 0 15px rgba(var(--shade), 0.22),
+    0 1px 2px rgba(var(--shade), 0.5);
+
+  /* Scrim amplitudes and ramp lengths. Ramps are lengths, not percentages, so
+     a short landscape phone does not compress the same drop into a third of
+     the distance and turn a filter back into an edge. */
+  --scrim-top-a: 0.13;
+  --scrim-top-d: 380px;
+  --scrim-bot-a: 0.12;
+  --scrim-bot-d: 300px;
+  --scrim-corner-a: 0.17;
 }
 
 * {
@@ -138,11 +194,11 @@ body {
   pointer-events: none;
   opacity: 1;
   transition: opacity var(--fade) cubic-bezier(0.4, 0, 0.2, 1);
-  /* An optical halo, not a shadow: wide, weak, invisible as a shape, but
-     worth roughly two stops of local contrast over a white sky. */
-  text-shadow:
-    0 0 10px rgba(var(--shade), 0.55),
-    0 1px 2px rgba(var(--shade), 0.35);
+  /* A contour, not a halo. The 10 px blur this replaces lifted a whole region
+     slightly instead of separating a 1 px stem from what was behind it — which
+     over sunlit foam is a grey smudge around the numbers and no more readable
+     for it. See --contour. */
+  text-shadow: var(--contour);
 }
 
 .hud.faded,
@@ -158,31 +214,86 @@ body {
   transition-duration: 0.18s;
 }
 
-/* Corner falloff. Reads as the lens vignette it sits inside, not as panels.
-   Minimal mode only darkens the one corner it writes in; Pro lights all six
-   because it fills all six. */
+/* A graduated filter over the lens.
+ *
+ * Every ramp here is eased. A gradient with one colour stop and one
+ * `transparent` stop is a LINEAR ramp in alpha, and a linear ramp has a kink at
+ * each end where its slope jumps — which the eye finds instantly and draws as
+ * the outline of a soft-edged object. The seven stops below trace
+ * 1, 0.92, 0.74, 0.50, 0.28, 0.10, 0 at 0, 20, 38, 55, 70, 84, 100 % of the
+ * ramp: a hand-tabulated smoothstep, so the slope goes to zero at both ends and
+ * peaks at 1.47x the mean instead of jumping there from nothing.
+ *
+ * Direction matters as much as easing. The top and bottom ramps run edge to
+ * edge, so along their own axis they are monotone and across it they have no
+ * gradient at all — they cannot enclose an area, and a shading that encloses
+ * nothing cannot be seen as a shape. It is the graduated ND every landscape
+ * photographer tapes over a blown sky, doing the same job for the same reason.
+ *
+ * Where a corner needs more than a band gives, the radial's centre is pushed
+ * OFF the canvas, so the visible part is an inner slice of the falloff and no
+ * closed arc ever appears on screen. That is the difference between a vignette
+ * and a blob, and it is entirely a matter of where the centre sits.
+ *
+ * Zero alpha is written `rgba(var(--shade), 0)` rather than `transparent`:
+ * `transparent` is transparent BLACK, and interpolating a near-black toward it
+ * is a hue ramp as well as an alpha ramp.
+ */
 .hud-scrim {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(40% 28% at 0% 100%, rgba(var(--shade), 0.4), transparent 72%),
-    radial-gradient(26% 16% at 100% 0%, rgba(var(--shade), 0.3), transparent 76%),
-    /* A top band, falling off over 90 px. The switch and the menu live up here
-       and a noon sky is the brightest surface in the game; one soft edge across
-       the whole width is a filter over the lens, where a plate behind each
-       control is a box on the screen. Both were tried; this is the one that
-       disappears. */
-    linear-gradient(to bottom, rgba(var(--shade), 0.26), transparent 10%);
+    /* Under the readout. Centre off-canvas past the bottom-left corner; the
+       bottom-right water — the hero of most frames — is left alone. */
+    radial-gradient(
+      46% 62% at -4% 104%,
+      rgba(var(--shade), var(--scrim-corner-a)) 0%,
+      rgba(var(--shade), calc(var(--scrim-corner-a) * 0.92)) 20%,
+      rgba(var(--shade), calc(var(--scrim-corner-a) * 0.74)) 38%,
+      rgba(var(--shade), calc(var(--scrim-corner-a) * 0.5)) 55%,
+      rgba(var(--shade), calc(var(--scrim-corner-a) * 0.28)) 70%,
+      rgba(var(--shade), calc(var(--scrim-corner-a) * 0.1)) 84%,
+      rgba(var(--shade), 0) 100%
+    ),
+    /* Across the top, where the switch and the menu sit against the brightest
+       surface in the game. */
+    linear-gradient(
+      to bottom,
+      rgba(var(--shade), var(--scrim-top-a)) 0,
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.92)) calc(var(--scrim-top-d) * 0.2),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.74)) calc(var(--scrim-top-d) * 0.38),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.5)) calc(var(--scrim-top-d) * 0.55),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.28)) calc(var(--scrim-top-d) * 0.7),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.1)) calc(var(--scrim-top-d) * 0.84),
+      rgba(var(--shade), 0) var(--scrim-top-d)
+    );
 }
 
+/* Pro fills all four corners, so corner shading would have to be everywhere —
+   at which point it is a tint, not a falloff. Two edge-to-edge ramps instead:
+   nothing enclosed, nothing to see, and the middle of the frame untouched. */
 .hud.m-pro .hud-scrim {
   background:
-    radial-gradient(56% 30% at 0% 100%, rgba(var(--shade), 0.3), transparent 74%),
-    radial-gradient(50% 28% at 100% 100%, rgba(var(--shade), 0.28), transparent 74%),
-    radial-gradient(40% 22% at 0% 0%, rgba(var(--shade), 0.24), transparent 76%),
-    radial-gradient(40% 22% at 100% 0%, rgba(var(--shade), 0.22), transparent 76%),
-    linear-gradient(to bottom, rgba(var(--shade), 0.14), transparent 13%),
-    linear-gradient(to top, rgba(var(--shade), 0.16), transparent 17%);
+    linear-gradient(
+      to bottom,
+      rgba(var(--shade), var(--scrim-top-a)) 0,
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.92)) calc(var(--scrim-top-d) * 0.2),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.74)) calc(var(--scrim-top-d) * 0.38),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.5)) calc(var(--scrim-top-d) * 0.55),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.28)) calc(var(--scrim-top-d) * 0.7),
+      rgba(var(--shade), calc(var(--scrim-top-a) * 0.1)) calc(var(--scrim-top-d) * 0.84),
+      rgba(var(--shade), 0) var(--scrim-top-d)
+    ),
+    linear-gradient(
+      to top,
+      rgba(var(--shade), var(--scrim-bot-a)) 0,
+      rgba(var(--shade), calc(var(--scrim-bot-a) * 0.92)) calc(var(--scrim-bot-d) * 0.2),
+      rgba(var(--shade), calc(var(--scrim-bot-a) * 0.74)) calc(var(--scrim-bot-d) * 0.38),
+      rgba(var(--shade), calc(var(--scrim-bot-a) * 0.5)) calc(var(--scrim-bot-d) * 0.55),
+      rgba(var(--shade), calc(var(--scrim-bot-a) * 0.28)) calc(var(--scrim-bot-d) * 0.7),
+      rgba(var(--shade), calc(var(--scrim-bot-a) * 0.1)) calc(var(--scrim-bot-d) * 0.84),
+      rgba(var(--shade), 0) var(--scrim-bot-d)
+    );
 }
 
 /* ------------------------------------------------------------------ *
@@ -342,6 +453,9 @@ body {
   line-height: 0.92;
   color: var(--ink);
   letter-spacing: -0.035em;
+  /* A 300-weight 40 px numeral has thin strokes over a lot of area; the small
+     contour would ring it too tightly to read as one shape. */
+  text-shadow: var(--contour-lg);
 }
 
 .speed-u {
@@ -388,10 +502,11 @@ body {
   left: var(--m);
   bottom: var(--m);
   contain: layout style;
-  text-shadow:
-    0 0 3px rgba(var(--shade), 0.5),
-    0 0 12px rgba(var(--shade), 0.6),
-    0 1px 2px rgba(var(--shade), 0.4);
+  /* The 12 px 0.6 blur that used to sit here was the same mistake as the
+     lozenge, drawn in shadow instead of background: a dark cloud the shape of
+     the block, plainly visible over sunlit wake, and no better at separating a
+     13 px cap from the foam behind it than a 2 px ring is. */
+  text-shadow: var(--contour);
 }
 
 .mini-hdg {
@@ -958,39 +1073,36 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  /* The words take the pointer; the shade around them must not eat a drag. */
+  /* The words take the pointer; the padding around them must not eat a drag. */
   pointer-events: none;
-  opacity: 0.9;
   transition: opacity var(--fade) cubic-bezier(0.4, 0, 0.2, 1);
-  /* Measured against a blown noon sky the words came in at 1.8:1 — white ink
-     cannot beat a white sky on opacity alone, no matter how wide the halo.
-     Two additions, both self-effacing:
-
-     A soft ellipse of near-black sized to `closest-side`, so it fades out
-     inside its own padding and never shows a rectangle. Over a bright sky it
-     is worth about two stops; over a night sky, where near-black over
-     near-black is arithmetically a no-op, it costs 5/255 and cannot read as
-     chrome. The vignette does the work exactly when there is work to do.
-
-     And a 2 px outline hugging the stems. The halo was 12 px wide, which
-     lifts a whole region slightly instead of separating a 1 px stem from what
-     is behind it; tight and dark is what makes small type survive foam. */
-  background: radial-gradient(
-    ellipse closest-side at 50% 52%,
-    rgba(var(--shade), 0.5) 0%,
-    rgba(var(--shade), 0.4) 40%,
-    rgba(var(--shade), 0.16) 70%,
-    transparent 100%
-  );
-  text-shadow:
-    0 0 2px rgba(var(--shade), 0.92),
-    0 0 4px rgba(var(--shade), 0.8),
-    0 0 11px rgba(var(--shade), 0.5),
-    0 1px 2px rgba(var(--shade), 0.5);
+  /*
+   * NO BACKGROUND. There was one — an ellipse sized to `closest-side`, half an
+   * alpha of near-black, and it was defended in this very comment as
+   * self-effacing because it faded out inside its own padding.
+   *
+   * It did not efface itself. `closest-side` on a 150x48 box means the ramp
+   * finishes in 24 px vertically, and half an alpha in 24 px measured 43 sRGB
+   * levels of drop across a single 32 px window — eleven times the threshold at
+   * which shading stops being shading and becomes an object. Against a noon sky
+   * it was a grey lozenge parked in the corner of the frame, visible from
+   * across the room, and it was worse than no scrim at all.
+   *
+   * The contrast it was buying is bought instead by the contour, which hugs the
+   * letterforms and therefore reads as a type treatment rather than as a panel.
+   * Full opacity: the container used to sit at 0.9, which quietly diluted the
+   * ring by a tenth for no legibility gain. Hierarchy comes from the ink levels
+   * on the two words, and recession from the idle fade.
+   */
+  opacity: 1;
+  text-shadow: var(--contour);
 }
 
+/* The generous padding is not decoration and must stay: it is what the enlarged
+   touch targets below grow into, and what the negative top/right offsets are
+   measured against. */
+
 .modesw:hover {
-  opacity: 1;
   transition-duration: 0.25s;
 }
 
@@ -1007,6 +1119,25 @@ body {
   transition-duration: 0.18s;
 }
 
+/*
+ * The contour has to be named here, on the button itself, and this is the whole
+ * reason the lozenge existed.
+ *
+ * `text-shadow` is an inherited property, so putting it on `.modesw` looks like
+ * enough — and it computes correctly there. But Chromium's UA stylesheet lists
+ * `text-shadow: none` in the block it shares between input, textarea, select and
+ * BUTTON, and a UA declaration beats inheritance. So the switch was the one mark
+ * in the interface whose contour was never drawn: measured 1.3:1 against a white
+ * plate, where every other mark on the default screen measured 5:1 or better
+ * from the same inherited rule.
+ *
+ * Which is how this file talked itself into a plate. The note that used to sit
+ * above the ellipse concluded that white ink cannot beat a white sky "no matter
+ * how wide the halo" — reasonable, except the halo was not being painted at all,
+ * so what it actually measured was ink with no treatment whatsoever. One
+ * declaration here does what 0.5 alpha of near-black was hired to do, and does it
+ * without putting a shape on the screen.
+ */
 .modesw-b {
   padding: 3px 0 4px;
   border: 0;
@@ -1015,6 +1146,7 @@ body {
   cursor: pointer;
   line-height: 1;
   pointer-events: auto;
+  text-shadow: var(--contour);
   transition: color 0.25s;
 }
 
@@ -1035,10 +1167,15 @@ body {
   color: var(--ink);
 }
 
+/* Blur-only, for the same reason as the menu rules: a spread on a 1 px divider
+   turns a hairline into a little outlined box. */
 .modesw-d {
   width: 1px;
   height: 10px;
   background: var(--ink-4);
+  box-shadow:
+    0 0 2px rgba(var(--shade), 0.9),
+    0 0 4px rgba(var(--shade), 0.6);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1179,22 +1316,29 @@ body {
   align-content: center;
   justify-items: end;
   gap: 4px;
-  opacity: 0.55;
   transition: opacity 0.3s;
-  /* Same self-effacing vignette as the switch beside it — three 1 px rules
-     measured 1.85:1 over a noon sky, which is not an affordance. */
-  background: radial-gradient(
-    ellipse closest-side at 62% 50%,
-    rgba(var(--shade), 0.55) 0%,
-    rgba(var(--shade), 0.4) 44%,
-    rgba(var(--shade), 0.12) 74%,
-    transparent 100%
-  );
+  /*
+   * The second lozenge, and the one that taught the more useful lesson.
+   *
+   * This carried the same `closest-side` ellipse as the switch, and it also sat
+   * at `opacity: 0.55` — which is why the plate was reached for in the first
+   * place. Container opacity is the wrong dial for making a control recede,
+   * because it scales the ink and its contour toward the background TOGETHER.
+   * At 0.55 over a noon sky the rules landed near 170 and their dark ring near
+   * 140: the contour was still there, still correctly drawn, and worth almost
+   * nothing, because both ends of the contrast had been faded into the sky.
+   *
+   * So: full opacity, and the recession comes from the ink level on the rules
+   * instead. The contour then keeps its full density and a 1 px rule can hold a
+   * hard edge against a blown sky. Opacity is left free for the two things it
+   * is actually good at — the idle fade and standing down.
+   */
+  opacity: 1;
 }
 
-.menu:hover,
-.menu:focus-visible {
-  opacity: 1;
+.menu:hover span,
+.menu:focus-visible span {
+  background: var(--ink);
 }
 
 /* Stands down whenever something else owns the screen — the book has its own
@@ -1204,14 +1348,25 @@ body {
   visibility: hidden;
 }
 
+/* A 1 px rule cannot carry a text contour, so it takes the box-shadow
+   equivalent. A zero-blur 1 px SPREAD was tried first and measured beautifully —
+   14.6:1 — but a 1 px light rule with a hard 1 px of black on each side is two
+   parts dark to one part light, so at 3x the three hairlines had become three
+   chunky outlined bars and the mark read as heavier than the type beside it. A
+   number that good on a mark that wrong is the whole reason to keep looking at
+   the pixels. Dense blurs only: the rule stays a rule, and still separates.
+   `--ink-2` rather than `--ink` is the unobtrusive dial, now that container
+   opacity is no longer doing that job. */
 .menu span {
   display: block;
   height: 1px;
-  background: var(--ink);
+  background: var(--ink-2);
   box-shadow:
-    0 0 2px rgba(var(--shade), 0.95),
-    0 0 5px rgba(var(--shade), 0.7);
-  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    0 0 2px rgba(var(--shade), 0.98),
+    0 0 2px rgba(var(--shade), 0.9),
+    0 0 4px rgba(var(--shade), 0.7),
+    0 0 9px rgba(var(--shade), 0.4);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
 }
 
 .menu span:nth-child(1) { width: 16px; }
@@ -1697,6 +1852,11 @@ body {
   opacity: 0;
   transform: translateY(4px);
   pointer-events: none;
+  /* Named, not inherited: the UA stylesheet resets text-shadow on buttons. The
+     title card's own scrim already carries this one, so this is belt and braces
+     rather than a rescue — but it is the same trap that cost the mode switch its
+     contour, and the only defence is to never trust inheritance into a button. */
+  text-shadow: var(--contour);
   transition: opacity 0.7s 0.15s ease, transform 0.7s 0.15s ease, color 0.3s, border-color 0.3s;
 }
 
@@ -2007,4 +2167,20 @@ body {
   .pad { width: 66px; height: 66px; }
   .intro-load { margin-top: 26px; }
   .intro-begin { margin-top: 26px; }
+}
+
+/* A landscape phone is 390 px tall. A 340 px ramp on that screen is not a
+   graduated filter, it is a tint over the whole frame — and shortening the ramp
+   alone would only make the slope steeper, which is the one thing that must not
+   happen. So shorten the ramp AND drop the amplitude together, keeping the ratio
+   that holds the slope inside budget. Two thirds of the height, two thirds of
+   the drop. */
+@media (max-height: 560px) {
+  :root {
+    --scrim-top-a: 0.09;
+    --scrim-top-d: 240px;
+    --scrim-bot-a: 0.085;
+    --scrim-bot-d: 210px;
+    --scrim-corner-a: 0.12;
+  }
 }

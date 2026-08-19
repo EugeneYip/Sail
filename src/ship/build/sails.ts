@@ -375,6 +375,46 @@ float lwWeave(vec2 m, vec2 aa, out vec2 g) {
 }
 
 /**
+ * The cloth itself: slubs, bands and pucker.
+ *
+ * The weave above is the right idea measured at the wrong scale, and the probe
+ * says so. At a two-metre viewing distance a 1600 px / 50 degree frame resolves
+ * 1.17 mm per pixel, so the Nyquist limit is 2.3 mm — and the warp pitch is
+ * 2.4 mm. The antialiasing fade therefore holds the warp tier at 3 PER CENT of
+ * its amplitude at 2 m and at zero by 4 m; measured, the weave contributes an
+ * albedo standard deviation of 0.0074 at 2 m, which is flatter than the 0.024 of
+ * the baked map it was written to replace. Individual threads are simply not
+ * renderable at the distance the owner is complaining about, and no amount of
+ * amplitude fixes that — it is the sample rate.
+ *
+ * What IS visible on a real sail at arm's length is the cloth rather than the
+ * thread: handspun flax is thick and thin along its length, so duck woven from
+ * it has slubs and banding at one to four centimetres, and a sail under load
+ * puckers at the same scale. That is an order of magnitude coarser than the
+ * weave, it survives out to about twelve metres, and it is the thing that makes
+ * canvas read as canvas.
+ *
+ *   m  (along the span, across the chord) in metres
+ *   returns  roughly -1..1
+ *   g        out: d/dm, per metre
+ */
+float lwClothSlub(vec2 m, vec2 aa, out vec2 g) {
+  const float P = 0.024;
+  float k = 1.0 / P;
+  // Slubs run along the yarn, so a gentle 2.2:1 rather than the fibre tier's 22.
+  float ky = k * 0.45;
+  float aam = max(aa.x, aa.y);
+  float f1 = clamp(P / max(aam * 2.0, 1e-7) - 1.0, 0.0, 1.0);
+  float f2 = clamp(P * 0.35 / max(aam * 2.0, 1e-7) - 1.0, 0.0, 1.0);
+  vec2 p = vec2(m.x * k, m.y * ky);
+  vec3 a = noise2d_d(p + 5.13);
+  vec3 b = noise2d_d(p * 2.85 + 31.7);
+  g = vec2(a.y * k, a.z * ky) * f1
+    + vec2(b.y * k, b.z * ky) * (2.85 * 0.45 * f2);
+  return a.x * f1 + b.x * 0.45 * f2;
+}
+
+/**
  * Tension creases fanning out of a corner of the sail.
  *
  * A drawing sail is a membrane hauled at discrete points, so the cloth gathers
@@ -483,6 +523,7 @@ function makeSailMaterial(
         // the creases without evaluating the fan a second time.
         vec2 lwCreaseG = vec2(0.0);
         float lwCreaseH = 0.0;
+        float lwSlubR = 0.0;
         {
           float spanM = vSailUv.x;
           float chordM = vSailUv.y;
@@ -564,13 +605,22 @@ function makeSailMaterial(
           // The weave. Relief of 0.11 mm over a 2.4 mm pitch is a peak slope of
           // 0.29 — a 16-degree tilt, which is what makes a sunlit sail ripple
           // with light instead of reading as a bent sheet of paper.
+          vec2 aaW = vec2(fwidth(spanM), fwidth(chordM));
           vec2 weaveG;
-          float weave = lwWeave(vec2(spanM, chordM), vec2(fwidth(spanM), fwidth(chordM)), weaveG);
+          float weave = lwWeave(vec2(spanM, chordM), aaW, weaveG);
+          // The slub tier, an order of magnitude coarser, is what survives to
+          // the distance the sail is actually looked at. 1.8 mm of relief over a
+          // 24 mm slub is a peak slope near 0.11 - a six-degree ripple, which is
+          // how a hauled sail catches the light in bands rather than as a sheet.
+          vec2 slubG;
+          float slub = lwClothSlub(vec2(spanM, chordM), aaW, slubG);
+          lwSlubR = 0.075 * slub;
           // lwWeave works in (span, chord); lwCreaseG is in (chord, span).
-          lwCreaseG += vec2(weaveG.y, weaveG.x) * 0.00011;
+          lwCreaseG += vec2(weaveG.y, weaveG.x) * 0.00011
+                     + vec2(slubG.y, slubG.x) * 0.0018;
 
           diffuseColor.rgb *= 0.93 + 0.14 * panelTone;
-          diffuseColor.rgb *= 1.0 + 0.055 * weave;
+          diffuseColor.rgb *= 1.0 + 0.055 * weave + 0.085 * slub;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * grime,
                                  foot * 0.4 + smoothstep(0.5, 0.9, stain) * 0.35);
           diffuseColor.rgb *= 1.0 - seam * 0.28 - band * 0.2 - pts * 0.5
@@ -600,6 +650,11 @@ function makeSailMaterial(
             normal = normalize((viewMatrix * vec4(lwWn, 0.0)).xyz);
           }
         }`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        roughnessFactor = clamp(roughnessFactor + lwSlubR, 0.35, 1.0);`,
       )
       .replace(
         '#include <lights_fragment_end>',

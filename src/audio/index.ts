@@ -12,7 +12,7 @@
  *   Sim          flattens `World` into a `SimView` snapshot. The graph never
  *                sees `World`, which is what lets the probe rebuild it offline.
  *   Rig          assembles the whole graph against any `BaseAudioContext`.
- *   Buses        per-source -> family -> master, limiter + soft clip, and the
+ *   Buses        per-source -> family -> master, the output ceiling, and the
  *                three procedural reverb spaces.
  *   Voices       pooled one-shots. Nothing allocates a node after `Rig.build`.
  *   Sea Wind Rig(ging) ShipSounds Weather Wildlife Music Bell

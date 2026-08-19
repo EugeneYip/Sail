@@ -2,7 +2,7 @@ import { Bell } from './Bell';
 import { createBuffers } from './Buffers';
 import type { BusName } from './Buses';
 import { Mixer } from './Buses';
-import { Nodes, Ramp } from './Context';
+import { eventTime, Nodes, Ramp } from './Context';
 import { Music } from './Music';
 import { registerRigging } from './RiggingWorklet';
 import { Sea } from './Sea';
@@ -23,9 +23,9 @@ export interface RigOptions {
   voiceScale?: number;
   /**
    * Offline only: route `masterPre` straight to the destination, skipping the
-   * limiter and soft clip. The point is to measure the raw voice sum, because a
-   * limiter that never stops working is itself a distortion source — see
-   * `scripts/audio-test.mjs`.
+   * output soft clip. The point is to measure the raw voice sum: a ceiling that
+   * never stops working is itself a distortion source, so the test compares the
+   * two and fails if the difference is more than a fraction of a dB.
    */
   bypassLimiter?: boolean;
 }
@@ -156,7 +156,7 @@ export class Rig {
   }
 
   strikeBell(count: number, now: number): void {
-    let t = now + 0.2;
+    let t = eventTime(now, 0.2);
     for (let i = 0; i < Math.max(1, Math.min(8, count)); i++) {
       this.bell.strikeOne(t, 1);
       t += i % 2 === 0 ? 0.34 : 0.86;

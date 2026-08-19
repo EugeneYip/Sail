@@ -1,5 +1,11 @@
 import * as THREE from 'three';
-import { directionFrom, type CameraContext, type CameraMode, type CameraSolve } from '../CameraMode';
+import {
+  directionFrom,
+  MAX_AXIS_ELEVATION,
+  type CameraContext,
+  type CameraMode,
+  type CameraSolve,
+} from '../CameraMode';
 import { damp, wrapPi } from '../../util/math';
 
 /**
@@ -27,8 +33,10 @@ const FOV = 60;
 export class FreeMode implements CameraMode {
   readonly name = 'free';
   readonly lookYawLimit = 0; // unclamped; handled internally
-  readonly lookPitchMin = -1.48;
-  readonly lookPitchMax = 1.48;
+  /** The one shared physical bound: stop short of vertical, where a world-up
+   *  look-at basis degenerates. Same number as every other mode uses. */
+  readonly lookPitchMin = -MAX_AXIS_ELEVATION;
+  readonly lookPitchMax = MAX_AXIS_ELEVATION;
   readonly ownsLook = true;
 
   private pos = new THREE.Vector3();

@@ -1,0 +1,102 @@
+
+TOGGLE — assist is the default and is reachable from both ends
+  [PASS] assist is ON by default  — settings.assist = true
+  [PASS] world.ext.physics.assist mirrors world.settings.assist  — on {"ext":true,"setting":true}, off {"ext":false,"setting":false}
+         assist speed ceiling: 18.1 kn (hull speed is 12.8)
+
+THROTTLE — from a standstill to cruising speed, TWA 100, 10 m/s
+         pro   : 10.50 kn top, 1.76 kn at 10 s, 90% at 179 s
+         assist: 15.46 kn top, 13.32 kn at 10 s, 90% at 11.2 s
+  [PASS] reaches 90% of cruising speed inside 30 s  — 11.2 s (pro: 179 s)
+  [PASS] moving properly within 10 s of the order  — 13.32 kn at 10 s (pro: 1.76)
+  [PASS] she still winds up like 2200 tonnes, not a speedboat  — 90% at 11.2 s, 8.5 kn after 5 s
+  [PASS] assist cruising speed is well above hull speed  — 15.46 kn vs the 12.8 kn hull-speed wall
+
+HELM — hard over from a reach, and from nearly stopped
+         pro   : 0.40 deg/s steady, 90 deg in 73 s, speed fell to 0.2 kn
+         assist: 4.62 deg/s steady, 90 deg in 22.9 s, 180 in 42.1 s
+         assist turn radius: 92 m = 1.7 ship lengths over the first 90 deg at 12.3 kn, peak heel 16.5 deg
+         ...once she is just circling: 83 m = 1.6 lengths, but she is down to the beat by then
+  [PASS] steady turn rate is at least 4 deg/s  — 4.62 deg/s (pro: 0.40)
+  [PASS] 90 deg of heading inside 25 s  — 22.9 s (pro: 73)
+  [PASS] she starts turning within 6 s of the key going down  — 10 deg at 5.1 s
+  [PASS] she carries her speed round 90 deg of bearing away  — 15.5 -> 13.1 kn (85% kept)
+         luffing up 90 deg instead: 15.5 -> 7.7 kn, which is the polar, not the turn
+  [PASS] circling hard never brings her near a stop  — 7.0 kn at the slowest point of the circle (the beat)
+  [PASS] turning radius reads as a big ship carving, not a skid  — 1.7 ship lengths at 12.3 kn
+         bare poles, dead in the water: 0.03 kn entry, 90 deg in 29.4 s
+  [PASS] the crawl case really is stopped  — 0.03 kn
+  [PASS] the helm answers with no way on at all — the player is never immobilised  — 90 deg in 29.4 s from 0.03 kn
+         30 s with the helm hard over: 16.0 -> 16.0 sails, 15.7 -> 13.7 kn
+  [PASS] holding the helm over does not make the watch strike the rig  — 16.0 -> 16.0 sails still set
+
+NO-GO ZONE — steering straight at the wind must still make way
+  TWA   0   7.34 kn   VMG   7.33   heel  -5.3   leeway  -1.7   held    2   irons false
+  TWA  20   8.15 kn   VMG   7.62   heel   1.8   leeway  -0.1   held   21   irons false
+  TWA  45  10.71 kn   VMG   7.34   heel  -7.1   leeway  -1.3   held   45   irons false
+  TWA  70  13.65 kn   VMG   4.54   heel -11.8   leeway  -1.0   held   69   irons false
+  TWA  90  15.05 kn   VMG   0.05   heel -14.1   leeway  -0.9   held   89   irons false
+  TWA 120  15.72 kn   VMG  -7.71   heel  -8.4   leeway  -0.4   held  119   irons false
+  TWA 150  15.00 kn   VMG -12.99   heel  -1.0   leeway  -0.1   held  150   irons false
+  TWA 180  14.30 kn   VMG -14.30   heel   0.3   leeway   0.0   held -180   irons false
+  [PASS] dead into the wind she still sails  — 7.34 kn at TWA 0
+  [PASS] ...and actually gains ground to windward  — VMG 7.33 kn
+  [PASS] never flagged in irons on any heading  — all eight headings clear
+  [PASS] she HOLDS a dead-upwind heading instead of falling off  — held 2.0 deg off the wind
+  [PASS] a reach is still her best point of sail  — fastest at TWA 120, 15.72 kn
+  [PASS] point of sail still matters to the player  — 7.3 kn beating vs 15.7 kn on a broad reach
+
+BECALMED — zero wind must not be a dead end
+  [PASS] she still ghosts along in a flat calm  — 4.95 kn with no wind at all
+  [PASS] ...but slowly enough that you want the breeze back  — 4.95 kn
+
+DEAD STOP — five minutes beating into a gusty gale on the real sea
+         slowest moment after the first 30 s: 6.81 kn
+  [PASS] she never comes to a dead stop  — worst 6.81 kn over 300 s
+  [PASS] no non-finite values in 18 000 assisted gale frames  — 0 bad
+
+AUTO TRIM — arrow keys only: a 180 deg course change, hands off the yards
+         wearing ship: 44 s to come through 180 deg
+         yards: 1252 deg of total yard movement, unprompted
+  [PASS] the player touched nothing but the helm  — brace and sailTrim inputs both zero throughout
+  [PASS] the watch re-braced the whole rig on its own  — 1252 deg summed over 16 sails
+  [PASS] speed recovers on the new tack without any trimming  — 12.5 -> 15.7 kn
+
+THROTTLE KEYS — down takes canvas in, up sets it again
+         throttle after 12 s of the down arrow: 0% canvas
+  [PASS] 12 s on the down arrow strikes most of the canvas  — 0% left
+  [PASS] and she slows down for it  — 15.5 -> 7.4 kn
+  [PASS] the up arrow gets it all back  — 7.4 -> 15.5 kn
+
+MASS — heel, roll and pitch must survive the assist
+         assisted free-decay roll period: 9.31 s (Pro measures 9.31 s)
+         storm sea, assisted: peak pitch 4.4 deg, peak heel 30.8 deg, bow 2.2 m/s^2
+  [PASS] roll period is untouched by the assist  — 9.31 s
+  [PASS] she still lies down to a fresh breeze  — 26.0 deg on a beam reach in 16 m/s
+  [PASS] she still pitches to a storm sea  — peak 4.4 deg
+
+LIVE — assist switched on through world.settings, storm sea, real frames
+         live peaks: bowSlam 4.2 m/s^2, pitch 3.5 deg
+  [PASS] the solver picked the mode up from world.settings on its own  — assist = true
+  [PASS] bowSlam still drives spray and camera shake  — peak 4.2 m/s^2, VFX triggers at 5.4
+  [PASS] she keeps sailing through a live storm  — slowest 16.1 kn
+
+PRO MODE — the same solver, unchanged, with the layer off
+         pro TWA 70/90/175: 5.53 / 9.43 / 6.06 kn
+  [PASS] Pro beam reach is still ~9.4 kn  — 9.43 kn
+  [PASS] Pro still cannot point inside 65 deg  — 76.2 deg made good
+  [PASS] Pro close-hauled is still hard work  — 5.53 kn
+  [PASS] Pro still goes into irons at TWA 45  — inIrons = true
+
+DETERMINISM — the assist layer must be frame-rate independent
+   30 fps: 15.689 kn  heading -171.68
+  144 fps: 15.689 kn  heading -171.68
+  [PASS] assisted speed identical at 30 and 144 fps  — 0.0000 kn apart
+  [PASS] assisted heading identical at 30 and 144 fps  — 0.000 deg apart
+
+COST
+         assisted solver cost: 0.074 ms per 60 fps frame
+  [PASS] inside the 2.5 ms/frame budget  — 0.074 ms
+
+ALL ASSIST TESTS PASSED
+EXIT=0

@@ -35,9 +35,15 @@ import { damp, springDamp } from '../../util/math';
  * - The look target leads further ahead as speed rises, dropping the hull in
  *   frame and opening up the sea ahead.
  * - Royals and topgallants are deliberately cropped off the top. Fitting all
- *   67 m of rig at this distance forces a level axis, which puts the horizon
- *   dead centre and makes the ship look like a postcard. Cropping makes it look
- *   big. `orbit` is where the whole profile fits.
+ *   67 m of rig at this distance costs 5 deg of axis tilt and puts the horizon at
+ *   46% of frame height, which is the postcard; cropping makes the ship look big.
+ *   `orbit` is where the whole profile fits.
+ *
+ *   The crop has to be DECISIVE, though, and it was not: measured on the `noon`
+ *   capture the mainmast truck terminated eight pixels from the top of a 900-line
+ *   frame. Eight pixels is not a crop, it is a coincidence, and it fails
+ *   `RUBRIC.md`'s composition axis exactly as grazing the side edge did. See
+ *   `LOOK_HEIGHT_PER_M`.
  *
  * The camera pulls back at speed with FOV, not distance, because distance is
  * what every composition rule above is written in terms of — moving it slides
@@ -67,7 +73,34 @@ const FULL_HEEL = 0.22;
 
 const EYE_HEIGHT_PER_M = 0.26;
 const EYE_HEIGHT_BASE = 8;
-const LOOK_HEIGHT_PER_M = 0.115;
+/**
+ * Aim height, as a fraction of the follow distance plus a base. These two set the
+ * axis tilt, and through it BOTH the horizon's height in frame and how much of
+ * the rig is cropped off the top — which is why the pair is load-bearing and why
+ * it is stated here rather than derived.
+ *
+ * 0.115 put the axis 7.9 deg down at the default 76 m, and that landed the
+ * mainmast truck EIGHT PIXELS from the top of a 900-line frame: not a crop, a
+ * coincidence, and a `RUBRIC.md` composition failure of exactly the kind grazing
+ * the side edge was. 0.083 puts the axis 9.1 deg down, which carries the truck
+ * about 60 lines clear OUTSIDE the frame and lifts the horizon from 38% of frame
+ * height to 36% — further onto the upper-third line, not off it.
+ *
+ * Cropping rather than fitting is a choice, and this is the arithmetic behind it:
+ * clearing all 67 m of truck at 76 m needs the axis at 2.8 deg down, which puts
+ * the horizon at 46% of frame height. That is the postcard the mode's header
+ * warns about, and a cropped rig is standard tall-ship framing while a centred
+ * horizon is a textbook fault. The real fix is a longer default follow distance —
+ * at 95 m the whole rig clears the top by 60 lines with the horizon still at
+ * 38% — but the default lives in `world.cam.distance`, outside this directory.
+ *
+ * One consequence to know about: crop depth falls as the camera pulls back, so
+ * somewhere it must pass through zero, and with these constants that crossover is
+ * near 88 m. A player parked there will see the truck touch the edge. It cannot
+ * be designed away — any aim that always cropped would be aiming at the water by
+ * 200 m — so it is placed where nobody sits rather than at the default.
+ */
+const LOOK_HEIGHT_PER_M = 0.083;
 const LOOK_HEIGHT_BASE = 4.5;
 /** Fraction of the eye's lateral offset the look target inherits. Below 1 the
  *  axis converges very slightly on the ship, which keeps it from drifting out
@@ -259,6 +292,7 @@ export class ChaseMode implements CameraMode {
 function clampDistance(d: number): number {
   return THREE.MathUtils.clamp(d, CHASE_MIN_DISTANCE, CHASE_MAX_DISTANCE);
 }
+
 
 /**
  * Where to put the hull in frame, as NDC x, split into a SIDE and a MAGNITUDE.

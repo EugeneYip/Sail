@@ -49,15 +49,30 @@ const MODE_TRIM: Record<CameraModeName, Partial<Record<BusName, number>>> = {
 };
 
 /**
- * tanh soft clip. The ceiling is 0.92 rather than 1.0 because 2x oversampling
- * in the shaper can overshoot the curve by ~1% on the way back down, and the
- * whole point of this node is that the output can never reach full scale.
+ * Ceiling for the output soft clip. 0.92 rather than 1.0 because 2x oversampling
+ * in the shaper can overshoot the curve by ~1% on the way back down.
+ */
+const CEILING = 0.92;
+
+/**
+ * tanh soft clip with UNITY small-signal gain.
+ *
+ * A `WaveShaperNode` maps input -1..+1 linearly onto the whole curve array, so
+ * the curve index is the input. The previous version built the curve over
+ * x = -2..+2 and applied `tanh(x * 1.35) * 0.92`, which means an input of u was
+ * shaped as `tanh(2.7u) * 0.92` — a slope of 2.48 at the origin, i.e. the "soft
+ * clip" was a +7.9 dB amplifier that then saturated. Measured: a -22 dBFS
+ * programme came out at -13 dBFS with the shaper permanently in compression.
+ * That is the reported distortion.
+ *
+ * `C * tanh(u / C)` has slope exactly 1 at the origin and asymptote C, so it is
+ * inaudible until the programme approaches the ceiling and hard-bounded after.
  */
 function softClipCurve(n = 4096): Float32Array<ArrayBuffer> {
   const c = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * 4 - 2;
-    c[i] = Math.tanh(x * 1.35) * 0.92;
+    const u = (i / (n - 1)) * 2 - 1;
+    c[i] = CEILING * Math.tanh(u / CEILING);
   }
   return c;
 }
@@ -93,22 +108,28 @@ export class Mixer {
     this.master = n.gain(0.0001);
     this.masterLevel = new Ramp(this.master.gain, 0.25, 2e-4);
 
-    // Infrasonic guard. The brown-noise swell bed carries real energy below
-    // 20 Hz, which nobody hears but which showed up as a 1.1e-3 DC offset and ate
-    // headroom the audible band could have used.
-    const dcBlock = n.biquad('highpass', 26, 0.7);
+    // Infrasonic guard, two poles of it. The brown-noise swell bed carries real
+    // energy below 20 Hz, which nobody hears but which ate headroom the audible
+    // band could have used and left a measurable DC offset. One 2nd-order stage
+    // is only -24 dB at a quarter of the corner; two are -48 dB.
+    const dcBlock = n.biquad('highpass', 30, 0.7);
+    const dcBlock2 = n.biquad('highpass', 30, 0.7);
     this.masterPre.connect(dcBlock);
+    dcBlock.connect(dcBlock2);
 
     if (bypassLimiter) {
-      dcBlock.connect(this.master);
+      dcBlock2.connect(this.master);
     } else {
-      // A seat belt, not a mix engineer: with BASE_TRIM applied the programme
-      // sits ~14 dB under this threshold, so it only ever catches a slam that
-      // lands on top of a gale.
-      const limiter = n.compressor(-6, 8, 6, 0.008, 0.25);
+      // A seat belt, and nothing else. There USED to be a DynamicsCompressorNode
+      // in front of the shaper. Blink's implementation applies an unconditional
+      // "makeup gain" derived from the threshold and ratio — about +3 dB here —
+      // so the seat belt was quietly turning the whole mix up whether or not
+      // anything needed catching, and (with the shaper bug above) the programme
+      // ran permanently in saturation. A limiter whose gain is a browser's
+      // private empirical formula cannot be made honest, so it is gone: the
+      // soft clip alone is transparent below the ceiling and bounded above it.
       const clip = n.shaper(softClipCurve(), '2x');
-      dcBlock.connect(limiter);
-      limiter.connect(clip);
+      dcBlock2.connect(clip);
       clip.connect(this.master);
     }
     this.master.connect(destination);

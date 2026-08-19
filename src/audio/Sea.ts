@@ -2,7 +2,7 @@ import { makeRng, smoothstep } from '../util/math';
 import { ANCHOR, anchorWorld, toWorld } from './Anchors';
 import type { AudioBuffers } from './Buffers';
 import type { Bus } from './Buses';
-import { dB, freqRamp, Nodes, PanRamp, Ramp } from './Context';
+import { dB, eventTime, freqRamp, Nodes, PanRamp, Ramp } from './Context';
 import type { SimView } from './Sim';
 import type { NoisePool } from './Voices';
 
@@ -273,7 +273,7 @@ export class Sea {
     const r = this.rng;
     const side = r() < 0.5 ? -1 : 1;
     const p = toWorld(sim, side * 4.5, 1.2, -22 - r() * 8);
-    const req = this.impacts.begin(now + 0.005 + r() * 0.02);
+    const req = this.impacts.begin(eventTime(now, 0.005 + r() * 0.02));
     req.gain = dB(-26) * Math.min(1.35, mag);
     req.low = 0.95;
     req.high = 0.45 + 0.3 * mag;
@@ -297,7 +297,7 @@ export class Sea {
 
     // Spray sheet thrown up and blown aft — a swelling hiss, not a transient.
     const sp = toWorld(sim, side * 3, 5 + 4 * mag, -18);
-    const s = this.impacts.begin(now + 0.05 + 0.06 * r());
+    const s = this.impacts.begin(eventTime(now, 0.05 + 0.06 * r()));
     s.gain = dB(-31) * mag;
     s.low = 0;
     s.high = 1;
@@ -324,7 +324,7 @@ export class Sea {
     const side = r() < 0.5 ? -1 : 1;
     const p = toWorld(sim, side * 6.6, 0.6, -20 + r() * 42);
     const size = 0.3 + 0.7 * r() * smoothstep(0.3, 5, hs);
-    const req = this.impacts.begin(now + r() * 0.06);
+    const req = this.impacts.begin(eventTime(now, r() * 0.06));
     req.gain = dB(-36) * size;
     req.low = 0.55;
     req.high = 0.8;

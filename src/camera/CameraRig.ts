@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { CameraModeName, Module, World } from '../types';
+import type { CameraModeName, InputState, Module, World } from '../types';
 import { clamp01, damp, smoothstep, springDamp, wrapPi } from '../util/math';
 import { defaultAnatomy, readAnatomy, type ShipAnatomy } from './Anatomy';
 import { Autofocus, focalLengthMm, horizonDistance } from './Autofocus';
@@ -76,15 +76,48 @@ const RIG_RADIUS_PAD_M = 1.5;
 
 /** Free-look: mouse deltas are a step function, this is the anti-alias on it. */
 const LOOK_SMOOTH_TIME = 0.1;
-/** Seconds of no input before a framed mode drifts back to its composed axis. */
+/**
+ * Seconds the player must have LET GO before a framed mode drifts back to its
+ * composed axis. Counted in simulated seconds (the clamped `dt`), deliberately:
+ * see `STALL_RAW_DT`.
+ */
 const LOOK_IDLE_SECONDS = 4;
 /**
- * Yaw deviation, radians, over which the drift back to the composed axis fades
- * out completely. Below `LOOK_HOLD_FROM` an accidental nudge tidies itself up;
+ * Seconds the recentre takes to fade from nothing up to the mode's full rate
+ * once that threshold is passed.
+ *
+ * The threshold used to be a switch, and a switch makes every misjudgement about
+ * whether the player has let go instantly expensive: one wrong frame and a step
+ * of their angle is gone. Faded in over a second it is cheap to be wrong for a
+ * frame and it still reads identically to a player who really did let go — the
+ * drift starts imperceptibly either way.
+ */
+const LOOK_RECENTRE_RAMP = 1.2;
+/**
+ * Wall-clock frame period, seconds, above which the frame was a MACHINE STALL
+ * and not a frame: a shader compile, an asset decode, a GC pause, or six agents
+ * sharing one laptop.
+ *
+ * Such a frame teaches us nothing about what the player was doing, so the idle
+ * timer neither advances nor resets across it. `dt` is clamped to 0.1 s upstream
+ * (`core/Engine`), so a stall could never race the timer FORWARD — but it can
+ * bracket a real gap in pointer motion, and a hitch must never be read as "they
+ * let go". Freezing is the only answer that cannot be wrong in either direction.
+ */
+const STALL_RAW_DT = 0.25;
+/**
+ * Deviation, radians, over which the drift back to the composed axis fades out
+ * completely. Below `LOOK_HOLD_FROM` an accidental nudge tidies itself up;
  * beyond `LOOK_HOLD_FULL` the player has clearly chosen an angle — parked on the
- * beam, or looking forward over the bow — and the camera must not creep out of
- * it while they watch. Taking a deliberate camera placement away from the player
- * is worse than leaving them slightly off-axis.
+ * beam, looking forward over the bow, or craned up at the rig — and the camera
+ * must not creep out of it while they watch. Taking a deliberate camera
+ * placement away from the player is worse than leaving them slightly off-axis.
+ *
+ * Applied to BOTH axes against their own deviation. Pitch used to settle
+ * unconditionally on the argument that a lifted eye is a transient, which is
+ * true of a nudge and false of a player holding the lens at the masthead to
+ * watch the topmen; the two are told apart by how far the axis is from home, not
+ * by which axis it is.
  */
 const LOOK_HOLD_FROM = 0.55;
 const LOOK_HOLD_FULL = 1.1;
@@ -161,7 +194,27 @@ export class CameraRig implements Module {
   private lookPitch = 0;
   private vYaw = { v: 0 };
   private vPitch = { v: 0 };
+  /** Simulated seconds since the player last had a hand on the look control. */
   private lookIdle = 0;
+  /**
+   * True while a pointer is down on the canvas — the player's hand is on the
+   * look control RIGHT NOW, whether or not it is moving this frame.
+   *
+   * THIS BELONGS IN `input/Input.ts`. That module already tracks it privately as
+   * `this.dragging`; the fix there is one line in `update` (`s.looking =
+   * this.dragging;`) plus the field on `InputState`. It is another agent's file,
+   * so the rig watches the same two events itself for now, and `playerLooking`
+   * prefers the published flag the moment it exists — no edit here on handover.
+   *
+   * Why it is load-bearing: `lookRecentreRate` armed off "no look DELTA for four
+   * seconds", and a held, motionless pointer produces no delta. A player who
+   * drags round to the bow and then holds still to watch it — or whose machine
+   * hitches mid-drag — was indistinguishable from a player who had let go, so
+   * the camera crept out from under their finger. Traced in `.tmp/camtrace.mjs`:
+   * 0.741 rad of deliberate look decayed to 0.005 rad, 99.3% of it gone, with
+   * the button still down. That is the whole of "dragging feels wrong".
+   */
+  private pointerLooking = false;
 
   private captureArmed = false;
   private captureTime = 0;
@@ -225,8 +278,42 @@ export class CameraRig implements Module {
     this.detach.push(world.bus.on('origin:shift', (p) => this.onOriginShift(p)));
     this.detach.push(world.bus.on('capture:scene', () => this.onCaptureScene()));
     this.detach.push(world.bus.on('capture:focusIsland', () => this.onCaptureScene()));
+    this.watchLookGrip(world);
 
     this.setMode(world.cam.mode, true);
+  }
+
+  /**
+   * Track whether the player is gripping the look control. See `pointerLooking`
+   * for why this is here and not in `input/Input.ts`, where it belongs. Mirrors
+   * that module exactly: primary button only, on the canvas only, and released
+   * on `pointercancel` and on window blur so a drag cannot be left latched on.
+   */
+  private watchLookGrip(world: World): void {
+    const dom = world.renderer.domElement;
+    const grip = (e: PointerEvent) => {
+      if (e.button === 0) this.pointerLooking = true;
+    };
+    const release = () => {
+      this.pointerLooking = false;
+    };
+    dom.addEventListener('pointerdown', grip);
+    dom.addEventListener('pointerup', release);
+    dom.addEventListener('pointercancel', release);
+    addEventListener('blur', release);
+    this.detach.push(() => {
+      dom.removeEventListener('pointerdown', grip);
+      dom.removeEventListener('pointerup', release);
+      dom.removeEventListener('pointercancel', release);
+      removeEventListener('blur', release);
+      this.pointerLooking = false;
+    });
+  }
+
+  /** Prefer the input module's own flag once it publishes one. */
+  private playerLooking(input: InputState): boolean {
+    const published = (input as { looking?: unknown }).looking;
+    return typeof published === 'boolean' ? published : this.pointerLooking;
   }
 
   update(world: World): void {
@@ -452,8 +539,21 @@ export class CameraRig implements Module {
     }
 
     if (!locked && !mode.ownsLook) {
-      if (activity > 1e-6) this.lookIdle = 0;
-      else this.lookIdle += dt;
+      // "Has the player let go?" — and NOT "did they move this frame". Those two
+      // came apart in two ways, and each one felt like a broken drag: a hand
+      // resting on a held button between movements, and a machine stall
+      // bracketing an ordinary gap in pointer motion. Nothing may take the
+      // player's angle back until both say they are done.
+      //
+      // No lower bound on the spring is needed here: `LOOK_IDLE_SECONDS` is 4 s
+      // and the look spring settles a full-scale drag in under 0.5 s, so the
+      // drag has always landed by the time the recentre can arm. Testing the
+      // spring as well would be worse than redundant — the recentre itself puts
+      // the raw axis ahead of the spring, so it would read as fresh input and
+      // the drift would stutter against its own output.
+      const engaged = activity > 1e-6 || this.playerLooking(input);
+      if (engaged) this.lookIdle = 0;
+      else if (world.time.rawDt <= STALL_RAW_DT) this.lookIdle += dt;
 
       if (mode.lookYawLimit > 0) {
         this.yawRaw += yawIn;
@@ -474,13 +574,19 @@ export class CameraRig implements Module {
         );
       }
 
+      // The drift home. Three gates, in order of how badly getting each one
+      // wrong feels: not while the player is engaged, not until they have been
+      // gone a while, and never all the way from an angle they clearly chose.
       const recentre = mode.lookRecentreRate ?? 0;
-      if (recentre > 0 && this.lookIdle > LOOK_IDLE_SECONDS) {
-        // Pitch always settles — a lifted or dropped eye is a transient. Yaw
-        // only settles while the deviation still reads as a nudge.
-        const hold = smoothstep(LOOK_HOLD_FROM, LOOK_HOLD_FULL, Math.abs(this.yawRaw));
-        if (hold < 1) this.yawRaw = damp(this.yawRaw, 0, recentre * (1 - hold), dt);
-        this.pitchRaw = damp(this.pitchRaw, 0, recentre, dt);
+      const arm = engaged
+        ? 0
+        : smoothstep(LOOK_IDLE_SECONDS, LOOK_IDLE_SECONDS + LOOK_RECENTRE_RAMP, this.lookIdle);
+      if (recentre > 0 && arm > 0) {
+        const yawHold = smoothstep(LOOK_HOLD_FROM, LOOK_HOLD_FULL, Math.abs(this.yawRaw));
+        const pitchHold = smoothstep(LOOK_HOLD_FROM, LOOK_HOLD_FULL, Math.abs(this.pitchRaw));
+        const rate = recentre * arm;
+        if (yawHold < 1) this.yawRaw = damp(this.yawRaw, 0, rate * (1 - yawHold), dt);
+        if (pitchHold < 1) this.pitchRaw = damp(this.pitchRaw, 0, rate * (1 - pitchHold), dt);
       }
 
       if (input.zoom !== 0 && mode.distanceRange) {

@@ -1,6 +1,6 @@
 import { makeRng, smoothstep } from '../util/math';
 import type { Bus, Mixer } from './Buses';
-import { dB, envDuration, freqRamp, LEAD_S, Nodes, Ramp, strike, swell } from './Context';
+import { dB, envDuration, eventTime, freqRamp, Nodes, Ramp, strike, swell } from './Context';
 import type { SimView } from './Sim';
 
 /**
@@ -127,8 +127,8 @@ export class Music {
       const root = BASE_ROOT_HZ * Math.pow(2, ROOT_STEPS[this.rootIndex] / 12);
       for (const d of this.drones) {
         // Long glissando between roots — you should never hear a note change.
-        d.oscs[0].frequency.setTargetAtTime(root * d.ratio, now + LEAD_S, 6);
-        d.oscs[1].frequency.setTargetAtTime(root * d.ratio * 1.0013, now + LEAD_S, 6);
+        d.oscs[0].frequency.setTargetAtTime(root * d.ratio, eventTime(now), 6);
+        d.oscs[1].frequency.setTargetAtTime(root * d.ratio * 1.0013, eventTime(now), 6);
       }
     }
 
@@ -163,7 +163,7 @@ export class Music {
     const octave = 2 + Math.floor(this.rng() * 2.4);
     const f = root * Math.pow(2, degree / 12 + octave);
     const bowed = this.rng() < 0.3;
-    const t = now + LEAD_S;
+    const t = eventTime(now);
 
     p.a.frequency.setValueAtTime(f, t);
     p.b.frequency.setValueAtTime(f * 1.0013, t);

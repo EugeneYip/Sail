@@ -1,4 +1,12 @@
 import type { BusName } from './Buses';
+import {
+  CLICK_FLOOR_DB,
+  CLICK_GROUP_S,
+  CLICK_GUARD_S,
+  CLICK_RATIO,
+  CLICK_WINDOW_S,
+} from './ClickProbe';
+import { LEAD_S, schedule } from './Context';
 import { Rig } from './Rig';
 import { createSimView, type SimSail, type SimView } from './Sim';
 
@@ -50,7 +58,7 @@ export interface ProbeOptions {
    * exact condition under which bunched-up ramps execute as steps.
    */
   stall?: { ms: number; everyMs: number };
-  /** Render `masterPre` directly, so the raw voice sum can be measured. */
+  /** Skip the output soft clip, so the raw voice sum can be measured. */
   bypassLimiter?: boolean;
 }
 
@@ -65,8 +73,14 @@ export interface ProbeResult {
   peakDb: number;
   /** Spectral centroid over the measured window, Hz. */
   centroid: number;
-  /** Fraction of spectral energy above 2 kHz. */
+  /** Fraction of POWER above 2 kHz. A flat spectrum gives 0.83 at 24 kHz. */
   highRatio: number;
+  /**
+   * Fraction of total power in each of `BAND_EDGES_HZ`: sub, swell, body, voice,
+   * hiss, air. Bin-count-free, unlike `highRatio`, so it is the honest answer to
+   * "is this a sea or a hiss" — see `BAND_NAMES`.
+   */
+  bands: number[];
   /** Mean sample value. Anything but ~0 means a DC offset is eating headroom. */
   dc: number;
   /** Count of NaN / Inf / denormal-flushed samples. Must be 0. */
@@ -102,6 +116,13 @@ export interface ProbeResult {
   minLeadS: number;
   /** Number of automation calls seen. 0 means the instrumentation did not run. */
   paramWrites: number;
+  /**
+   * Events the pools' backstop had to push forward — see `Context.schedule`.
+   * Non-zero means some call site bypassed `eventTime()`. Must be 0.
+   */
+  late: number;
+  /** The lead LEAD_S is measured against, so a caller need not import Context. */
+  requiredLeadS: number;
 }
 
 const DEFAULTS = {
@@ -110,19 +131,6 @@ const DEFAULTS = {
   fps: 60,
   warmup: 2,
 };
-
-/**
- * A jump this many times the local jump RMS counts as a click.
- *
- * For band-limited noise the first difference is Gaussian, so the largest value
- * in a five-second window at 48 kHz sits near 5 sigma. 12 leaves a wide margin
- * against false positives while still catching an envelope that steps by a few
- * percent of a narrow-band signal — which is exactly what a stolen voice or a
- * resonator whose centre frequency snapped sounds like.
- */
-const CLICK_RATIO = 12;
-/** Jumps quieter than this are inaudible under a sea bed. */
-const CLICK_FLOOR_DB = -66;
 
 /**
  * `OfflineAudioContext` renders synchronously once started, so the whole
@@ -148,6 +156,7 @@ export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult>
   });
 
   const spy = new LeadSpy();
+  const late0 = schedule.late;
   let drive = 0;
   try {
     spy.install();
@@ -169,6 +178,8 @@ export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult>
     driveMsPerFrame: drive,
     minLeadS: spy.minLead,
     paramWrites: spy.writes,
+    late: schedule.late - late0,
+    requiredLeadS: LEAD_S,
   };
 }
 
@@ -404,6 +415,18 @@ function now(): number {
 
 const FFT_SIZE = 4096;
 
+/**
+ * Band edges for `ProbeResult.bands`, Hz.
+ *
+ * Chosen against what a sea actually does, not by octaves: the swell and surge
+ * live under 150 Hz, the body of moving water sits between 150 Hz and 800 Hz,
+ * breaking water peaks around 1-3 kHz, and everything above 5 kHz is spray —
+ * pleasant in a teaspoon and fatiguing by the bucket. `sub` should be nearly
+ * empty: nobody hears it and it eats headroom.
+ */
+export const BAND_EDGES_HZ = [0, 35, 150, 800, 3000, 7000, Infinity];
+export const BAND_NAMES = ['sub', 'swell', 'body', 'break', 'hiss', 'air'];
+
 function analyse(
   buf: AudioBuffer,
   warmup: number,
@@ -411,7 +434,16 @@ function analyse(
   ProbeResult,
   // Supplied by the caller: the first five describe the run, and minLeadS/paramWrites
   // come from the AudioParam spy — a rendered buffer cannot reveal them.
-  'seconds' | 'sampleRate' | 'liveNodes' | 'createdNodes' | 'usesWorklet' | 'driveMsPerFrame' | 'minLeadS' | 'paramWrites'
+  | 'seconds'
+  | 'sampleRate'
+  | 'liveNodes'
+  | 'createdNodes'
+  | 'usesWorklet'
+  | 'driveMsPerFrame'
+  | 'minLeadS'
+  | 'paramWrites'
+  | 'late'
+  | 'requiredLeadS'
 > {
   const start = Math.min(buf.length - 1, Math.floor(warmup * buf.sampleRate));
   const chans: Float32Array[] = [];
@@ -442,7 +474,7 @@ function analyse(
   // channels. Enough resolution to see the sea move under the hull rush.
   const re = new Float32Array(FFT_SIZE);
   const im = new Float32Array(FFT_SIZE);
-  const mag = new Float64Array(FFT_SIZE / 2);
+  const pow = new Float64Array(FFT_SIZE / 2);
   const win = new Float32Array(FFT_SIZE);
   for (let i = 0; i < FFT_SIZE; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / FFT_SIZE);
 
@@ -456,22 +488,35 @@ function analyse(
         im[i] = 0;
       }
       fft(re, im);
-      for (let k = 1; k < FFT_SIZE / 2; k++) mag[k] += Math.hypot(re[k], im[k]);
+      for (let k = 1; k < FFT_SIZE / 2; k++) pow[k] += re[k] * re[k] + im[k] * im[k];
       frames++;
     }
   }
 
+  // Centroid is weighted by magnitude (closer to what the ear does with a
+  // tilted spectrum); the band split is by power, because power adds.
   let num = 0;
   let den = 0;
   let high = 0;
+  let total = 0;
+  const bandPow = new Float64Array(BAND_NAMES.length);
   const binHz = buf.sampleRate / FFT_SIZE;
   for (let k = 1; k < FFT_SIZE / 2; k++) {
-    const m = frames > 0 ? mag[k] / frames : 0;
+    const e = frames > 0 ? pow[k] / frames : 0;
+    const m = Math.sqrt(e);
     const f = k * binHz;
     num += m * f;
     den += m;
-    if (f >= 2000) high += m;
+    total += e;
+    if (f >= 2000) high += e;
+    for (let b = 0; b < BAND_NAMES.length; b++) {
+      if (f >= BAND_EDGES_HZ[b] && f < BAND_EDGES_HZ[b + 1]) {
+        bandPow[b] += e;
+        break;
+      }
+    }
   }
+  const bands = Array.from(bandPow, (e) => (total > 1e-30 ? e / total : 0));
 
   let clicks = 0;
   let worstJump = 0;
@@ -490,7 +535,8 @@ function analyse(
     peak,
     peakDb: db(peak),
     centroid: den > 1e-12 ? num / den : 0,
-    highRatio: den > 1e-12 ? high / den : 0,
+    highRatio: total > 1e-30 ? high / total : 0,
+    bands,
     dc: n > 0 ? dc / n : 0,
     nonFinite,
     clicks,
@@ -501,7 +547,8 @@ function analyse(
 }
 
 /**
- * Count audible discontinuities.
+ * Count audible discontinuities. The streaming twin of this runs on the audio
+ * thread in `ClickProbe.ts`; both share the constants so the numbers compare.
  *
  * A click is not "a big sample-to-sample difference" — white noise is nothing
  * but big differences. A click is a difference the RECENT PAST did not predict,
@@ -519,9 +566,9 @@ function countClicks(
   start: number,
   sampleRate: number,
 ): { clicks: number; worstJump: number; worstRatio: number } {
-  const win = Math.max(16, Math.round(0.02 * sampleRate));
-  const guard = Math.max(2, Math.round(0.001 * sampleRate));
-  const group = Math.max(4, Math.round(0.003 * sampleRate));
+  const win = Math.max(16, Math.round(CLICK_WINDOW_S * sampleRate));
+  const guard = Math.max(2, Math.round(CLICK_GUARD_S * sampleRate));
+  const group = Math.max(4, Math.round(CLICK_GROUP_S * sampleRate));
   const floor = Math.pow(10, CLICK_FLOOR_DB / 20);
   const from = Math.max(start, 1);
   if (d.length - from < win + guard + 4) {

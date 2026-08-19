@@ -2,7 +2,7 @@ import { makeRng } from '../util/math';
 import { ANCHOR, anchorWorld } from './Anchors';
 import type { AudioBuffers } from './Buffers';
 import type { Bus } from './Buses';
-import { dB, LEAD_S, Nodes, PanRamp, strike } from './Context';
+import { dB, eventTime, notBefore, Nodes, PanRamp, strike } from './Context';
 import type { SimView } from './Sim';
 
 /**
@@ -108,7 +108,7 @@ export class Bell {
 
   /** One bell per half hour of the watch, struck in pairs. */
   private strikeWatch(now: number, count: number): void {
-    let t = now + 0.2;
+    let t = eventTime(now, 0.2);
     for (let i = 0; i < count; i++) {
       this.strikeOne(t, 0.85 + 0.3 * this.rng());
       t += i % 2 === 0 ? 0.34 : 0.86;
@@ -116,7 +116,7 @@ export class Bell {
   }
 
   strikeOne(t0: number, gain: number): void {
-    const t = Math.max(t0, this.lastNow + LEAD_S);
+    const t = notBefore(t0, this.lastNow);
     let best = -1;
     for (let i = 0; i < this.voices.length; i++) {
       const idx = (this.cursor + i) % this.voices.length;

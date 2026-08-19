@@ -2,7 +2,7 @@ import { makeRng, smoothstep } from '../util/math';
 import { ANCHOR, anchorWorld, toWorld } from './Anchors';
 import type { AudioBuffers } from './Buffers';
 import type { Bus, Mixer } from './Buses';
-import { dB, freqRamp, Nodes, PanRamp, Ramp } from './Context';
+import { dB, eventTime, freqRamp, Nodes, PanRamp, Ramp } from './Context';
 import type { SimView } from './Sim';
 import type { NoisePool } from './Voices';
 
@@ -110,7 +110,7 @@ export class Weather {
   private drip(sim: SimView, now: number): void {
     const r = this.rng();
     const p = toWorld(sim, (r - 0.5) * 12, 4.5 + this.rng() * 3, (this.rng() - 0.5) * 40);
-    const req = this.wood.begin(now + this.rng() * 0.08);
+    const req = this.wood.begin(eventTime(now, this.rng() * 0.08));
     req.gain = dB(-44) * (0.4 + 0.7 * this.rng());
     req.low = 0.15;
     req.high = 0.85;
@@ -147,7 +147,7 @@ export class Weather {
     const pz = -Math.cos(bearing) * 90;
 
     if (near > 0.02) {
-      const c = this.impacts.begin(now + delay);
+      const c = this.impacts.begin(eventTime(now, delay));
       c.gain = level * near * 0.8;
       c.low = 0.5;
       c.high = 1;
@@ -172,7 +172,7 @@ export class Weather {
     for (let i = 0; i < rolls; i++) {
       const off = i === 0 ? 0.06 : 0.4 + i * (0.7 + this.rng() * 0.9);
       const w = i === 0 ? 1 : 0.72 - 0.18 * i;
-      const r = this.impacts.begin(now + delay + off);
+      const r = this.impacts.begin(eventTime(now, delay + off));
       r.gain = level * w;
       r.low = 1;
       r.high = 0.22 * near;
@@ -194,6 +194,6 @@ export class Weather {
       this.impacts.fire(now);
     }
 
-    this.mixer.duck(now + delay, 5 + 4 * near);
+    this.mixer.duck(eventTime(now, delay), 5 + 4 * near);
   }
 }

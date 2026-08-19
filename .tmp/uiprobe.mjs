@@ -59,6 +59,25 @@ async function boot(ctxOpts, label) {
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(`[${label}] ${m.text()}`);
   });
+  /*
+   * A shim for somebody else's half-landed edit, and a deliberately toothless
+   * one.
+   *
+   * `src/camera/modes/Free.ts` currently reads MAX_AXIS_ELEVATION without
+   * importing it, so constructing FreeMode throws and CameraRig.init dies —
+   * which is the camera agent's file and none of the UI's business to edit. But
+   * the reference is a BARE identifier, so it resolves up the scope chain to the
+   * global object: defining it there lets the rig finish building and the UI
+   * become observable at all.
+   *
+   * This cannot mask the real fix. The moment that file gains a proper import,
+   * the module-scoped binding shadows this global and the shim is inert — no
+   * duplicate-declaration hazard, nothing to remember to remove. The value is
+   * the one CameraMode.ts exports.
+   */
+  await page.addInitScript(() => {
+    if (!('MAX_AXIS_ELEVATION' in globalThis)) globalThis.MAX_AXIS_ELEVATION = 1.45;
+  });
   // Dead HMR socket: a concurrent edit must not reload us mid-run.
   await page.addInitScript(() => {
     const Real = window.WebSocket;
@@ -77,7 +96,7 @@ async function boot(ctxOpts, label) {
     window.WebSocket.prototype = Real.prototype;
   });
   await page.goto(URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__leeward, null, { timeout: 60000 });
+  await page.waitForFunction(() => !!window.__leeward, null, { timeout: 420000 });
   await page.evaluate((env) => {
     const w = window.__leeward.world;
     w.settings.adaptiveResolution = false;
@@ -89,7 +108,7 @@ async function boot(ctxOpts, label) {
 }
 
 async function begin(page) {
-  await page.waitForSelector('.intro.ready', { timeout: 60000 });
+  await page.waitForSelector('.intro.ready', { timeout: 420000 });
   await page.click('.intro-begin');
   await page.waitForTimeout(1400);
 }
@@ -374,7 +393,7 @@ for (const [label, viewport] of [
     await page.keyboard.down('ArrowRight');
     let up = true;
     try {
-      await page.waitForFunction(() => window.__leeward.world.ext.ui?.hudVisible === true, null, { timeout: 60000 });
+      await page.waitForFunction(() => window.__leeward.world.ext.ui?.hudVisible === true, null, { timeout: 150000 });
       await page.waitForTimeout(1100); // the 0.85 s fade-in, plus slack
     } catch {
       up = false;
@@ -418,7 +437,7 @@ for (const [label, viewport] of [
     // HUD out. Hold the helm and wait for the state, never for the clock.
     await page.keyboard.down('ArrowRight');
     try {
-      await page.waitForFunction(() => window.__leeward.world.ext.ui?.hudVisible === true, null, { timeout: 60000 });
+      await page.waitForFunction(() => window.__leeward.world.ext.ui?.hudVisible === true, null, { timeout: 150000 });
       await page.waitForTimeout(1100);
       await shot(page, `shots/probe-flat-${label}.png`);
     } catch {

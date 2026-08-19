@@ -1,0 +1,10 @@
+[capture] orbit      p25    40ms  p50  55.7ms  p95   84.8ms   64dc  0.56Mtri  -> shots/ship-orbit.png
+[capture] helm       p25  57.2ms  p50  65.9ms  p95   93.7ms   69dc  0.60Mtri  -> shots/ship-helm.png
+[capture] masthead   p25    77ms  p50  94.2ms  p95  140.1ms   72dc  0.63Mtri  -> shots/ship-masthead.png
+[capture] golden     p25  59.2ms  p50    67ms  p95   85.1ms   87dc  0.63Mtri  -> shots/ship-golden.png
+
+GPU: ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version) [float-rt ok]
+* p25 at the 16.6 ms rAF cap — the harness cannot observe faster than 60 Hz.
+Trust p25/p50 (engine cost). p95 and any mean are dominated by machine load.
+
+OK — 4 shot(s)
