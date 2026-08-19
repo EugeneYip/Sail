@@ -14,6 +14,12 @@ import * as THREE from 'three';
  * grid vertices slide onto their even neighbour, so by the shared boundary the
  * fine level's polyline is exactly the coarse level's. See `surface.ts`.
  *
+ * A ring's hole is therefore not a property of the ring: it has to be cut around
+ * whatever square the finer level is currently occupying, which is up to one of
+ * this ring's cells off this ring's own centre (see `Ocean.updateClipmap`). Each
+ * ring size is built once per hole displacement, all nine sharing one set of
+ * vertices, and the frame picks the one that frames the level below it.
+ *
  * The last ring is a flat skirt that rises to eye height at 55 km. An infinite
  * flat ocean's horizon sits exactly at eye level; a finite one leaves a
  * sub-pixel sliver of sky underneath it. Lifting the outermost edge to eye
@@ -41,7 +47,17 @@ export interface ClipmapLevel {
   level: number;
 }
 
-function gridGeometry(m: number, hollow: boolean, isSkirt = false): THREE.BufferGeometry {
+interface GridAttributes {
+  position: THREE.BufferAttribute;
+  aMeta: THREE.BufferAttribute;
+}
+
+/**
+ * Vertex data for an `m` x `m` grid of unit cells centred on the origin, shared
+ * by every tile of that size: the hole variants differ only in which quads they
+ * index, so there is no reason to hold nine copies of the vertices.
+ */
+function gridAttributes(m: number, isSkirt: boolean): GridAttributes {
   const side = m + 1;
   const pos = new Float32Array(side * side * 3);
   // (half extent in grid units, skirt flag). Constant per geometry, but the
@@ -59,15 +75,33 @@ function gridGeometry(m: number, hollow: boolean, isSkirt = false): THREE.Buffer
       meta[q + 1] = isSkirt ? 1 : 0;
     }
   }
-  const hole = m / 4; // quarter of the side on each axis from the centre
+  return {
+    position: new THREE.BufferAttribute(pos, 3),
+    aMeta: new THREE.BufferAttribute(meta, 2),
+  };
+}
+
+/**
+ * One tile. `hole` is the half-extent in cells of the centre left uncovered for
+ * the finer level (0 for a solid tile), displaced by (ox, oz) whole cells so a
+ * ring can frame a level whose centre is not its own.
+ */
+function tileGeometry(
+  attrs: GridAttributes,
+  m: number,
+  hole: number,
+  ox = 0,
+  oz = 0,
+): THREE.BufferGeometry {
+  const side = m + 1;
   const idx: number[] = [];
   for (let j = 0; j < m; j++) {
     for (let i = 0; i < m; i++) {
-      if (hollow) {
+      if (hole > 0) {
         const cx = i - m / 2;
         const cz = j - m / 2;
         // Skip the quads covered by the finer level.
-        if (cx >= -hole && cx < hole && cz >= -hole && cz < hole) continue;
+        if (cx >= ox - hole && cx < ox + hole && cz >= oz - hole && cz < oz + hole) continue;
       }
       const a = j * side + i;
       const b = a + 1;
@@ -77,8 +111,8 @@ function gridGeometry(m: number, hollow: boolean, isSkirt = false): THREE.Buffer
     }
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('aMeta', new THREE.BufferAttribute(meta, 2));
+  geo.setAttribute('position', attrs.position);
+  geo.setAttribute('aMeta', attrs.aMeta);
   geo.setIndex(idx);
   // Bounds are meaningless for a shader-displaced camera-centred mesh.
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
@@ -89,21 +123,25 @@ export class OceanMesh {
   readonly group = new THREE.Group();
   readonly levels: ClipmapLevel[] = [];
   private solid: THREE.BufferGeometry;
-  private ring: THREE.BufferGeometry;
+  /** Rings by hole displacement, indexed `(oz + 1) * 3 + (ox + 1)`. */
+  private rings: THREE.BufferGeometry[] = [];
   private horizon: THREE.BufferGeometry;
 
   constructor(m: number, material: THREE.Material) {
-    this.solid = gridGeometry(m, false);
-    this.ring = gridGeometry(m, true);
+    const attrs = gridAttributes(m, false);
+    this.solid = tileGeometry(attrs, m, 0);
+    for (let oz = -1; oz <= 1; oz++) {
+      for (let ox = -1; ox <= 1; ox++) this.rings.push(tileGeometry(attrs, m, m / 4, ox, oz));
+    }
     // The skirt carries no detail; 16 cells a side is plenty.
-    this.horizon = gridGeometry(16, true, true);
+    this.horizon = tileGeometry(gridAttributes(16, true), 16, 4);
 
     this.group.name = 'ocean';
     this.group.frustumCulled = false;
 
     for (let k = 0; k < CLIPMAP_LEVELS; k++) {
       const halfExtent = CLIPMAP_H0 * Math.pow(2, k);
-      const geo = k === 0 ? this.solid : this.ring;
+      const geo = k === 0 ? this.solid : this.ringGeometry(0, 0);
       const mesh = new THREE.Mesh(geo, material);
       mesh.frustumCulled = false;
       mesh.castShadow = false;
@@ -131,9 +169,20 @@ export class OceanMesh {
     });
   }
 
+  /**
+   * The ring whose hole sits (ox, oz) cells off its centre. Clamped: a hole one
+   * cell further out than it should be is a seam, an undefined geometry is a
+   * black screen.
+   */
+  ringGeometry(ox: number, oz: number): THREE.BufferGeometry {
+    const cx = THREE.MathUtils.clamp(ox, -1, 1) + 1;
+    const cz = THREE.MathUtils.clamp(oz, -1, 1) + 1;
+    return this.rings[cz * 3 + cx];
+  }
+
   dispose(): void {
     this.solid.dispose();
-    this.ring.dispose();
+    for (const ring of this.rings) ring.dispose();
     this.horizon.dispose();
   }
 }

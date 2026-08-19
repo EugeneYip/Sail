@@ -58,6 +58,14 @@ export interface DetailOptions {
   fibreRough?: number;
   /** Per-board roughness spread, 0..1. */
   plankRough?: number;
+  /**
+   * Mean board length between butt joints, metres. A deck board is 6-8 m; a
+   * sheet of copper sheathing on the bottom is four feet. 0 keeps the timber
+   * default of 5.6-8.0 m.
+   */
+  boardLen?: number;
+  /** Spread of the board length, metres. */
+  boardJitter?: number;
   /** Coarse figure (ray fleck, streaking) spacing, metres. 0 disables. */
   figurePitch?: number;
   /** Albedo swing of the figure tier, 0..1. */
@@ -106,7 +114,7 @@ uniform vec2 uTileM;
 uniform vec4 uDetailA;
 uniform vec4 uDetailB;
 uniform vec4 uDetailC;
-uniform vec2 uDetailD;
+uniform vec4 uDetailD;
 uniform vec4 uDetailE;
 ${GLSL_COMMON_SAFE}
 ${GLSL.noise2d}
@@ -166,7 +174,11 @@ export function makeShipMaterial(
       d.fibrePitch ?? 0.0016, d.fibreAlbedo ?? 0, d.plankTone ?? 0, d.wear ?? 0,
     ),
   };
-  const detailD = { value: new THREE.Vector2(d.fibreRough ?? 0, d.plankRough ?? 0) };
+  const detailD = {
+    value: new THREE.Vector4(
+      d.fibreRough ?? 0, d.plankRough ?? 0, d.boardLen ?? 0, d.boardJitter ?? 0,
+    ),
+  };
   // The tier that carries the surface at a two-metre viewing distance, where the
   // fibre tier above has already faded to nothing. Off by default so a family
   // that has no business having wood figure (glass) simply omits it.

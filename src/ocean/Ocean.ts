@@ -398,21 +398,55 @@ export class Ocean implements Module, IOcean {
   }
 
   /**
-   * Snap each clipmap level to its own grid. The snap must be to two cells, not
-   * one, or the CDLOD morph flips parity as the camera moves and the surface
-   * shimmers along every level boundary.
+   * Snap each clipmap level to its own grid, then cut each ring's hole around
+   * the level it actually has to frame.
+   *
+   * The snap must be to two cells, not one, or the CDLOD morph flips parity as
+   * the camera moves and the surface shimmers along every level boundary. It has
+   * to stay per-level as well: two of level k's cells is a whole number of cells
+   * of every finer level, which is what puts a fine level's morphed outer band
+   * exactly on the coarse level's vertices, and it keeps every level on one fixed
+   * world lattice so the sea does not crawl as the camera moves.
+   *
+   * The price is that neighbouring levels do not share a centre — level k-1's is
+   * 0 or +/-1 of level k's cells away on each axis — so a hole cut at level k's
+   * own centre misses the square it is supposed to frame: it overlaps the finer
+   * level on one side and leaves a gap the full length of the boundary on the
+   * other (1.5 m x 96 m at L0/L1 on a 128 grid, doubling with every level out).
+   * A slit of unpainted sea reads as a flat hard-edged plank from above and as a
+   * line at waterline height edge-on. The offset is always a whole level-k cell,
+   * so displacing the hole by it closes the gap with no vertex leaving its
+   * lattice. Snapping every level to one common grid would close it too, but only
+   * the coarsest grid is common to all of them, and that one is 12 km wide.
    */
   private updateClipmap(camX: number, camZ: number): void {
-    for (const lv of this.mesh.levels) {
+    const levels = this.mesh.levels;
+    let prevX = 0;
+    let prevZ = 0;
+    for (let k = 0; k < levels.length; k++) {
+      const lv = levels[k];
       const cell = lv.cell;
       const snap = cell * 2;
-      const x = Math.round(camX / snap) * snap;
-      const z = Math.round(camZ / snap) * snap;
+      // The skirt's snap is sixteen of the last ring's, so the offset to that
+      // ring is a fraction of a skirt cell and cannot be taken out of the hole.
+      // It is flat and unmorphed — every cascade has faded out by its cell size —
+      // so it has no lattice to keep and can simply take the ring's centre.
+      const skirt = k === levels.length - 1;
+      const x = skirt ? prevX : Math.round(camX / snap) * snap;
+      const z = skirt ? prevZ : Math.round(camZ / snap) * snap;
+      if (k > 0 && !skirt) {
+        lv.mesh.geometry = this.mesh.ringGeometry(
+          Math.round((prevX - x) / cell),
+          Math.round((prevZ - z) / cell),
+        );
+      }
       const m = lv.mesh.matrixWorld;
       m.makeScale(cell, 1, cell);
       m.elements[12] = x;
       m.elements[14] = z;
       lv.mesh.matrix.copy(m);
+      prevX = x;
+      prevZ = z;
     }
   }
 

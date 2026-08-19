@@ -8,9 +8,26 @@
  *
  *   color  — per-part tonal variation and baked dirt, multiplied into albedo
  *   aPart  — index into the animated-transform uniform array (see shaders/parts)
+ *
+ * THE UV CONTRACT, which every primitive below obeys and which used to be
+ * obeyed by none of them:
+ *
+ *   u  runs ALONG the grain — the plank run, the length of a spar, the axis of
+ *      a turned barrel — in units of `uvTile[0]` metres
+ *   v  runs ACROSS the grain, in units of `uvTile[1]` metres
+ *
+ * Both halves of that matter. The units half is what lets `shaders/detail.ts`
+ * recover real metres and hold a growth ring at 9.5 mm; before it, `box` and
+ * `tube` emitted raw metres, so the material's `vMapUv * uTileM` scaled every
+ * feature down by 3.2x along and 1.28x across and the grain fell below the
+ * antialiasing fade. The DIRECTION half is the one that was visible from the
+ * helm: `tube` and `revolve` emitted length as v and circumference as u, so the
+ * growth rings on every mast, yard and boom ran AROUND the spar at 8 mm pitch
+ * like a screw thread instead of along it.
  */
 
 import * as THREE from 'three';
+import { TILE_ACROSS, TILE_ALONG } from '../materials/textures';
 
 const _v0 = new THREE.Vector3();
 const _v1 = new THREE.Vector3();
@@ -29,6 +46,11 @@ export class MeshBuilder {
   readonly color = new THREE.Color(1, 1, 1);
   /** Current animated-part slot. */
   partIndex = 0;
+  /**
+   * Metres of surface per UV unit, (along the grain, across it). Must match the
+   * `tile` the material is built with — see the contract in `textures.ts`.
+   */
+  uvTile: readonly [number, number] = [TILE_ALONG, TILE_ACROSS];
 
   private xf = new THREE.Matrix4();
   private nxf = new THREE.Matrix3();
@@ -111,17 +133,26 @@ export class MeshBuilder {
    * (i, j); normals are taken from the sampled grid by central difference so
    * the caller never has to differentiate anything by hand. `skip(i, j)`
    * suppresses the quad whose lower-left corner is (i, j).
+   *
+   * Pass `null` for `uvFn` to have the UVs SPILED off the sampled grid — the
+   * cumulative arc length along i and across j, in tile units, exactly as a
+   * shipwright lays a plank round a frame. Prefer it: half the call sites here
+   * used to write `[i * 0.4, j * 0.25]`, which is a grid INDEX, so the plank
+   * pitch and the grain of a channel or a boat's strake depended on how many
+   * segments it happened to be tessellated into rather than on its size.
    */
   grid(
     nu: number,
     nv: number,
     fn: (i: number, j: number, out: THREE.Vector3) => void,
-    uvFn: (i: number, j: number) => [number, number],
+    uvFn: ((i: number, j: number) => [number, number]) | null,
     opts: {
       flip?: boolean;
       skip?: (i: number, j: number) => boolean;
       colorFn?: (i: number, j: number, out: THREE.Color) => void;
       partFn?: (i: number, j: number) => number;
+      /** With spiled UVs, run the grain across j instead of along i. */
+      swapUv?: boolean;
     } = {},
   ): Int32Array {
     const pts = new Float32Array(nu * nv * 3);
@@ -141,6 +172,32 @@ export class MeshBuilder {
       const k = (ii * nv + jj) * 3;
       return out.set(pts[k], pts[k + 1], pts[k + 2]);
     };
+    // Spiled UVs: cumulative arc length along each row and each column. Taken
+    // per-row rather than from a single edge so a surface that fans out — a
+    // hull band, a fan of channel knees — keeps its plank width all the way.
+    let arcU: Float32Array | null = null;
+    let arcV: Float32Array | null = null;
+    if (!uvFn) {
+      arcU = new Float32Array(nu * nv);
+      arcV = new Float32Array(nu * nv);
+      const q = new THREE.Vector3();
+      for (let j = 0; j < nv; j++) {
+        for (let i = 1; i < nu; i++) {
+          at(i, j, p);
+          at(i - 1, j, q);
+          arcU[i * nv + j] = arcU[(i - 1) * nv + j] + p.distanceTo(q);
+        }
+      }
+      for (let i = 0; i < nu; i++) {
+        for (let j = 1; j < nv; j++) {
+          at(i, j, p);
+          at(i, j - 1, q);
+          arcV[i * nv + j] = arcV[i * nv + j - 1] + p.distanceTo(q);
+        }
+      }
+    }
+    const ku = 1 / this.uvTile[0];
+    const kv = 1 / this.uvTile[1];
     const ids = new Int32Array(nu * nv);
     const baseColor = this.color.clone();
     const basePart = this.partIndex;
@@ -152,7 +209,17 @@ export class MeshBuilder {
         if (_n.lengthSq() < 1e-14) _n.set(0, 1, 0);
         else _n.normalize();
         if (opts.flip) _n.negate();
-        const [u, v] = uvFn(i, j);
+        let u: number;
+        let v: number;
+        if (uvFn) {
+          [u, v] = uvFn(i, j);
+        } else if (opts.swapUv) {
+          u = arcV![i * nv + j] * ku;
+          v = arcU![i * nv + j] * kv;
+        } else {
+          u = arcU![i * nv + j] * ku;
+          v = arcV![i * nv + j] * kv;
+        }
         if (opts.colorFn) {
           this.color.copy(baseColor);
           opts.colorFn(i, j, this.color);
@@ -178,7 +245,13 @@ export class MeshBuilder {
     return ids;
   }
 
-  /** Axis-aligned box centred at (cx, cy, cz). */
+  /**
+   * Axis-aligned box centred at (cx, cy, cz).
+   *
+   * `uvScale` is a deliberate stretch of the grain, not a units correction —
+   * every call site that used to pass one was compensating for the metres/tile
+   * confusion described at the top of this file and now passes nothing.
+   */
   box(cx: number, cy: number, cz: number, hx: number, hy: number, hz: number, uvScale = 1): void {
     const faces: [number, number, number, number, number, number][] = [
       [1, 0, 0, hx, hy, hz],
@@ -198,28 +271,45 @@ export class MeshBuilder {
       } else {
         uy = 1;
       }
-      const vx = ny * uz - nz * uy;
-      const vy = nz * ux - nx * uz;
-      const vz = nx * uy - ny * ux;
-      const su = Math.abs(ux) * hx + Math.abs(uy) * hy + Math.abs(uz) * hz;
-      const sv = Math.abs(vx) * hx + Math.abs(vy) * hy + Math.abs(vz) * hz;
+      let vx = ny * uz - nz * uy;
+      let vy = nz * ux - nx * uz;
+      let vz = nx * uy - ny * ux;
+      let su = Math.abs(ux) * hx + Math.abs(uy) * hy + Math.abs(uz) * hz;
+      let sv = Math.abs(vx) * hx + Math.abs(vy) * hy + Math.abs(vz) * hz;
+      // A baulk of timber is sawn along its length, so the grain follows the
+      // face's LONGER in-plane axis. Without this the frame axis was whichever
+      // of X/Y happened to be off the face normal, and a belaying pin ended up
+      // with its rings running across the pin instead of up it.
+      const swap = sv > su;
+      if (swap) {
+        let t = ux; ux = vx; vx = t;
+        t = uy; uy = vy; vy = t;
+        t = uz; uz = vz; vz = t;
+        t = su; su = sv; sv = t;
+      }
       const ox = nx * hx;
       const oy = ny * hy;
       const oz = nz * hz;
+      const ku = uvScale / this.uvTile[0];
+      const kv = uvScale / this.uvTile[1];
       const corner = (a: number, b: number) =>
         this.vertex(
           cx + ox + ux * su * a + vx * sv * b,
           cy + oy + uy * su * a + vy * sv * b,
           cz + oz + uz * su * a + vz * sv * b,
           nx, ny, nz,
-          (a * 0.5 + 0.5) * su * 2 * uvScale,
-          (b * 0.5 + 0.5) * sv * 2 * uvScale,
+          (a * 0.5 + 0.5) * su * 2 * ku,
+          (b * 0.5 + 0.5) * sv * 2 * kv,
         );
       const a0 = corner(-1, -1);
       const a1 = corner(1, -1);
       const a2 = corner(1, 1);
       const a3 = corner(-1, 1);
-      this.quad(a0, a1, a2, a3);
+      // Swapping the frame axes above reverses the face's handedness, so the
+      // winding has to be reversed with it or the face is back-face culled and
+      // you get a box with holes in three of its sides.
+      if (swap) this.quad(a0, a3, a2, a1);
+      else this.quad(a0, a1, a2, a3);
     }
   }
 
@@ -271,7 +361,15 @@ export class MeshBuilder {
         const sa = Math.sin(a);
         nn.set(u.x * ca + v.x * sa, u.y * ca + v.y * sa, u.z * ca + v.z * sa).normalize();
         p.copy(path[i]).addScaledVector(nn, radii[i]);
-        row.push(this.vert(p, nn, (k / radial) * radii[i] * 6.283 * uvScale, lens[i] * uvScale));
+        // ALONG the spar is u, around it is v. This was the other way round,
+        // which put the growth rings on every mast and yard in a screw thread
+        // round the timber at 8 mm pitch — the single most visible instance of
+        // the UV bug, and the reason a close-up spar read as extruded plastic.
+        row.push(this.vert(
+          p, nn,
+          (lens[i] * uvScale) / this.uvTile[0],
+          ((k / radial) * radii[i] * 6.283 * uvScale) / this.uvTile[1],
+        ));
       }
       ids.push(row);
     }
@@ -286,7 +384,11 @@ export class MeshBuilder {
     if (caps) {
       for (const [i, sign] of [[0, -1], [n - 1, 1]] as const) {
         const t = tan[i].clone().multiplyScalar(sign);
-        const c = this.vert(path[i], t, 0.5, 0.5);
+        // A sawn-off spar shows END grain: the rings are concentric, so both UV
+        // axes are the real offset from the centre of the cut, in tile units.
+        const ku = uvScale / this.uvTile[0];
+        const kv = uvScale / this.uvTile[1];
+        const c = this.vert(path[i], t, lens[i] * ku, 0);
         const ring: number[] = [];
         const [u, v] = frames[i];
         for (let k = 0; k <= radial; k++) {
@@ -297,7 +399,11 @@ export class MeshBuilder {
             u.z * Math.cos(a) + v.z * Math.sin(a),
           );
           p.copy(path[i]).addScaledVector(nn, radii[i]);
-          ring.push(this.vert(p, t, 0.5 + 0.5 * Math.cos(a), 0.5 + 0.5 * Math.sin(a)));
+          ring.push(this.vert(
+            p, t,
+            (lens[i] + radii[i] * Math.cos(a)) * ku,
+            radii[i] * Math.sin(a) * kv,
+          ));
         }
         for (let k = 0; k < radial; k++) {
           if (sign < 0) this.tri(c, ring[k + 1], ring[k]);
@@ -322,12 +428,22 @@ export class MeshBuilder {
     this.tube(path, radii, radial, true);
   }
 
-  /** Solid of revolution around +Y from a (radius, y) profile. */
+  /**
+   * Solid of revolution around +Y from a (radius, y) profile.
+   *
+   * A capstan barrel or a mast cap is turned out of one baulk with the grain up
+   * the axis, so u is the height and v is the real arc length round it. The old
+   * u was `k / segments` — dimensionless, so a 1.7 m capstan and a 60 mm truck
+   * both got exactly one tile round the circumference and neither had any idea
+   * how big it was in metres.
+   */
   revolve(profile: readonly [number, number][], segments = 12, uvScale = 1): void {
     const n = profile.length;
     const ids: number[][] = [];
     const p = new THREE.Vector3();
     const nn = new THREE.Vector3();
+    const ku = uvScale / this.uvTile[0];
+    const kv = uvScale / this.uvTile[1];
     for (let i = 0; i < n; i++) {
       const [r, y] = profile[i];
       const rp = profile[Math.min(n - 1, i + 1)];
@@ -341,7 +457,7 @@ export class MeshBuilder {
         const sa = Math.sin(a);
         nn.set(dy * ca, -dr, dy * sa).normalize();
         p.set(r * ca, y, r * sa);
-        row.push(this.vert(p, nn, (k / segments) * uvScale, y * uvScale));
+        row.push(this.vert(p, nn, y * ku, (k / segments) * 6.283 * r * kv));
       }
       ids.push(row);
     }
@@ -357,13 +473,16 @@ export class MeshBuilder {
   disc(cy: number, rInner: number, rOuter: number, segments = 16, up = true): void {
     const nY = up ? 1 : -1;
     const ids: number[][] = [];
+    const ku = 1 / this.uvTile[0];
+    const kv = 1 / this.uvTile[1];
     for (const r of [rInner, rOuter]) {
       const row: number[] = [];
       for (let k = 0; k <= segments; k++) {
         const a = (k / segments) * Math.PI * 2;
-        row.push(
-          this.vertex(r * Math.cos(a), cy, r * Math.sin(a), 0, nY, 0, r * Math.cos(a), r * Math.sin(a)),
-        );
+        row.push(this.vertex(
+          r * Math.cos(a), cy, r * Math.sin(a), 0, nY, 0,
+          r * Math.cos(a) * ku, r * Math.sin(a) * kv,
+        ));
       }
       ids.push(row);
     }
@@ -377,6 +496,8 @@ export class MeshBuilder {
   prism(poly: readonly [number, number][], z0: number, z1: number, capNormalFlip = false): void {
     const n = poly.length;
     const side: number[][] = [];
+    const ku = 1 / this.uvTile[0];
+    const kv = 1 / this.uvTile[1];
     for (let i = 0; i < n; i++) {
       const [x0, y0] = poly[i];
       const [x1, y1] = poly[(i + 1) % n];
@@ -385,10 +506,13 @@ export class MeshBuilder {
       const l = Math.hypot(ex, ey) || 1;
       const nx = ey / l;
       const ny = -ex / l;
+      // These are extruded fore-and-aft (knees, breasthooks, the head), so the
+      // grain follows Z — the extrusion — and v runs across the section.
+      const zl = (z1 - z0) * ku;
       const a = this.vertex(x0, y0, z0, nx, ny, 0, 0, 0);
-      const b = this.vertex(x1, y1, z0, nx, ny, 0, l, 0);
-      const c = this.vertex(x1, y1, z1, nx, ny, 0, l, z1 - z0);
-      const d = this.vertex(x0, y0, z1, nx, ny, 0, 0, z1 - z0);
+      const b = this.vertex(x1, y1, z0, nx, ny, 0, 0, l * kv);
+      const c = this.vertex(x1, y1, z1, nx, ny, 0, zl, l * kv);
+      const d = this.vertex(x0, y0, z1, nx, ny, 0, zl, 0);
       this.quad(a, b, c, d);
       side.push([a, b, c, d]);
     }
@@ -401,8 +525,9 @@ export class MeshBuilder {
     }
     for (const [z, nz] of [[z0, -1], [z1, 1]] as const) {
       const sgn = capNormalFlip ? -nz : nz;
-      const c = this.vertex(cx, cy, z, 0, 0, sgn, cx, cy);
-      const ring = poly.map(([x, y]) => this.vertex(x, y, z, 0, 0, sgn, x, y));
+      // End grain on the cut face: both axes are the real offset in the section.
+      const c = this.vertex(cx, cy, z, 0, 0, sgn, cx * ku, cy * kv);
+      const ring = poly.map(([x, y]) => this.vertex(x, y, z, 0, 0, sgn, x * ku, y * kv));
       for (let i = 0; i < n; i++) {
         const a = ring[i];
         const b = ring[(i + 1) % n];

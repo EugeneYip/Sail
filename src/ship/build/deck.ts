@@ -60,7 +60,7 @@ function buildCapstan(bins: Bins, p: THREE.Vector3): void {
       [0.86, 0], [0.84, 0.18], [0.6, 0.42], [0.5, 0.95],
       [0.56, 1.32], [0.78, 1.44], [0.8, 1.62], [0, 1.66],
     ],
-    14, 1.4,
+    14,
   );
   // Whelps: the vertical ribs the messenger cable bites on.
   for (let i = 0; i < 8; i++) {
@@ -89,7 +89,7 @@ function buildWheel(bins: Bins, p: THREE.Vector3): void {
     new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI * 0.5),
     new THREE.Vector3(1, 1, 1),
   ));
-  oak.revolve([[0.17, -0.62], [0.2, -0.5], [0.2, 0.5], [0.17, 0.62]], 10, 2);
+  oak.revolve([[0.17, -0.62], [0.2, -0.5], [0.2, 0.5], [0.17, 0.62]], 10);
   // Two wheels, one each side of the barrel.
   for (const off of [-0.5, 0.5]) {
     const R = 0.86;

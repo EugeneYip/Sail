@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { makeRng, smoothstep } from '../../util/math';
+import { TILE_ACROSS as TILE_ACROSS_M, TILE_ALONG as TILE_ALONG_M } from '../materials/textures';
 import { MeshBuilder } from './Builder';
 import {
   BULWARK_THICK, Bin, DECK_CAMBER, HULL_ROWS, HULL_THICK,
@@ -48,9 +49,13 @@ export function createBins(): Bins {
   };
 }
 
-/** Texture tile size in metres: one tile is 3.2 m of run by 4 planks. */
-const TILE_ALONG = 3.2;
-const TILE_ACROSS = 1.28;
+/**
+ * One tile is 3.2 m of plank run by 4 planks. Re-exported under the local names
+ * the spiling code below uses; the definition, and the reason it has to be a
+ * single definition, are in `materials/textures.ts`.
+ */
+const TILE_ALONG = TILE_ALONG_M;
+const TILE_ACROSS = TILE_ACROSS_M;
 
 export interface HullResult {
   ports: PortSpec[];
@@ -423,7 +428,7 @@ function buildPortLiner(
   // Local frame: the lid hangs down from the hinge, faces outward along +nx.
   const lw = p.halfWidth + 0.07;
   const lh = h + 0.08;
-  lid.box(nx * 0.035, -lh * 0.5 * inv, 0, 0.035, lh * 0.5, lw, 0.9);
+  lid.box(nx * 0.035, -lh * 0.5 * inv, 0, 0.035, lh * 0.5, lw);
   lid.popTransform();
 
   // Hinge straps and the ring bolt.
@@ -455,14 +460,14 @@ function buildKeel(bins: Bins): void {
     b.grid(
       pts.length, 2,
       (i, j, out) => out.set(side * hw, pts[i].y + (j === 0 ? -hh : hh), pts[i].z),
-      (i, j) => [pts[i].z / TILE_ALONG, j * 0.7],
+      null,
       { flip: side > 0 },
     );
   }
   b.grid(
     pts.length, 2,
     (i, j, out) => out.set((j === 0 ? -hw : hw), pts[i].y - hh, pts[i].z),
-    (i, j) => [pts[i].z / TILE_ALONG, j * 0.6],
+    null,
     { flip: true },
   );
 }
@@ -478,7 +483,7 @@ function buildStem(bins: Bins, stations: Station[]): void {
   ];
   const path: THREE.Vector3[] = stemPts.map(([z, y]) => new THREE.Vector3(0, y, z));
   const radii = stemPts.map((_, i) => 0.44 - i * 0.018);
-  b.tube(path, radii, 7, true, 0.4);
+  b.tube(path, radii, 7, true);
 
   // Cutwater / knee of the head: a thin vertical fin forward of the stem.
   const cw: [number, number][] = [
@@ -491,7 +496,7 @@ function buildStem(bins: Bins, stations: Station[]): void {
     b.grid(
       2, 2,
       (ii, jj, out) => out.set((jj === 0 ? -hw : hw), ii === 0 ? y0 : y1, ii === 0 ? z0 : z1),
-      (ii, jj) => [ii * 1.2, jj * 0.4],
+      null,
     );
     for (const side of [1, -1] as const) {
       b.grid(
@@ -501,7 +506,7 @@ function buildStem(bins: Bins, stations: Station[]): void {
           const y = ii === 0 ? y0 : y1;
           out.set(side * hw, y + (jj === 0 ? -0.55 : 0.0), z + (jj === 0 ? 0.5 : 0));
         },
-        (ii, jj) => [ii * 1.2, jj * 0.5],
+        null,
         { flip: side > 0 },
       );
     }
@@ -521,7 +526,7 @@ function buildStem(bins: Bins, stations: Station[]): void {
         rail.push(new THREE.Vector3(x, y, z));
         rad.push(0.115 - s * 0.035);
       }
-      b.tube(rail, rad, 6, true, 0.5);
+      b.tube(rail, rad, 6, true);
       void k;
     }
     // Trailboard: the carved panel between the rails.
@@ -534,7 +539,7 @@ function buildStem(bins: Bins, stations: Station[]): void {
         const y = 5.5 + s * 1.5 - s * s * 0.5 + j * (0.85 - s * 0.35);
         out.set(side * (1.5 * (1 - s * s * 0.85)), y, z);
       },
-      (i, j) => [i * 0.5, j * 0.8],
+      null,
       { flip: side < 0 },
     );
   }
@@ -600,8 +605,9 @@ function buildTransom(
         const shrink = k === 0 ? 1 : 0.965;
         out.set(side * p.x * shrink, p.y, p.z + dz);
       },
-      (j, k) => [(rowY[last][j] * 0.5 + k * 1.4) / TILE_ALONG * 2, (j / nr) * 4],
-      { flip: side < 0, colorFn: (j, _k, c) => c.setScalar(0.94 + 0.1 * (j / nr)) },
+      null,
+      { flip: side < 0, swapUv: true,
+        colorFn: (j, _k, c) => c.setScalar(0.94 + 0.1 * (j / nr)) },
     );
   }
 
@@ -665,7 +671,7 @@ function buildTransom(
         const fx = (i / 12) * 2 - 1;
         out.set(fx * w, y + (j - 0.5) * 0.19, z + 0.26 * (1 - fx * fx) + 0.06);
       },
-      (i, j) => [i * 0.4, j * 0.4],
+      null,
     );
   }
 
@@ -700,7 +706,7 @@ function buildTransom(
         const fx = (i / 12) * 2 - 1;
         out.set(fx * (w + 0.1), y + 0.46 + j * 0.1, st.z + rake(y) + 0.3 * (1 - fx * fx) + (j - 0.5) * 0.26);
       },
-      (i, j) => [i * 0.35, j * 0.35],
+      null,
       { flip: true },
     );
   }
@@ -726,7 +732,7 @@ function buildTransom(
         );
         out.copy(s2);
       },
-      (i, j) => [i * 0.3, j * 0.3],
+      null,
       { flip: side > 0 },
     );
     glass.setColorHexLinear(0x7f95a8, 0.5);
@@ -791,7 +797,7 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
         const p = inner[i + iStart][j];
         out.set(side * p.x, p.y, p.z);
       },
-      (i, j) => [inner[i + iStart][j].z / TILE_ALONG, (j / (levels.length - 1)) * 1.6 * side],
+      null,
       {
         // The inboard face of the bulwark looks in at the deck.
         flip: side < 0,
@@ -818,7 +824,7 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
         const wIn = inner[i + iStart][levels.length - 1].x;
         out.set(side * (j === 0 ? wOut + 0.06 : wIn - 0.04), y, st.z);
       },
-      (i, j) => [stations[i + iStart].z / TILE_ALONG, j * 0.25],
+      null,
     );
   }
 
@@ -849,7 +855,7 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
         const r = 0.33;
         out.set(side * (w + 0.06 + Math.sin(a) * r * 0.7), y + 0.46 + (1 - Math.cos(a)) * r, z);
       },
-      (i, j) => [i * 0.4, j * 0.25],
+      null,
       { flip: side > 0, colorFn: (i, _j, c) => c.setScalar(0.9 + 0.14 * fract(Math.sin(i * 12.9898) * 43758.5453)) },
     );
   }
@@ -885,7 +891,7 @@ function buildDecks(bins: Bins, stations: Station[]): void {
       const t = t0 + (i / (NZ - 1)) * (t1 - t0);
       const w = halfAt(t);
       const f = (j / (NX - 1)) * 2 - 1;
-      return [zAt(t) / TILE_ALONG, (f * w) / 1.12];
+      return [zAt(t) / TILE_ALONG, (f * w) / TILE_ACROSS];
     },
     {
       colorFn: (i, j, c) => {
@@ -908,7 +914,7 @@ function buildDecks(bins: Bins, stations: Station[]): void {
       const f = (j / 9) * 2 - 1;
       out.set(f * w, y + DECK_CAMBER * 0.5 * (1 - f * f), zAt(t));
     },
-    (i, j) => [zAt(0.08 + (i / 39) * 0.85) / TILE_ALONG, (j / 9) * 3],
+    null,
   );
 
   // Inboard shell of the gun deck, so an open port shows a lit interior edge.
@@ -925,7 +931,7 @@ function buildDecks(bins: Bins, stations: Station[]): void {
         const y = y0 + (y1 - y0) * (j / 3);
         out.set(side * Math.max(0.3, st.widthAt(y) - HULL_THICK), y, zAt(t));
       },
-      (i, j) => [zAt(0.08 + (i / 39) * 0.85) / TILE_ALONG, j * 0.6],
+      null,
       { flip: side < 0 },
     );
   }
@@ -941,7 +947,7 @@ function buildDecks(bins: Bins, stations: Station[]): void {
       const f = (j / 7) * 2 - 1;
       out.set(f * w, y, zAt(t));
     },
-    (i, j) => [zAt(0.08 + (i / 29) * 0.85) / TILE_ALONG, (j / 7) * 3],
+    null,
     { flip: true },
   );
   void stations;
@@ -975,7 +981,7 @@ function buildChannels(bins: Bins): void {
           const w = st.widthAt(y);
           out.set(side * (w + (j === 0 ? 0.02 : 0.92)), y + 0.06, z);
         },
-        (i, j) => [i * 0.5, j * 0.5],
+        null,
         { flip: side < 0 },
       );
       b.grid(
@@ -988,7 +994,7 @@ function buildChannels(bins: Bins): void {
           const w = st.widthAt(y);
           out.set(side * (w + (j === 0 ? 0.02 : 0.92)), y - 0.06, z);
         },
-        (i, j) => [i * 0.5, j * 0.5],
+        null,
         { flip: side > 0 },
       );
       // Outer edge with the deadeye score.
@@ -1002,7 +1008,7 @@ function buildChannels(bins: Bins): void {
           const w = st.widthAt(y);
           out.set(side * (w + 0.92), y + (j === 0 ? -0.06 : 0.28), z);
         },
-        (i, j) => [i * 0.5, j * 0.5],
+        null,
         { flip: side > 0 },
       );
       // Chainplates: iron straps from the channel down to the wale.
@@ -1032,7 +1038,7 @@ export function stanchion(b: MeshBuilder, x: number, y: number, z: number, h: nu
       [0.06, 0], [0.075, h * 0.1], [0.05, h * 0.25], [0.075, h * 0.42],
       [0.055, h * 0.62], [0.07, h * 0.82], [0.05, h],
     ],
-    7, 1.2,
+    7,
   );
   b.popTransform();
 }

@@ -71,7 +71,8 @@ uniform float uPixelAngle;
 uniform float uMieMul;
 uniform float uSkyTime;
 uniform vec3  uHazeColor;
-uniform float uHazeBeta;
+// uHazeBeta and HAZE_H live in ATMOSPHERE_GLSL, because the cloud march culls
+// rays on the same column and the two must not be able to disagree.
 
 #ifdef SKY_CLOUDS
 uniform sampler2D tClouds;
@@ -219,9 +220,7 @@ void main(){
    * that makes a low sky close in around you.
    */
   if (uHazeBeta > 1e-7) {
-    const float HAZE_H = 900.0;
-    float hazeTau = uHazeBeta * (HAZE_H / max(abs(dir.y), 0.015));
-    L = mix(uHazeColor, L, exp(-hazeTau));
+    L = mix(uHazeColor, L, exp(-hazeColumnTau(dir.y)));
   }
 
   fragColor = vec4(max(L, vec3(0.0)), 1.0);

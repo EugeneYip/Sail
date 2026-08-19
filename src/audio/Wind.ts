@@ -105,14 +105,22 @@ export class Wind {
 
     // Level rises with speed but never saturates — the sweep test asserts
     // monotonicity all the way to 25 m/s.
-    const base = dB(-53 + 32 * smoothstep(0.3, 30, u) + 0.14 * u);
+    //
+    // The range used to be dB(-53) to dB(-19.9) — only 33 dB across the whole
+    // Beaufort scale — and at the -13 dB bus trim that left a full gale QUIETER
+    // than a sea-state-3 swell: measured, the whole mix moved 0.5 dB from 0 to
+    // 25 m/s with the sea pinned, so the wind was inaudible at every speed. A
+    // gale you cannot hear is not subordinate, it is broken. 51 dB of range now,
+    // hung lower at the bottom and higher at the top, so light air is genuinely
+    // nothing and a gale genuinely arrives.
+    const base = dB(-62 + 51 * smoothstep(0.5, 27, u));
     const shelter = 0.5 + 0.85 * exposure;
     this.bedGain.set(base * shelter, now);
     this.bedLp.set((320 + 1500 * smoothstep(0, 26, u)) * gustBright * (0.7 + 0.4 * exposure), now);
     this.bedHp.set(58 + 40 * exposure, now);
 
     // The high band lags at low wind and overtakes in a blow.
-    this.hissGain.set(dB(-64 + 38 * smoothstep(2, 28, u)) * shelter * gustBright, now);
+    this.hissGain.set(dB(-70 + 48 * smoothstep(3, 28, u)) * shelter * gustBright, now);
     this.hissHp.set(3200 - 1100 * smoothstep(4, 24, u), now);
 
     const buffeting = smoothstep(0.25, 0.95, exposure) * smoothstep(3, 22, u);
@@ -128,17 +136,21 @@ export class Wind {
     // Rigging. Rain wets and damps the lines; distance thins the localised part.
     const d = Math.max(1, sim.camDistance);
     const near = 1 / (1 + d / 90);
+    // The bank is summed into the bus TWICE — localised at the masthead and a
+    // wide direct component — so its level has to account for both or the song
+    // arrives 1 dB hotter than it reads. Subordinate, per AGENTS.md directive 5:
+    // audible as the ship's own voice, never as the thing you are listening to.
     this.rigging.set(
       {
         wind: u,
-        level: dB(-19) * (0.55 + 0.6 * exposure),
+        level: dB(-22) * (0.55 + 0.6 * exposure),
         shriek: smoothstep(15, 27, u),
         damp: sim.rain,
       },
       now,
     );
     this.riggingPoint.set(0.8, now);
-    this.riggingDirect.set(0.32 * near, now);
+    this.riggingDirect.set(0.24 * near, now);
     this.riggingPan.set(anchorWorld(sim, ANCHOR.mastMain), now);
   }
 }

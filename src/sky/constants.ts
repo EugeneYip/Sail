@@ -173,6 +173,26 @@ export const KOSCHMIEDER = 3.912;
  */
 export const CLEAR_VISIBILITY_M = 30000;
 
+/**
+ * Scale height of the weather-haze layer, metres. Haze lives in the boundary
+ * layer, so a view ray accumulates `uHazeBeta * HAZE_H / |dir.y|` of it — that
+ * column is what closes a low sky in around you.
+ *
+ * The sky shader and the cloud march both need this number and must agree on it:
+ * the march culls rays whose haze column has already erased the cloud, so a
+ * mismatch would cull cloud the sky still shows.
+ */
+export const HAZE_SCALE_HEIGHT_M = 900;
+
+/**
+ * Haze optical depth past which a ray's cloud contribution is not worth
+ * marching. e^-6.9 is 0.1 % — a tenth of the 1 % contrast a human eye can find,
+ * and the sky-view radiance it is compared against is the same order as the
+ * cloud radiance it replaces, so the error is bounded by a thousandth of the
+ * pixel either way.
+ */
+export const HAZE_CULL_TAU = 6.9;
+
 /* ------------------------------------------------------------------ *
  *  Shadows
  * ------------------------------------------------------------------ */

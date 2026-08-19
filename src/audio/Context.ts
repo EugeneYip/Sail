@@ -43,15 +43,60 @@ export function eventTime(now: number, delay = 0): number {
 }
 
 /**
- * Shortfalls caught by the pools' backstop clamp.
+ * Shortfalls caught by the pools' backstop clamp, plus what the LIVE context
+ * turns out to need.
  *
- * Every pool re-checks the lead before it schedules, because being wrong here is
- * inaudible in the offline render and a click in the game. If `late` is ever
- * non-zero, some caller computed an event time without `eventTime()` and this is
- * the proof: `scripts/audio-test.mjs` asserts on it. `worstLeadS` is the smallest
- * lead any caller asked for, so the number tells you how badly.
+ * `late`/`worstLeadS`: every pool re-checks the lead before it schedules, because
+ * being wrong here is inaudible in the offline render and a click in the game. If
+ * `late` is ever non-zero, some caller computed an event time without
+ * `eventTime()` and this is the proof: `scripts/audio-test.mjs` asserts on it.
+ * `worstLeadS` is the smallest lead any caller asked for.
+ *
+ * The rest closes the hole `late` cannot see. `late` only proves the code asked
+ * for LEAD_S; it cannot prove LEAD_S is *enough*, because that depends on how far
+ * past `currentTime` this device's audio thread has already rendered — a quantity
+ * an `OfflineAudioContext` does not have. `AudioEngine` fills these in from the
+ * running context every frame (see `observeLead`) so the constant is checked
+ * against the hardware instead of against itself:
+ *
+ *   renderQuantumS  ctx.baseLatency — how far ahead the thread renders
+ *   frameGapS       the longest gap between two frames, i.e. how stale a value
+ *                   may get before the next update arrives
+ *   needLeadS       what LEAD_S would have to be on this device
+ *   shortfall       frames where needLeadS exceeded LEAD_S. Must stay 0.
  */
-export const schedule = { late: 0, worstLeadS: Infinity };
+export const schedule = {
+  late: 0,
+  worstLeadS: Infinity,
+  renderQuantumS: 0,
+  frameGapS: 0,
+  needLeadS: 0,
+  shortfall: 0,
+};
+
+/**
+ * Safety factor on the observed render-ahead. Three quanta: the one being
+ * rendered, the one the thread has already started, and one for jitter.
+ */
+const QUANTA_OF_MARGIN = 3;
+
+/**
+ * Record what the live context needs, and count it if LEAD_S is not enough.
+ *
+ * `gap` is this frame's `currentTime` minus the previous frame's, so a stall
+ * shows up here as the largest gap. A late frame does not by itself produce a
+ * late event — it reads a fresh `currentTime` and still schedules LEAD_S ahead of
+ * it — so the gap is charged as staleness, not as lead. What must be covered is
+ * the render-ahead plus jitter.
+ */
+export function observeLead(baseLatency: number, gap: number): void {
+  const quantum = Number.isFinite(baseLatency) && baseLatency > 0 ? baseLatency : 128 / 48000;
+  if (quantum > schedule.renderQuantumS) schedule.renderQuantumS = quantum;
+  if (Number.isFinite(gap) && gap > schedule.frameGapS) schedule.frameGapS = gap;
+  const need = QUANTA_OF_MARGIN * quantum;
+  if (need > schedule.needLeadS) schedule.needLeadS = need;
+  if (need > LEAD_S) schedule.shortfall++;
+}
 
 /** Clamp an event time to the minimum lead, recording the shortfall. */
 export function notBefore(t: number, now: number): number {

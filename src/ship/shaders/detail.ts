@@ -174,7 +174,7 @@ float lwGrainFigure(vec2 m, float pitch, float aa, out vec2 g) {
  *   A  (ring pitch m, ring albedo amp, ring relief m, ring roughness amp)
  *   B  (plank pitch m — 0 disables, seam half-width m, seam darkness, fibre relief m)
  *   C  (fibre pitch m, fibre albedo amp, per-plank tone amp, scrub/wear amp)
- *   D  (fibre roughness amp, per-board roughness spread)
+ *   D  (fibre roughness amp, per-board roughness spread, board length m, length jitter m)
  *   E  (figure pitch m — 0 disables, figure albedo amp, figure relief m, figure roughness amp)
  *
  * A metal family sets the ring amplitudes to zero and keeps only the fibre
@@ -187,7 +187,7 @@ float lwGrainFigure(vec2 m, float pitch, float aa, out vec2 g) {
  *   ao   out: multiply into ambient occlusion
  *   g    out: surface slope in the (along, across) frame
  */
-void lwWoodDetail(vec2 m, vec4 A, vec4 B, vec4 C, vec2 D, vec4 E,
+void lwWoodDetail(vec2 m, vec4 A, vec4 B, vec4 C, vec4 D, vec4 E,
                   out float alb, out float rgh, out float ao, out vec2 g) {
   // The screen-space derivative is taken OUTSIDE every branch below. A
   // derivative in non-uniform control flow is undefined, and the whole
@@ -201,13 +201,19 @@ void lwWoodDetail(vec2 m, vec4 A, vec4 B, vec4 C, vec2 D, vec4 E,
   float sf = 0.0;
   float plank = 0.0;
   float sect = 0.0;
+  // Board length in metres. Parameterised because it is NOT a wood constant:
+  // a deck board is six or seven metres, and a sheet of copper sheathing on the
+  // bottom is four feet, so the family that shares this code has to be able to
+  // say so. D.w = 0 keeps the old fixed 5.6-8.0 m timber.
+  float boardLen = D.z > 0.0 ? D.z : 5.6;
+  float boardJit = D.z > 0.0 ? D.w : 2.4;
   if (B.x > 0.0) {
     pf = m.y / B.x;
     plank = floor(pf);
-    // Butt joints are staggered per plank so the runs never line up, and the
-    // board length is randomised about seven metres.
+    // Butt joints are staggered per plank so the runs never line up.
     float off = hash12(vec2(plank, 3.0)) * 9.0;
-    sf = (m.x + off) / (5.6 + 2.4 * hash12(vec2(plank, 11.0)));
+    boardLen += boardJit * hash12(vec2(plank, 11.0));
+    sf = (m.x + off) / boardLen;
     sect = floor(sf);
   }
   // Three decorrelated draws per board: where its rings sit, how close together
@@ -238,7 +244,10 @@ void lwWoodDetail(vec2 m, vec4 A, vec4 B, vec4 C, vec2 D, vec4 E,
   // ---- plank layout: seams across, butt joints along, tone per board
   if (B.x > 0.0) {
     float seamD = min(fract(pf), 1.0 - fract(pf)) * B.x;
-    float buttD = min(fract(sf), 1.0 - fract(sf)) * 5.6;
+    // Times the board's OWN length, not a hard-wired 5.6 — with the constant
+    // there, a longer board's butt joint came out proportionally too wide and a
+    // copper plate's came out four times too wide.
+    float buttD = min(fract(sf), 1.0 - fract(sf)) * boardLen;
 
     float seam = lwDetailLine(seamD, B.y, aa.y);
     float butt = lwDetailLine(buttD, B.y * 0.55, aa.x);

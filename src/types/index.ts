@@ -286,8 +286,25 @@ export interface Settings {
   adaptiveResolution: boolean;
   targetFps: number;
   showHud: boolean;
-  /** Debug overlays. */
+  /** Debug overlays, and the CPU-only counters (`upd:*`) that feed them. */
   debug: boolean;
+  /**
+   * Instrumentation that PERTURBS the frame it measures. Off by default and
+   * deliberately separate from `debug`, because it used to ride on it:
+   * `settings.debug` also armed a `readRenderTargetPixels` in AutoExposure and
+   * a `gl.finish()` between every sky pass. Measured in one page, `storm`:
+   *
+   * | | max frame | frames >100 ms per 400 |
+   * |---|---|---|
+   * | `debug: false` | 82-89 ms | **0** |
+   * | `debug: true` (old behaviour) | 281-309 ms | 7-8 |
+   *
+   * That is the whole of the "shared 50-155 ms stall across ocean/vfx/sky/
+   * weather" recorded in DIAGNOSIS §16 — one instrument, not four bugs. Turn
+   * this on only to read an exact GPU-side value, and never believe a frame
+   * percentile taken while it is on. Optional so an older persisted blob loads.
+   */
+  debugStalls?: boolean;
   /**
    * How much of the ship the player is asked to run.
    *

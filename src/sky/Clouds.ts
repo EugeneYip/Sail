@@ -161,7 +161,9 @@ export class Clouds {
 
   /** CPU-side field advection. Runs in the module update, before the camera moves. */
   update(world: World): void {
-    this.timing = world.settings.debug;
+    // `debugStalls`, not `debug`: `end()` calls gl.finish(), which serialises
+    // the pipeline and is why the cloud passes appeared to spike under load.
+    this.timing = world.settings.debugStalls === true;
     this.field.update(world.env, world.origin, world.time.dt);
     const p = world.camera.position;
     const cx = Math.round(p.x / SHADOW_TEXEL_M) * SHADOW_TEXEL_M;

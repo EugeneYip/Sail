@@ -85,7 +85,12 @@ export class Rig {
     // is a hard cap on concurrency: too few and wanted events are dropped, never
     // clipped. `impacts` is the shared one — sea slams, spray, thunder, whales.
     const impacts = new NoisePool(nodes, n(10), buffers.dark, buffers.white, b.sea.in, false, 20);
-    const wood = new NoisePool(nodes, n(12), buffers.dark, buffers.white, b.ship.in, true, 11);
+    // refDistance 24 m, not 11: these are creaks, footsteps and drips on a 53 m
+    // hull, and the DEFAULT camera sits 74 m away. At 11 m the inverse-distance
+    // law put the whole family 11.5 dB down before the bus trim, which measured
+    // 40 dB under the sea — not subordinate, absent. 24 m is the scale of the
+    // thing making the sound.
+    const wood = new NoisePool(nodes, n(12), buffers.dark, buffers.white, b.ship.in, true, 24);
     const canvas = new NoisePool(nodes, n(8), buffers.dark, buffers.white, b.ship.in, false, 26);
     const tones = new TonePool(nodes, n(6), buffers.white, b.wildlife.in);
 

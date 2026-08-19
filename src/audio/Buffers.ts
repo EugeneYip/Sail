@@ -91,11 +91,17 @@ function normalise(dst: Float32Array, targetPeak: number): void {
   for (let i = 0; i < dst.length; i++) dst[i] *= k;
 }
 
-function normaliseRms(dst: Float32Array, targetRms: number): void {
+/**
+ * Scale so that sqrt(sum x^2) == `targetGain`.
+ *
+ * For an impulse response that sum IS the RMS gain the convolver will apply to a
+ * broadband signal, so normalising the energy is the only normalisation that
+ * makes a wet-send gain mean anything. See `IrSpec.gain`.
+ */
+function normaliseEnergy(dst: Float32Array, targetGain: number): void {
   let sum = 0;
   for (let i = 0; i < dst.length; i++) sum += dst[i] * dst[i];
-  const rms = Math.sqrt(sum / dst.length) || 1e-9;
-  const k = targetRms / rms;
+  const k = targetGain / (Math.sqrt(sum) || 1e-9);
   for (let i = 0; i < dst.length; i++) dst[i] *= k;
 }
 
@@ -115,8 +121,20 @@ export interface IrSpec {
   reflections?: readonly (readonly [number, number])[];
   /** Diffuse-field build-up time constant, seconds. */
   buildup?: number;
-  /** Target RMS. The wet send gains assume ~0.03. */
-  rms: number;
+  /**
+   * The RMS gain the convolver applies to a broadband signal — sqrt(sum h^2).
+   * 1 is power-neutral, which is what all four spaces use: the send gain and the
+   * wet gain in `Buses.ts` are then the ONLY level controls, and they mean what
+   * they say.
+   *
+   * This used to be a target RMS, which is a different quantity by a factor of
+   * sqrt(length x sampleRate). Measured consequences: the 3.6 s music wash
+   * returned x18.7 (+25.4 dB) at 48 kHz and the 0.34 s sea haze x2.55 (+8.1 dB),
+   * so "a 0.55 send into a 0.9 wet" was really nine times the dry signal — and
+   * every number was 3 dB lower at the probe's 24 kHz than in the game's 48 kHz,
+   * so the offline suite could not see it.
+   */
+  gain: number;
   /** Extra inter-channel time offset, seconds. */
   width: number;
 }
@@ -166,7 +184,7 @@ function makeIr(ctx: BaseAudioContext, spec: IrSpec, seed: number): AudioBuffer 
         d[start + i] += (rng() * 2 - 1) * rg * e;
       }
     }
-    normaliseRms(d, spec.rms);
+    normaliseEnergy(d, spec.gain);
   }
   return buf;
 }
@@ -178,7 +196,7 @@ const IR_SEA: IrSpec = {
   tailMid: 0.055,
   tailHigh: 0.02,
   predelay: 0.006,
-  rms: 0.02,
+  gain: 1,
   width: 0.0021,
   buildup: 0.01,
 };
@@ -197,7 +215,7 @@ const IR_DECK: IrSpec = {
     [0.0241, 0.22],
     [0.0342, 0.16],
   ],
-  rms: 0.05,
+  gain: 1,
   width: 0.0009,
   buildup: 0.006,
 };
@@ -216,7 +234,7 @@ const IR_CLIFF: IrSpec = {
     [0.641, 0.2],
     [0.95, 0.14],
   ],
-  rms: 0.03,
+  gain: 1,
   width: 0.0072,
   buildup: 0.12,
 };
@@ -228,7 +246,7 @@ const IR_MUSIC: IrSpec = {
   tailMid: 0.85,
   tailHigh: 0.22,
   predelay: 0.03,
-  rms: 0.045,
+  gain: 1,
   width: 0.011,
   buildup: 0.09,
 };

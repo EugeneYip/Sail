@@ -275,6 +275,7 @@ ${GLSL.fog}
 ${SHARED_UNIFORM_DECL}
 uniform sampler2D tDroplet;
 uniform sampler2D tMist;
+uniform sampler2D tFleck;
 uniform sampler2D tSmoke;
 uniform float uSoftY;
 uniform float uOpacity;
@@ -301,14 +302,21 @@ void main(){
   // the mist path.
   bool hard = kind < 0.5 || (kind > 3.5 && kind < 4.5) || (kind > 5.5 && kind < 7.5);
   bool smoke = kind > 7.5;
+  // FLECK is a raft of foam lying on the surface, not a drop in flight. It used
+  // to draw with the droplet sprite — a shaded sphere — so every fleck of
+  // surface foam was a round white ball with a bright rim, and a crest's worth
+  // of them was a row of cotton tufts. It gets its own flat, jagged, cellular
+  // sprite.
+  bool fleck = kind > 3.5 && kind < 4.5;
   vec4 tx = smoke ? texture2D(tSmoke, vUv)
+                  : fleck ? texture2D(tFleck, vUv)
                   : (hard ? texture2D(tDroplet, vUv) : texture2D(tMist, vUv));
   float cover = tx.a;
   if (cover < 0.004) discard;
 
-  float thick = (hard && !smoke) ? tx.r : tx.b;
-  float rim = hard ? tx.g : 0.0;
-  float pip = hard ? tx.b : 0.0;
+  float thick = (hard && !smoke && !fleck) ? tx.r : tx.b;
+  float rim = (hard && !fleck) ? tx.g : 0.0;
+  float pip = (hard && !fleck) ? tx.b : 0.0;
 
   // RADIOMETRY (see the units contract in src/sky/constants.ts).
   // uSunIntensity / uMoonIntensity are IRRADIANCE and owe the material a 1/PI;
@@ -378,8 +386,10 @@ void main(){
     col += sun * pip * 0.85;
     // A foam fleck is a raft of aerated water lying on the surface, not a drop in
     // flight: it is diffuse, and its albedo is the sea-foam albedo the ocean
-    // surface uses (0.38), not a droplet's near-unit scattering.
-    if (kind > 3.5 && kind < 4.5) col = 0.38 * (sky + sun * 0.9);
+    // surface uses (0.38), not a droplet's near-unit scattering. The bubble
+    // channel varies the interior — a raft is not one flat tone, and a flat tone
+    // is what made these read as paint however good the outline was.
+    if (fleck) col = 0.38 * (0.72 + 0.52 * tx.r) * (sky + sun * 0.9);
     col += moon * 0.25;
   } else {
     // Mist / torn sheet: an optically thin scattering slab.

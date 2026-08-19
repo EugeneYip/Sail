@@ -130,6 +130,16 @@ export class Ship implements Module {
           fibrePitch: 0.0022, fibreRelief: 0.00012, fibreAlbedo: 0.05, fibreRough: 0.1,
           // Planishing: the overlapping hammer dishes left in a beaten sheet.
           figurePitch: 0.03, figureAlbedo: 0.06, figureRelief: 0.0008, figureRough: 0.13,
+          // PLATE SEAMS. A sheet of sheathing is 4 ft by 14 in, tacked on with
+          // its edges lapped, and the lap is the only hard line on a coppered
+          // bottom — the thing that says "plated" rather than "painted brown".
+          // The baked map fades one in over 32 mm so it survives minification;
+          // the crisp 2 mm core is here, where it can be one antialiased pixel
+          // at eighty metres and a real edge at two. `plankPitch` and
+          // `boardLen` are the plate's own dimensions, and they line up with
+          // the 4-across, 3-along layout `makeCopper` bakes.
+          plankPitch: 0.32, boardLen: 1.07, boardJitter: 0.0,
+          seamWidth: 0.002, seamDark: 0.34, plankTone: 0.055, plankRough: 0.06,
         },
       },
       'copper',
@@ -143,6 +153,7 @@ export class Ship implements Module {
         detail: {
           ringPitch: 0.011, ringAlbedo: 0.055, ringRelief: 0.00022, ringRough: 0.11,
           plankPitch: 0.32, seamWidth: 0.0035, seamDark: 0.45, plankTone: 0.035,
+          boardLen: 8.4, boardJitter: 3.0,
           fibrePitch: 0.0019, fibreRelief: 0.00009, fibreAlbedo: 0.05,
           fibreRough: 0.06, plankRough: 0.035,
           figurePitch: 0.05, figureAlbedo: 0.06, figureRelief: 0.0009, figureRough: 0.1,
@@ -157,6 +168,7 @@ export class Ship implements Module {
         detail: {
           ringPitch: 0.011, ringAlbedo: 0.05, ringRelief: 0.0002, ringRough: 0.1,
           plankPitch: 0.32, seamWidth: 0.0035, seamDark: 0.4, plankTone: 0.03,
+          boardLen: 8.4, boardJitter: 3.0,
           fibrePitch: 0.0019, fibreRelief: 0.00008, fibreAlbedo: 0.045,
           fibreRough: 0.06, plankRough: 0.03,
           figurePitch: 0.05, figureAlbedo: 0.055, figureRelief: 0.00085, figureRough: 0.095,
@@ -188,6 +200,8 @@ export class Ship implements Module {
         detail: {
           ringPitch: 0.0095, ringAlbedo: 0.135, ringRelief: 0.00055, ringRough: 0.2,
           plankPitch: 0.32, seamWidth: 0.0032, seamDark: 0.82, plankTone: 0.12,
+          // Deck boards run six to eight metres between butts.
+          boardLen: 6.1, boardJitter: 2.0,
           fibrePitch: 0.0015, fibreRelief: 0.00016, fibreAlbedo: 0.075, wear: 0.16,
           fibreRough: 0.11, plankRough: 0.11,
           // The tier that actually carries the deck at the two metres the helm

@@ -119,6 +119,34 @@ export function disposeTextures(): void {
 const PLANKS_PER_TILE = 4;
 
 /**
+ * THE UV CONTRACT. One tile of any plank map covers this many metres of
+ * surface, (along the plank run, across it).
+ *
+ * This constant is load-bearing in three places and it used to be written out
+ * by hand in all three, which is how they came to disagree:
+ *
+ *   - the builders divide real distances by it to emit UVs (`MeshBuilder.uvTile`);
+ *   - `makeShipMaterial` multiplies UVs back by it to recover METRES, which is
+ *     the only frame in which `shaders/detail.ts` can hold a 9.5 mm growth ring
+ *     or a 3 mm caulk seam at a fixed physical size;
+ *   - `PLANKS_PER_TILE` above divides `TILE_ACROSS` into planks, so the baked
+ *     seam and the shader's crisp caulk core have to land at the same pitch or
+ *     they draw two sets of seams a few centimetres apart.
+ *
+ * Measured before it was centralised (`.tmp/uvscale.mjs`, area-weighted ratio of
+ * metres-per-UV to this tile, 1.00 = exact): deck 1.00/2.08, oak 0.51/1.21,
+ * iron 0.30/0.71, brass 0.35/0.76. Every primitive in `Builder.ts` emitted raw
+ * METRES and several `grid` call sites emitted raw grid INDEX, so 1444 m2 of the
+ * ship — including every spar and all the deck furniture the helm camera is two
+ * metres from — was drawing its grain 3.2x too fine along and 1.28x too fine
+ * across, which put it below the antialiasing fade and erased it.
+ */
+export const TILE_ALONG = 3.2;
+export const TILE_ACROSS = 1.28;
+/** Deck/hull plank pitch implied by the tile. 280 mm — eleven inches. */
+export const PLANK_PITCH_M = TILE_ACROSS / PLANKS_PER_TILE;
+
+/**
  * Texels a cycle must occupy for the map to actually carry it.
  *
  * A lattice period of P puts one cycle in `size / P` texels. Below about four,

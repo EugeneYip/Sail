@@ -14,6 +14,18 @@
   --ink-5: rgba(255, 255, 255, 0.2);
   --ink-6: rgba(255, 255, 255, 0.11);
 
+  /* The 9 px caps get their own level, and it is a role rather than a rung on
+     the ladder — because the ladder is about presence and this is about a mark
+     landing on the wrong side of the sea.
+     `.tmp/uifoam.mjs` masks each mark exactly and reads the ground from the
+     pixels the glyph actually covers. At 0.46 the labels measured sRGB 117-138
+     against a real noon sea of 85-163: they sat INSIDE the sea's own range, so
+     they lost at both ends at once — 2.1:1 against mid water, 4.3:1 against a
+     night sea, and 1.0:1 against foam. A mark has to span its ground, not share
+     it. 0.7 puts the caps at 179 with the contour holding the dark end, which is
+     a 4-stop span either way and reads on all three. */
+  --ink-l: rgba(255, 255, 255, 0.7);
+
   /* Warm accent, used only for wind and for trouble. Never saturated. */
   --warm: rgba(233, 180, 119, 0.9);
   --warm-2: rgba(233, 180, 119, 0.5);
@@ -58,34 +70,78 @@
    *     no longer asked to be one.
    */
 
-  /* Doubling the 1 px shadow is deliberate: stacking two identical blurs
-     squares the transmittance, which is how you get a solid ring out of a
-     blur without widening it. Over a night sea near-black on near-black is
-     arithmetically a no-op, so this costs nothing where nothing is needed. */
+  /* Stacking identical blurs is the whole technique, and the arithmetic is why:
+     n layers of coverage c leave 1-(1-c)^n, so the ring DEEPENS without getting
+     any WIDER. The blur radius sets where the ring ends; the layer count sets
+     how dark it gets inside that radius. A wider blur is a cloud; more layers of
+     a tight blur is an outline.
+     What forced the layer count up: the ring was measuring sRGB 75-94 against a
+     pale-foam ground of 199 — a little over half coverage — because just outside
+     a 1 px stem a single 1 px blur only covers about a third of the pixel. Two
+     layers took that to 0.58 and no further. Five tight layers take it past 0.85,
+     which is the difference between 3.9:1 and something a player can read.
+     Over a night sea near-black on near-black is arithmetically a no-op, so all
+     of this costs nothing where nothing is needed. */
   --contour:
     0 0 1px rgba(var(--shade), 0.95),
+    0 0 1px rgba(var(--shade), 0.95),
     0 0 1px rgba(var(--shade), 0.9),
-    0 0 2.5px rgba(var(--shade), 0.75),
-    0 0 5px rgba(var(--shade), 0.4),
+    0 0 2.5px rgba(var(--shade), 0.85),
+    0 0 2.5px rgba(var(--shade), 0.65),
+    0 0 5px rgba(var(--shade), 0.42),
     0 1px 1.5px rgba(var(--shade), 0.55);
 
+  /* Tighter and denser still, for the 9 px micro-caps. These have 1 px stems and
+     counters barely 2 px across, so the radius must not grow — a 5 px skirt on a
+     9 px cap fills the bowl of an "e" and the word turns into a grey lozenge the
+     shape of itself. Six layers, none wider than 2 px, and the wide tail cut
+     right back. Checked by eye at 3x in `.tmp/uizoom.mjs`, because no contrast
+     ratio can tell you that a counter has closed up. */
+  --contour-sm:
+    0 0 1px rgba(var(--shade), 0.95),
+    0 0 1px rgba(var(--shade), 0.95),
+    0 0 1px rgba(var(--shade), 0.95),
+    0 0 2px rgba(var(--shade), 0.9),
+    0 0 2px rgba(var(--shade), 0.7),
+    0 0 3.5px rgba(var(--shade), 0.4),
+    0 1px 1.5px rgba(var(--shade), 0.5);
+
   /* The same idea proportioned for the 34-40 px numeral. A contour has to
-     scale with its type or it stops being a contour and becomes a cloud. */
+     scale with its type or it stops being a contour and becomes a cloud — so the
+     tight layers are stacked and the 15 px tail is left exactly where it was. */
   --contour-lg:
+    0 0 1.5px rgba(var(--shade), 0.92),
     0 0 1.5px rgba(var(--shade), 0.9),
-    0 0 3px rgba(var(--shade), 0.8),
+    0 0 3px rgba(var(--shade), 0.85),
+    0 0 3px rgba(var(--shade), 0.6),
     0 0 7px rgba(var(--shade), 0.45),
     0 0 15px rgba(var(--shade), 0.22),
     0 1px 2px rgba(var(--shade), 0.5);
 
+  /* A hairline has no interior to protect, so its ring is stacked harder still.
+     Blur only, never spread: a spread on a 1 px rule draws a little outlined box
+     around it, which is a lozenge again at 3 px across. */
+  --contour-rule:
+    0 0 1.5px rgba(var(--shade), 0.98),
+    0 0 1.5px rgba(var(--shade), 0.95),
+    0 0 1.5px rgba(var(--shade), 0.9),
+    0 0 3px rgba(var(--shade), 0.8),
+    0 0 3px rgba(var(--shade), 0.6),
+    0 0 7px rgba(var(--shade), 0.35);
+
   /* Scrim amplitudes and ramp lengths. Ramps are lengths, not percentages, so
      a short landscape phone does not compress the same drop into a third of
      the distance and turn a filter back into an edge. */
-  --scrim-top-a: 0.13;
+  /* Wound DOWN, not up. The contour now carries several stops more than it did,
+     so the scrim can give some back — and the slope measurement is the reason to
+     want to: `.tmp/uigrade.mjs scrim` had it at 5-6 levels per 32 px against a
+     threshold of 4, i.e. faintly visible as a soft-cornered plate rather than as
+     a filter. Legibility was never its job; being unnoticeable is. */
+  --scrim-top-a: 0.11;
   --scrim-top-d: 380px;
-  --scrim-bot-a: 0.12;
+  --scrim-bot-a: 0.1;
   --scrim-bot-d: 300px;
-  --scrim-corner-a: 0.17;
+  --scrim-corner-a: 0.14;
 }
 
 * {
@@ -167,6 +223,21 @@ body {
   font-size: 9px;
   letter-spacing: 0.11em;
   text-transform: uppercase;
+}
+
+/* Every 9 px cap in the interface gets the tight contour, in one place, so a new
+   label cannot be added without one. `.hud` sets the general contour and this
+   overrides it by being a direct declaration rather than an inherited value. */
+.stat-k,
+.ctl-k,
+.speed-u,
+.irons-tag,
+.mini-card,
+.mini-wind-l,
+.chip-l,
+.grp-t,
+.chart-cap {
+  text-shadow: var(--contour-sm);
 }
 
 /* Tabular figures everywhere a number changes, so digits never shift. */
@@ -459,7 +530,7 @@ body {
 }
 
 .speed-u {
-  color: var(--ink-3);
+  color: var(--ink-l);
   padding-bottom: 3px;
 }
 
@@ -522,8 +593,13 @@ body {
   color: var(--ink-1);
 }
 
+/* The cardinal and the wind label are the two smallest marks on the default
+   screen and were the two weakest measured. Hierarchy against the 40 px numeral
+   is carried by 4.4x of size, 500 vs 300 of weight and the caps — it does not
+   also need to be carried by four tenths of alpha, which was only ever costing
+   legibility. */
 .mini-card {
-  color: var(--ink-3);
+  color: var(--ink-l);
 }
 
 .mini-wind {
@@ -566,7 +642,7 @@ body {
 }
 
 .mini-wind-l {
-  color: var(--ink-3);
+  color: var(--ink-l);
 }
 
 /* The one thing the default screen ever nags about, and only in Pro physics
@@ -1139,15 +1215,56 @@ body {
  * without putting a shape on the screen.
  */
 .modesw-b {
+  position: relative;
   padding: 3px 0 4px;
   border: 0;
   background: none;
-  color: var(--ink-2);
+  color: var(--ink-l);
   cursor: pointer;
   line-height: 1;
   pointer-events: auto;
-  text-shadow: var(--contour);
+  text-shadow: var(--contour-sm);
   transition: color 0.25s;
+}
+
+/*
+ * Which of the two words is the live one, told with a mark instead of an alpha.
+ *
+ * Alpha alone cannot say it. Over a blown sky both words composite to nearly the
+ * same value — measured 227 and 227 against a white plate — because a glyph on a
+ * white ground is white whatever its alpha, and all that changes is how much of
+ * its own contour shows through. The selected state was therefore legible on a
+ * night sea and gone at noon, which is the one ground where a player most needs
+ * to know which mode they are in.
+ *
+ * A 1 px rule under the live word is ground-independent: it is a shape, so it
+ * survives any sky the contour survives. Absolutely positioned so switching
+ * cannot reflow the row, and `bottom` is respecified for the touch padding
+ * rather than being allowed to sit 15 px below the word on a phone.
+ */
+.modesw-b::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--ink-3);
+  box-shadow: var(--contour-rule);
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.ui.has-touch .modesw-b::after {
+  bottom: 11px;
+}
+
+.modesw-b[aria-checked='true']::after {
+  opacity: 1;
+}
+
+.ui.still .modesw-b::after {
+  transition-duration: 0.12s;
 }
 
 /* 9 px type gives a 50x16 px target, which is a miss on a phone. Grow the pad,
@@ -1167,15 +1284,15 @@ body {
   color: var(--ink);
 }
 
-/* Blur-only, for the same reason as the menu rules: a spread on a 1 px divider
-   turns a hairline into a little outlined box. */
+/* Was the numerically worst mark in the interface — 2.3:1 over foam, because a
+   1 px hairline at 0.32 alpha with a two-layer ring has almost nothing on either
+   side of the ground. It is only a separator between two words, but a mark that
+   disappears is a mark that should not have been drawn. */
 .modesw-d {
   width: 1px;
   height: 10px;
-  background: var(--ink-4);
-  box-shadow:
-    0 0 2px rgba(var(--shade), 0.9),
-    0 0 4px rgba(var(--shade), 0.6);
+  background: var(--ink-3);
+  box-shadow: var(--contour-rule);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1354,18 +1471,16 @@ body {
    parts dark to one part light, so at 3x the three hairlines had become three
    chunky outlined bars and the mark read as heavier than the type beside it. A
    number that good on a mark that wrong is the whole reason to keep looking at
-   the pixels. Dense blurs only: the rule stays a rule, and still separates.
-   `--ink-2` rather than `--ink` is the unobtrusive dial, now that container
+   the pixels. Dense blurs only: the rule stays a rule, and still separates. The
+   ring is `--contour-rule`, shared with the switch divider and stacked harder
+   than the type's, because a hairline has no interior to protect.
+   `--ink-l` rather than `--ink` is the unobtrusive dial, now that container
    opacity is no longer doing that job. */
 .menu span {
   display: block;
   height: 1px;
-  background: var(--ink-2);
-  box-shadow:
-    0 0 2px rgba(var(--shade), 0.98),
-    0 0 2px rgba(var(--shade), 0.9),
-    0 0 4px rgba(var(--shade), 0.7),
-    0 0 9px rgba(var(--shade), 0.4);
+  background: var(--ink-l);
+  box-shadow: var(--contour-rule);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
 }
 

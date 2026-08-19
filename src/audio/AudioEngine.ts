@@ -1,6 +1,6 @@
 import type { Module, QualityTier, World } from '../types';
 import { ClickWatcher, type WatchStats } from './ClickProbe';
-import { autoplayAllowed, onFirstGesture, schedule } from './Context';
+import { autoplayAllowed, LEAD_S, observeLead, onFirstGesture, schedule } from './Context';
 import type { ProbeOptions, ProbeResult } from './Probe';
 import { Rig } from './Rig';
 import { createSimView, SimTracker, type SimView } from './Sim';
@@ -56,10 +56,26 @@ export interface AudioExt {
   /** Read the detector. `reset` restarts the measurement window. */
   watched(reset?: boolean): Promise<WatchStats | null>;
   /**
-   * Events that had to be pushed forward because a caller left too little lead,
-   * and the worst such shortfall in seconds. Both must stay at zero / Infinity.
+   * The scheduling-lead invariant, both halves of it.
+   *
+   * `late` / `worstLeadS`: events the backstop had to push forward because a
+   * caller built a time without `eventTime()`. Must stay 0 / Infinity.
+   *
+   * `renderQuantumS` / `frameGapS` / `needLeadS` / `shortfall`: what the LIVE
+   * context turned out to require. `late` can only prove the code asked for
+   * `LEAD_S`; these prove `LEAD_S` was enough on the machine it ran on, which no
+   * offline render can. `shortfall` must stay 0.
    */
-  lateEvents(): { late: number; worstLeadS: number };
+  lateEvents(): {
+    late: number;
+    worstLeadS: number;
+    leadS: number;
+    renderQuantumS: number;
+    frameGapS: number;
+    needLeadS: number;
+    shortfall: number;
+    outputLatencyS: number;
+  };
 }
 
 export interface CensusResult {
@@ -98,6 +114,8 @@ export class AudioEngine implements Module {
   private suspendTimer = 0;
   private readonly detach: (() => void)[] = [];
   private warned = false;
+  /** Previous frame's `ctx.currentTime`, for the scheduling-lead observation. */
+  private lastCtxTime = 0;
   /** Only ever non-null while `scripts/audio-test.mjs` is measuring. */
   private watcher: ClickWatcher | null = null;
 
@@ -133,7 +151,11 @@ export class AudioEngine implements Module {
     if (rig && ctx) {
       if (ctx.state === 'running') {
         this.status = 'running';
-        rig.update(this.sim, ctx.currentTime);
+        const t = ctx.currentTime;
+        // Check LEAD_S against this device before using it, not after.
+        observeLead(ctx.baseLatency, this.lastCtxTime > 0 ? t - this.lastCtxTime : 0);
+        this.lastCtxTime = t;
+        rig.update(this.sim, t);
       } else if (this.status !== 'failed') {
         this.status = 'suspended';
       }
@@ -282,7 +304,16 @@ export class AudioEngine implements Module {
       },
       watch: (on: boolean) => self.watch(on),
       watched: async (reset?: boolean) => (await self.watcher?.stats(reset === true)) ?? null,
-      lateEvents: () => ({ late: schedule.late, worstLeadS: schedule.worstLeadS }),
+      lateEvents: () => ({
+        late: schedule.late,
+        worstLeadS: schedule.worstLeadS,
+        leadS: LEAD_S,
+        renderQuantumS: schedule.renderQuantumS,
+        frameGapS: schedule.frameGapS,
+        needLeadS: schedule.needLeadS,
+        shortfall: schedule.shortfall,
+        outputLatencyS: self.ctx?.outputLatency ?? 0,
+      }),
     };
   }
 
@@ -295,7 +326,9 @@ export class AudioEngine implements Module {
     if (this.watcher) return true;
     const ctx = this.ctx;
     if (!ctx || !this.rig || ctx.state !== 'running') return false;
-    this.watcher = await ClickWatcher.attach(ctx, this.rig.mixer.master);
+    // `out`, not `master`: the ceiling now sits after the fader, so tapping
+    // `master` would measure the mix before its last stage.
+    this.watcher = await ClickWatcher.attach(ctx, this.rig.mixer.out);
     return this.watcher !== null;
   }
 }

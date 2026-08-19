@@ -45,9 +45,12 @@ import {
  * `exposure` on this class is therefore a CPU **estimate**, derived from the sky
  * model, for the HUD, `world.uniforms.uExposure` and diagnostic probes. It
  * tracks the GPU value to within about a stop and nothing visual depends on it.
- * Under `settings.debug` it is reconciled against the real value every
- * `DEBUG_READBACK_INTERVAL` frames, which costs a stall and is why it is
- * debug-only.
+ * Under `settings.debugStalls` it is reconciled against the real value every
+ * `DEBUG_READBACK_INTERVAL` frames. That flag is deliberately NOT
+ * `settings.debug`: the reconcile is a synchronous readback costing 0.2 ms idle
+ * but **117-370 ms on a loaded box**, so while it rode on `debug` every
+ * profiling run measured the profiler. See the `debugStalls` comment in
+ * `src/types/index.ts` for the A/B.
  *
  * Adaptation is asymmetric and *compressive*. Full compensation would map a
  * moonlit sea to the same middle grey as noon, which is exactly the "night is
@@ -189,7 +192,7 @@ export class AutoExposure {
     }
 
     this.adapt(world, result);
-    if (s.debug) this.reconcile(r);
+    if (s.debugStalls) this.reconcile(r);
   }
 
   /** One fragment: fold this frame's measurement into the GPU-side state. */
@@ -287,8 +290,8 @@ export class AutoExposure {
   /**
    * Debug only. Pulls the real GPU state back so probes and DIAGNOSIS see the
    * value that is actually on screen rather than the sky-model estimate. This
-   * is a full pipeline + IPC stall — 0.2 ms idle, 117 ms on a loaded box — so
-   * it is rate limited and never runs outside `settings.debug`.
+   * is a full pipeline + IPC stall — 0.2 ms idle, 117-370 ms on a loaded box —
+   * so it is rate limited and never runs outside `settings.debugStalls`.
    */
   private reconcile(r: THREE.WebGLRenderer): void {
     if (--this.debugCountdown > 0 || !this.state) return;

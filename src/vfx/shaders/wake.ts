@@ -293,10 +293,17 @@ void main(){
   // arms are a row of separate crescents about 0.70 * V^2 metres apart, not a
   // painted line. That periodicity is the single strongest "this is a real ship
   // wake" cue in the whole effect.
-  // The 0.06 floor matters: at the old 0.35 the crescents never went out, so the
-  // arm was a CONTINUOUS band of foam ruled hundreds of metres across the sea.
+  // ANY FLOOR HERE IS A DARK LINE. The previous 0.35 floor made the arm one
+  // continuous band ruled hundreds of metres across the sea; dropping it to 0.06
+  // was not enough, because the consumer composites foam partly by suppressing
+  // the water's specular, so 0.06 is still bright enough to kill the reflection
+  // and not bright enough to be white — which at golden hour and at night is a
+  // thin dark line at exactly the Kelvin half-angle (DIAGNOSIS 8.5 / 17). The
+  // floor is now exactly zero and the crescents are made WIDER instead
+  // (exponent 2.4 -> 1.5), so the arm still reads as continuous where it is
+  // bright without ever leaving a sub-visible residue where it is not.
   float armPhase = 0.9186 * k0 * xi;
-  float crescent = 0.06 + 0.94 * pow(saturate1(cos(armPhase) * 0.5 + 0.5), 2.4);
+  float crescent = pow(saturate1(cos(armPhase) * 0.5 + 0.5), 1.5);
   // TERMINATE THE ARM. DO NOT REPLACE THIS WITH AN EXPONENTIAL.
   //
   // 'cuspBand' is a narrow ridge, so wherever the arm's amplitude crosses the

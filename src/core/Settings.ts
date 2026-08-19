@@ -33,6 +33,9 @@ export function defaultSettings(): Settings {
     targetFps: 60,
     showHud: true,
     debug: false,
+    // Separate from `debug` on purpose — see the field comment in types. The
+    // readback and the finish() calls this arms cost 117-370 ms on a loaded box.
+    debugStalls: false,
     // Playability first: the default ship is the assisted one. Physics owns
     // this flag — see `src/physics/Assist.ts` and the note in `Settings`.
     assist: true,

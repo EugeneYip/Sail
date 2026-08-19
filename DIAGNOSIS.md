@@ -633,3 +633,107 @@ This does not invalidate the *observations* made from those crops — the pixels
 real pixels from a real frame, including the flat grey slab off the bow (§17 defect
 A). It does invalidate the **coordinates**: the region examined was not the region
 requested. Re-crop before trusting any position stated in §17.
+
+## 23. Camera: why dragging felt broken (2026-08-19, measured)
+
+The owner reported that dragging to look around went the wrong way and that the
+angle lock was pointless. **Two independent bugs, plus a third found while fixing
+them.**
+
+### A. The recentre was eating held drags — this is the whole "feels wrong"
+
+The chase recentre armed off *"no look **delta** for four seconds"*. A pointer that
+is **held but motionless** produces no delta, so a player who drags round to the
+bow and then holds still to watch it was indistinguishable from one who had let go.
+Measured: **0.741 rad of deliberate look decayed to 0.005 rad — 99.3% removed with
+the button still down.**
+
+Fixed with a grip flag (`pointerLooking` tracks pointer *down*, not motion), stall
+immunity (`STALL_RAW_DT = 0.25 s`: a frame longer than that taught us nothing about
+the player, so the idle timer neither advances nor resets across it), and two soft
+gates instead of a switch. Measured 5/5, including the two that prove the recentre
+is still alive: it still pulls back 0.420 -> 0.004 rad over 11 s of genuine idle,
+and a player parked on the bow stays parked at -3.14 rad.
+
+### B. The inversion was ONE axis plus four modes reading the wrong vector
+
+`src/input/Input.ts:71-72` accumulates **both** axes as `-= movement`. Yaw needs the
+flip; pitch does not, because screen Y grows downward. On top of that, four modes
+derived their pose from the **eye** rather than the view direction. Signs are now
+normalised once in `readPlayerInput`, and no mode reads `world.input.look*` directly.
+
+Measured view rotation per 300 px (= 0.840 rad demanded), **24/24 for the six
+player modes**: chase +0.861/-0.862/+0.754/-0.661, helm, bowsprit, masthead, orbit,
+free all correctly signed on both axes.
+
+**FOLLOW-UP for whoever next owns `src/input/Input.ts`** (the camera agent
+deliberately did not reach in):
+1. The real yaw fix is **one character on line 71: `-=` -> `+=`**. Then set
+   `INPUT_LOOK_YAW_SIGN = +1` in the camera and change nothing else. Behaviour is
+   already correct today via compensation; this only removes the double negation.
+2. Publish `s.looking = this.dragging;` plus the field on `InputState`. The rig
+   currently duplicates that listener, and it is only leak-free because `Input.ts`
+   calls `setPointerCapture` on the same element, which retargets an off-canvas
+   `pointerup`. **If that capture call ever leaves `Input.ts`, a drag released
+   off-canvas latches the flag and permanently disables the recentre.**
+
+`cinematic` is an honest exception: its own within-shot dolly contributes +0.77 rad
+common-mode against a 0.5 rad pan allowance, so no single-window band can separate
+drag from director. Its *differential* measured +0.554 on an expected 0.500,
+correctly signed.
+
+### C. Yaw locks removed, and one of them was documented falsely
+
+Yaw is now **+/-pi, wrapped rather than clamped** in chase, helm, bowsprit, masthead
+and orbit (free is unclamped). The old locks were 60 deg chase, 150 deg helm,
+140 deg bowsprit. Measured 7.83-8.27 rad reachable against 7.84 demanded, 5/5.
+
+The bowsprit limit was documented as "you can look right forward" and **was not
+true**: its composed axis is 172 deg from the bow, so 140 deg left the view 32 deg
+shy of dead ahead. Pitch keeps only physical limits, derived from a single shared
+`MAX_AXIS_ELEVATION = 1.45 rad` where a world-up `lookAt` basis degenerates.
+
+### D. Composition — and a coincidence worth naming
+
+Two causes. The lateral offset was specified as a fraction of follow distance, but
+chase changes FOV with speed and those agree at only one FOV. And both offset terms
+were signed by heel and rudder, so on a steady upright reach they were near zero and
+the hull settled **dead centre** (measured NDC -0.10, an outright rubric failure).
+Now specified in NDC with `MIN_SHIP_NDC = 0.19`, so heel and rudder *modulate* the
+offset rather than create it.
+
+Separately, `LOOK_HEIGHT_PER_M` had put the mainmast truck **eight pixels** from the
+top of a 900-line frame. Eight pixels is not a crop, it is a coincidence.
+
+Then the bow screenshot exposed a further defect: at half a turn the composition
+offsets were rotating **rigidly** with the look yaw into a shot they were never
+written for, crushing the ship against the left edge with the jibboom clipped.
+Leading room exists to hold the water she is sailing *into*; at half a turn that
+water is behind the lens. Both framing offsets now fade over the first quarter turn
+(`FRAMING_FADE_FROM/FULL = 0.45/1.6`, 0.35 residual). The orbit itself does not
+fade — only the composition rules — and at `lookYaw = 0` the factor is exactly 1,
+so existing captures are arithmetically unchanged.
+
+### UNVERIFIED, and one instrument error to distrust
+
+Three changes made after the last full probe run are typechecked but **not
+measured**: the framing fade above, a cinematic accumulator/differential split, and
+a switch from bounding-box corners to subsampled real vertices for framing
+measurement.
+
+**Distrust the reading "ndc x -4.506" from the earlier run.** `ship-oak` is a merged
+batch whose bounding-box corner sits beside and just ahead of the lens, where a tiny
+depth yields a colossal NDC. The clipping it flagged was real but nowhere near that
+severe.
+
+### A real limitation, stated plainly
+
+Because the idle timer freezes on any frame over 0.25 s wall-clock, on a machine
+loaded enough that *most* frames exceed that, **the recentre effectively never
+arms**. It fails in the safe direction — a machine that cannot render cannot tell
+you the player let go — but its timing is machine-dependent and that is not
+finished. Evidence: an injected 3 s stall reported a longest frame of 6.02 s.
+
+To finish: run `node .tmp/camdrag.mjs` on a quiet machine (should read 49/49 or
+name what is left), then a capture, then re-read `shots/cam-bow-chase.png` to
+confirm the head rig is inside the frame.

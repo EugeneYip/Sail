@@ -172,7 +172,7 @@ void main() {
  *
  * One fragment per frame, so it is free. The CPU keeps only an ESTIMATE of the
  * exposure, from the sky model, for the HUD and for probes; the GPU value is
- * authoritative and the two are reconciled only under 'settings.debug'.
+ * authoritative and the two are reconciled only under 'settings.debugStalls'.
  */
 export const EXPOSURE_ADAPT_FRAG = /* glsl */ `
 precision highp float;

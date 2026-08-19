@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import { TILE_ACROSS, TILE_ALONG } from '../materials/textures';
 import { MeshBuilder } from './Builder';
 import type { Bins } from './hull';
 import {
@@ -200,7 +201,7 @@ function buildMast(bins: Bins, f: MastFrame, quality: number): void {
   const tp = f.tg(s.truck);
   oak.setColorHexLinear(0xffffff, 0.9);
   oak.pushTransform(new THREE.Matrix4().makeTranslation(tp.x, tp.y, tp.z));
-  oak.revolve([[0, 0], [0.2, 0.02], [0.22, 0.1], [0.16, 0.16], [0, 0.18]], 10, 3);
+  oak.revolve([[0, 0], [0.2, 0.02], [0.22, 0.1], [0.16, 0.16], [0, 0.18]], 10);
   oak.popTransform();
 
   // Iron hoops down the lower mast and the topmast.
@@ -211,7 +212,7 @@ function buildMast(bins: Bins, f: MastFrame, quality: number): void {
       const p = fn(y);
       const rr = r * (1 - 0.32 * ((y - y0) / (y1 - y0)));
       ir.pushTransform(new THREE.Matrix4().makeTranslation(p.x, p.y, p.z));
-      ir.revolve([[rr * 1.09, -0.075], [rr * 1.12, 0], [rr * 1.09, 0.075]], 10, 3);
+      ir.revolve([[rr * 1.09, -0.075], [rr * 1.12, 0], [rr * 1.09, 0.075]], 10);
       ir.popTransform();
     }
   };
@@ -235,7 +236,7 @@ function sparSection(
     path.push(axis(y0 + (y1 - y0) * s));
     radii.push(r0 + (r1 - r0) * s);
   }
-  b.tube(path, radii, radial, true, 0.32);
+  b.tube(path, radii, radial, true);
 }
 
 /**
@@ -277,7 +278,7 @@ function buildTop(bins: Bins, f: MastFrame, quality: number): void {
       (i, j) => {
         const v = j / (NV - 1);
         const fx = (i / (NU - 1)) * 2 - 1;
-        return [(zFwd + v * (zAft - zFwd)) / 3.2, (fx * hwAt(v)) / 1.12];
+        return [(zFwd + v * (zAft - zFwd)) / TILE_ALONG, (fx * hwAt(v)) / TILE_ACROSS];
       },
       {
         // cross(d/di, d/dj) on this grid points down, so the walked-on floor
@@ -466,7 +467,7 @@ function buildBowsprit(bins: Bins, yards: YardFrame[], quality: number): RigFram
       new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir),
       new THREE.Vector3(1, 1, 1),
     ));
-    bins.iron.revolve([[0.52, -0.06], [0.55, 0], [0.52, 0.06]], 10, 3);
+    bins.iron.revolve([[0.52, -0.06], [0.55, 0], [0.52, 0.06]], 10);
     bins.iron.popTransform();
   }
 
@@ -523,7 +524,7 @@ function buildMastCoats(bins: Bins, masts: MastFrame[]): void {
         [m.spec.lowerRadius * 1.55, -0.24], [m.spec.lowerRadius * 1.5, 0.0],
         [m.spec.lowerRadius * 1.28, 0.22], [m.spec.lowerRadius * 1.1, 0.34],
       ],
-      12, 2,
+      12,
     );
     bins.black.popTransform();
   }

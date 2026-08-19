@@ -79,6 +79,19 @@ uniform vec3 uSailD[SAIL_N];
 uniform vec4 uSailState[SAIL_N];
 // animated-part slot, fore-and-aft flag, roach in metres, phase seed
 uniform vec4 uSailInfo[SAIL_N];
+/**
+ * 0 = drawing or merely slack, 1 = fully ABACK — the wind on the forward face,
+ * pressing the cloth back onto the mast and the standing rigging.
+ *
+ * THIS IS A HOOK AND IT IS CURRENTLY ALL ZEROS. 'SailState' in
+ * 'src/types/index.ts' has no aback field yet (see the note in 'build/sails.ts'
+ * where this array is filled), so every term below that multiplies by 'abk'
+ * multiplies by exactly 0.0 and the drawing and shivering shapes are
+ * bit-identical to what they were before the hook existed. Nothing needs
+ * editing when physics lands the field: the read is defensive, so the cloth
+ * starts rendering aback on the next frame.
+ */
+uniform float uSailAback[SAIL_N];
 uniform vec2 uSailStep;
 uniform float uSailTime;
 
@@ -106,6 +119,7 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
   float fa    = nf.y;
   float roach = nf.z;
   float seed  = nf.w;
+  float abk   = clamp(uSailAback[si], 0.0, 1.0);
 
   float u = clamp(uv.x, 0.0, 1.0);
   float v = clamp(uv.y, 0.0, 1.0);
@@ -158,16 +172,43 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
   float draft = camb * chordLen * ${lwFloat(CAMBER_GAIN)} * chordProf * spanProf;
   // The free leech curls instead of being pinned flat by the profile.
   draft += camb * chordLen * 0.05 * pow(cl, 3.0) * spanProf;
+  // ABACK collapses the aerofoil. A membrane pressed on its forward face cannot
+  // hold a draft at all — it goes to a shallow REVERSED dish, which is why the
+  // factor is negative as well as small.
+  draft *= mix(1.0, -0.30, abk);
   P += nrm * draft;
 
   // Shivering: folds run aft from the luff, and the cloth stops carrying load.
+  //
+  // An aback sail is the opposite of a shivering one and this is the whole
+  // point of separating the two states: slack cloth FLOGS, loudly and with big
+  // travelling folds, while aback cloth is pressed hard against mast and
+  // rigging and goes QUIET and taut. So aback subtracts the shake rather than
+  // adding to it, and it does not let the foot drop either.
+  float quiet = 1.0 - 0.88 * abk;
   float ph1 = cl * ${lwFloat(FOLD_CYCLES)} * 6.2831853 - uSailTime * 5.4 + seed * 6.2831853;
   float ph2 = cl * ${lwFloat(FOLD_CYCLES_FINE)} * 6.2831853 - uSailTime * 9.1
             + seed * 2.7 + sDraw * 2.4;
   float grow = smoothstep(0.0, 0.22, cl) * spanProf;
   float shake = sin(ph1) * 0.68 + sin(ph2) * 0.32 * smoothstep(0.3, 0.9, cl);
-  P += nrm * shake * grow * luffv * chordLen * 0.085;
-  P.y -= luffv * spanLen * 0.06 * grow;
+  P += nrm * shake * grow * luffv * chordLen * 0.085 * quiet;
+  P.y -= luffv * spanLen * 0.06 * grow * quiet;
+
+  // What replaces the belly when the sail is aback: the mast and the standing
+  // rigging printing through the cloth from behind.
+  //
+  // A square sail taken aback wraps the lower mast, so it is held FORWARD on
+  // the centreline of its yard and bags aft in two lobes either side. A
+  // fore-and-aft sail has its own stay doing the same thing at the luff. Two
+  // half-sine lobes about p = 0.5 give that in closed form, and because the
+  // relief is a shape rather than a wobble it holds still — which is the cue
+  // that says "pinned" rather than "flogging".
+  float lobe = sin(PI * fract(p * 2.0)) * (1.0 - fa) + sin(PI * p) * fa;
+  P -= nrm * abk * chordLen * 0.055 * lobe * spanProf;
+  // Hard creases radiating from the contact, unlike the soft travelling folds
+  // of a shiver: the cloth is stretched over an edge, so it kinks.
+  float kink = 1.0 - smoothstep(0.0, 0.10, abs(fract(p * 2.0 + 0.5) - 0.5) * 2.0);
+  P += nrm * abk * chordLen * 0.022 * kink * spanProf * (1.0 - fa);
 
   // A full sail still breathes.
   P += nrm * sin(cl * 7.5 + uSailTime * 1.7 + seed * 5.1)
@@ -200,9 +241,9 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
  * Vertex body. Evaluates the sail three times for an exact normal, then pushes
  * position and normal through the animated-part transform so a braced yard
  * carries its sail round and a sheeted jib swings about its own stay.
- * Requires the varyings 'vSail' / 'vCloth' / 'vSailWP' / 'vSailTan' and the
- * locals 'vPosL' / 'vNormalL' / 'vSailUv' to be declared, and 'shipPart' from
- * PARTS_DECL.
+ * Requires the varyings 'vSail' / 'vCloth' / 'vSailWP' / 'vSailTan' / 'vAback'
+ * and the locals 'vPosL' / 'vNormalL' / 'vSailUv' to be declared, and
+ * 'shipPart' from PARTS_DECL.
  */
 export const SAIL_VERT_BODY = /* glsl */ `
   int lwSi = int(iSail + 0.5);
@@ -232,6 +273,7 @@ export const SAIL_VERT_BODY = /* glsl */ `
   // fragment shader draws tension creases at all.
   vCloth = vec4(lwMet.z, lwMet.w, uSailInfo[lwSi].y, abs(uSailState[lwSi].z));
   vSailWP = (modelMatrix * vec4(vPosL, 1.0)).xyz;
+  vAback = uSailAback[lwSi];
   // World-space chord tangent, for perturbing the normal with creases. The
   // difference is taken in the same direction the normal was, so it stays
   // consistent at the leech and foot where lwSailPoint's clamp reverses the

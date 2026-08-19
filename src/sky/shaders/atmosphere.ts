@@ -4,6 +4,8 @@ import {
   ATMOSPHERE_TOP_KM,
   GROUND_ALBEDO,
   GROUND_RADIUS_KM,
+  HAZE_CULL_TAU,
+  HAZE_SCALE_HEIGHT_M,
   MIE_ABSORPTION,
   MIE_ANISOTROPY,
   MIE_SCALE_HEIGHT_KM,
@@ -50,6 +52,22 @@ const vec2 MULTISCATTER_RES  = vec2(${f(MULTISCATTER_SIZE)}, ${f(MULTISCATTER_SI
 const vec2 SKYVIEW_RES       = vec2(${f(SKYVIEW_W)}, ${f(SKYVIEW_H)});
 const float AERIAL_SLICES    = ${f(AERIAL_SLICES)};
 const float AERIAL_MAX_KM    = ${f(AERIAL_MAX_KM)};
+
+/*
+ * Weather haze. Declared HERE rather than in the sky shader because the cloud
+ * march needs the same value: a ray whose haze column has already erased the
+ * deck is a ray not worth marching, and the two must agree or the march would
+ * cull cloud the sky still shows. Extinction in EXCESS of clear air, 1/m, so it
+ * is exactly 0 on a 30 km day and every one of these terms folds away.
+ */
+uniform float uHazeBeta;
+const float HAZE_H = ${f(HAZE_SCALE_HEIGHT_M)};
+const float HAZE_CULL_TAU = ${f(HAZE_CULL_TAU)};
+
+/** Haze optical depth in front of everything a ray of this elevation can see. */
+float hazeColumnTau(float dirY){
+  return uHazeBeta * (HAZE_H / max(abs(dirY), 0.015));
+}
 
 // Half-texel guards so a LUT edge sample lands on the extreme parameter value
 // rather than half a texel inside it (Hillaire's fromUnitToSubUvs).

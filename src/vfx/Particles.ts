@@ -219,6 +219,7 @@ export class Particles {
         uProbeMat: { value: probe.matrix },
         tDroplet: { value: tex.droplet },
         tMist: { value: tex.mist },
+        tFleck: { value: tex.fleck },
         tSmoke: { value: tex.smoke },
         tDepth: { value: depth },
         uInvRes: { value: new THREE.Vector2(1, 1) },

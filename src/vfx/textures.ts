@@ -242,30 +242,102 @@ export function makeDropletTexture(size = 64): THREE.DataTexture {
 }
 
 /**
- * Soft aerated blob for mist, spindrift and spray sheets.
+ * Torn sheet of aerated water, for mist, spindrift and spray sheets.
  *   R = coarse density detail
  *   G = fine erosion detail
  *   B = light-through thickness
  *   A = coverage
+ *
+ * THIS SPRITE IS THE COTTON WOOL. What was here was a radial falloff
+ * ('pow(1 - r, 2.1)') multiplied by a smooth 4-period fBm: a soft round blob
+ * with a gradient edge. Several hundred of them overlapping at the waterline is
+ * a bank of cotton balls, and that is precisely what the owner saw and what the
+ * ocean agent's crops called "whitecaps like torn tissue". No amount of shading
+ * rescues a round silhouette with a soft edge.
+ *
+ * Three changes, in order of how much they matter:
+ *
+ *  1. The silhouette is now a THRESHOLD on a warped, eroded mask, so its edge is
+ *     as steep as the texture allows instead of fading out over the sprite's
+ *     whole radius. A hard edge is what makes water read as water.
+ *  2. The lattice is 7 x 2 — anisotropic, long axis on v. v is the sprite's
+ *     motion-stretch axis (see 'off.y' in the draw vertex shader), so a
+ *     stretched sprite now draws out into filaments aligned with its own
+ *     velocity rather than into an oval.
+ *  3. 128 instead of 64. These sprites grow to ~2 m and sit a few metres from
+ *     the camera, where a 64-texel sprite has nothing left to show.
  */
-export function makeMistTexture(size = 64): THREE.DataTexture {
+export function makeMistTexture(size = 128): THREE.DataTexture {
   const d = new Uint8Array(size * size * 4);
   const c = (size - 1) * 0.5;
+  const fil = fbmStack(7, 2, 3, 5501);
+  const warp = fbmStack(3, 3, 2, 733);
+  const fine = fbmStack(9, 9, 3, 1279);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const nx = (x - c) / c;
-      const ny = (y - c) / c;
+      const u = (x + 0.5) / size;
+      const v = (y + 0.5) / size;
+      const w = fbmS(u * 3, v * 3, warp) - 0.5;
+      const f = fbmS(u * 7, v * 2, fil);
+      const g = fbmS(u * 9, v * 9, fine);
+      // Warp the radius so the outline is a torn rag rather than an ellipse,
+      // and squash it on v so the untorn shape is already elongated.
+      const nx = ((x - c) / c) * (1 + 0.55 * w);
+      const ny = ((y - c) / c) * 0.80;
       const r = Math.hypot(nx, ny);
-      const u = x / size;
-      const v = y / size;
-      const n1 = fbm2(u * 4, v * 4, 4, 4, 11);
-      const n2 = fbm2(u * 10, v * 10, 10, 3, 47);
-      const radial = Math.pow(sat(1 - r), 2.1);
-      const alpha = sat(radial * (0.45 + 0.85 * n1) * 1.5);
+      const radial = sat(1 - r);
+      // '1 - |2n - 1|' creases along every zero crossing of the fine octave.
+      // Those creases are where the edge tears.
+      const torn = 1 - Math.abs(g * 2 - 1);
+      const mask = radial * (0.30 + 1.15 * f) * (0.66 + 0.62 * torn);
+      const alpha = sstep(0.17, 0.35, mask);
       const i = (y * size + x) * 4;
-      d[i] = b(n1);
-      d[i + 1] = b(n2);
-      d[i + 2] = b(Math.pow(sat(1 - r * 0.85), 1.4));
+      d[i] = b(f);
+      d[i + 1] = b(g);
+      d[i + 2] = b(Math.pow(radial, 1.3) * (0.55 + 0.45 * f));
+      d[i + 3] = b(alpha);
+    }
+  }
+  return tex(d, size, size, false);
+}
+
+/**
+ * Foam fleck: a raft of aerated water lying ON the surface, not a drop in
+ * flight.
+ *   R = bubble raft, G = fine erosion, B = thickness, A = coverage
+ *
+ * These used to draw with the DROPLET sprite, which is a shaded sphere — so
+ * every fleck of surface foam was a round ball with a bright rim, and a wave
+ * crest's worth of them was a row of cotton tufts. A raft is flat, its outline
+ * is jagged, and its interior is visibly cellular; all three are what
+ * distinguishes it from a snowball at two metres.
+ */
+export function makeFleckTexture(size = 128): THREE.DataTexture {
+  const d = new Uint8Array(size * size * 4);
+  const c = (size - 1) * 0.5;
+  const raft1 = featureGrid(6, 613);
+  const raft2 = featureGrid(15, 907);
+  const warp = fbmStack(3, 3, 2, 4001);
+  const fine = fbmStack(8, 8, 3, 8087);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = (x + 0.5) / size;
+      const v = (y + 0.5) / size;
+      const w = fbmS(u * 3, v * 3, warp) - 0.5;
+      const g = fbmS(u * 8, v * 8, fine);
+      const nx = ((x - c) / c) * (1 + 0.5 * w);
+      const ny = ((y - c) / c) * (1 - 0.4 * w);
+      const radial = sat(1 - Math.hypot(nx, ny));
+      const cells =
+        cellCore(u * 6, v * 6, 6, raft1, 2.3) * 0.58 +
+        cellCore(u * 15, v * 15, 15, raft2, 3.0) * 0.42;
+      const torn = 1 - Math.abs(g * 2 - 1);
+      const mask = radial * (0.34 + 1.05 * cells) * (0.62 + 0.66 * torn);
+      const alpha = sstep(0.19, 0.36, mask);
+      const i = (y * size + x) * 4;
+      d[i] = b(cells);
+      d[i + 1] = b(g);
+      d[i + 2] = b(Math.pow(radial, 1.6) * (0.5 + 0.5 * cells));
       d[i + 3] = b(alpha);
     }
   }
@@ -416,6 +488,7 @@ export function makeStreakTexture(w = 32, h = 128): THREE.DataTexture {
 export interface VfxTextures {
   droplet: THREE.DataTexture;
   mist: THREE.DataTexture;
+  fleck: THREE.DataTexture;
   smoke: THREE.DataTexture;
   foam: THREE.DataTexture;
   streak: THREE.DataTexture;
@@ -424,19 +497,22 @@ export interface VfxTextures {
 
 export function createVfxTextures(): VfxTextures {
   const droplet = makeDropletTexture(64);
-  const mist = makeMistTexture(64);
+  const mist = makeMistTexture(128);
+  const fleck = makeFleckTexture(128);
   const smoke = makeSmokeTexture(128);
   const foam = makeFoamTexture(256);
   const streak = makeStreakTexture(32, 128);
   return {
     droplet,
     mist,
+    fleck,
     smoke,
     foam,
     streak,
     dispose() {
       droplet.dispose();
       mist.dispose();
+      fleck.dispose();
       smoke.dispose();
       foam.dispose();
       streak.dispose();

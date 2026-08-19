@@ -189,6 +189,22 @@ float cloudAirShadow(vec3 pos, vec3 dir, float tEnd, vec3 sunDir, sampler2D shad
 vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
                 sampler2D transLut, bool detail,
                 sampler2D shadowMap, mat4 shadowMatrix, bool shafts){
+  /*
+   * HAZE CULL. The weather-haze column a ray accumulates is
+   * 'uHazeBeta * HAZE_H / |dir.y|', and it is CONSTANT along the ray — it is a
+   * column integral to infinity, not to the sample — so if it has already
+   * erased the sky it has erased the whole cloud stack behind it too, at any
+   * distance. Returning 'clear sky, no cloud' then differs from the marched
+   * answer by less than a thousandth of the pixel, because the composite in
+   * skyRender.ts mixes both to the same haze colour.
+   *
+   * These are exactly the rays that cost the most: a 3 deg ray runs a 42 km
+   * grazing chord and spends the entire step budget on it. In 'storm' (5.2 km
+   * visibility) everything below 4.6 deg culls; in 'fog' (1.4 km) everything
+   * below 20 deg does; at 30 km visibility uHazeBeta is 0 and nothing does.
+   */
+  if (hazeColumnTau(dir.y) > HAZE_CULL_TAU) return vec4(0.0, 0.0, 0.0, 1.0);
+
   float rB, rT;
   cloudShells(rB, rT);
 

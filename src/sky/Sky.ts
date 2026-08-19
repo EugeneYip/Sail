@@ -172,15 +172,20 @@ export class Sky implements Module {
     const env = world.env;
     this.camPos.setFromMatrixPosition(world.camera.matrixWorld);
     const camAltKm = Math.max(0, this.camPos.y) * M_TO_KM;
-    this.timing = world.settings.debug;
+    // Two flags, because the two instruments cost wildly different amounts. The
+    // CPU stopwatch below is free; every `end()` in this file calls
+    // `gl.finish()`, which serialises the whole pipeline and made the sky's own
+    // p95 unreadable while it rode on `settings.debug`.
+    const cpuTiming = world.settings.debug;
+    this.timing = world.settings.debugStalls === true;
 
     // CPU-only, so no finish(): a serialising timer here would just charge the
     // sky for whatever the ocean and the ship left in the queue.
-    const cpu0 = this.timing ? performance.now() : 0;
+    const cpu0 = cpuTiming ? performance.now() : 0;
     this.clouds.update(world);
     this.radiometry.update(env, camAltKm, this.clouds.field);
     this.sidereal.update(env.latitude, env.dayOfYear, env.sunDirection);
-    if (this.timing) world.stats['sky:cpuMs'] = performance.now() - cpu0;
+    if (cpuTiming) world.stats['sky:cpuMs'] = performance.now() - cpu0;
 
     this.publish(world);
     this.light.update(world, this.radiometry);
@@ -196,9 +201,11 @@ export class Sky implements Module {
   }
 
   /* ---------------------------------------------------------------- *
-   *  Timing. Serialising, so it is debug-only: a finish() between two
-   *  GPU passes is the only way to attribute cost without
-   *  EXT_disjoint_timer_query, which Chrome does not expose to pages.
+   *  Timing. Serialising, so it is gated on `settings.debugStalls` and NOT on
+   *  `settings.debug`: a finish() between two GPU passes is the only way to
+   *  attribute cost without EXT_disjoint_timer_query, which Chrome does not
+   *  expose to pages, but it destroys overlap and it is what made the sky look
+   *  like it was spiking. Prefer the slope method (DIAGNOSIS §16).
    * ---------------------------------------------------------------- */
 
   private begin(): void {

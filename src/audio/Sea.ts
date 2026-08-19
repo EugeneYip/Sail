@@ -39,6 +39,7 @@ export class Sea {
   private readonly swellLfoRate: Ramp[] = [];
   private readonly swellLfoDepth: Ramp[] = [];
   private readonly rush: Layer;
+  private readonly breathDepth: Ramp[] = [];
   private readonly crest: Layer;
   private readonly crestDepth: Ramp;
   private readonly hull: Layer[] = [];
@@ -68,11 +69,17 @@ export class Sea {
     this.nearGain = new Ramp(near.gain, 0.4, 3e-4);
     this.nearLp = freqRamp(nearLp.frequency, 0.5);
 
-    // --- swell: two decorrelated brown-noise voices at different rates
+    // --- swell: two decorrelated brown-noise voices at different rates.
+    // The second filter is a resonant HIGHPASS, not a peaking boost. It used to
+    // be `peaking 46 Hz +7 dB`, which gave the swell its pitch but left the whole
+    // sub-40 Hz half of the brown noise in the bus: measured, 10% of the calm
+    // sea's power sat below 35 Hz, where nobody hears it and it eats the
+    // headroom the audible bands need. A Q=1.1 highpass gives the same resonant
+    // hump at the corner AND a 12 dB/oct slope under it, for the same node.
     for (let i = 0; i < 2; i++) {
       const src = nodes.loop(buffers.dark, i === 0 ? 0.83 : 1.19);
       const lp = nodes.biquad('lowpass', 110, 0.9);
-      const peak = nodes.biquad('peaking', 46 + i * 9, 1.3, 7);
+      const peak = nodes.biquad('highpass', 44 + i * 8, 1.1);
       const g = nodes.gain(0.0001);
       const lfo = nodes.osc('sine', 0.2);
       const depth = nodes.gain(0);
@@ -87,16 +94,28 @@ export class Sea {
       this.swellLfoDepth.push(new Ramp(depth.gain, 1.2, 2e-4));
     }
 
-    // --- mid-band rush
+    // --- mid-band rush, with a very slow common breath over it. Two LFOs 25 s
+    // and 41 s long: the sea should be perceptibly never the same twice without
+    // ever being busy, and this is the layer with the body to carry that.
     {
       const src = nodes.loop(buffers.pink, 1.0);
-      const bp = nodes.biquad('bandpass', 480, 0.55);
+      // Q 0.45 = a ~1.2 kHz wide band. The body of moving water is the widest
+      // thing in the bed and it has to be, or the sea is a rumble with a hiss on
+      // top and nothing in between.
+      const bp = nodes.biquad('bandpass', 480, 0.45);
       const shelf = nodes.biquad('highshelf', 1800, 0.7, -6);
       const g = nodes.gain(0.0001);
       src.connect(bp);
       bp.connect(shelf);
       shelf.connect(g);
       g.connect(bus.in);
+      for (const hz of [1 / 25, 1 / 41]) {
+        const lfo = nodes.osc('sine', hz);
+        const depth = nodes.gain(0);
+        lfo.connect(depth);
+        depth.connect(g.gain);
+        this.breathDepth.push(new Ramp(depth.gain, 2, 2e-4));
+      }
       this.rush = {
         gain: new Ramp(g.gain, 0.7, 2e-4),
         freq: freqRamp(bp.frequency, 0.9),
@@ -166,7 +185,11 @@ export class Sea {
     const period = wavePeriod(hs);
 
     // --- swell. Level tracks Hs; modulation depth tracks chop.
-    const swellLevel = dB(-21 + 20 * smoothstep(0, 7, hs));
+    // The top used to be dB(-21 + 20) = -1 dB, i.e. ONE layer of a six-layer bed
+    // at very nearly full scale, at 46-104 Hz where it has no competition and
+    // eats the headroom every other layer needs. -8 dB at Hs 7 m is still the
+    // biggest thing in the mix and leaves room for the rest of the sea.
+    const swellLevel = dB(-25 + 17 * smoothstep(0, 7, hs));
     for (let i = 0; i < this.swell.length; i++) {
       const s = this.swell[i];
       s.gain.set(swellLevel * (i === 0 ? 1 : 0.7), now);
@@ -182,39 +205,54 @@ export class Sea {
     }
 
     // --- mid rushing water: the body of the bed, and the loudest layer
-    this.rush.gain.set(dB(-24 + 15 * smoothstep(0, 7, seaState)), now);
+    const rushLevel = dB(-20 + 14 * smoothstep(0, 7, seaState));
+    this.rush.gain.set(rushLevel, now);
     this.rush.freq.set(330 + 300 * smoothstep(1, 7, seaState), now);
     this.rush.shelf?.set(-11 + 10 * smoothstep(2, 8, seaState), now);
+    // Shallow: the bed must breathe, not pump. Two incommensurate periods means
+    // the sum wanders instead of pulsing.
+    for (let i = 0; i < this.breathDepth.length; i++) {
+      this.breathDepth[i].set(rushLevel * (i === 0 ? 0.17 : 0.11), now);
+    }
 
     // --- fine foam hiss. Whitecaps begin around force 4 / sea state 3, and the
     // wave height decides how much water is actually falling over.
     const breaking =
       smoothstep(2.2, 7.5, seaState) * smoothstep(3, 12, sim.windSpeed) * (0.45 + 0.55 * smoothstep(0.4, 5, hs));
-    const foamLevel = dB(-40 + 24 * breaking);
+    // Multiplied by `breaking`, not just offset by it: a glassy calm has no
+    // whitecaps at all, so this layer must reach EXACTLY zero rather than sit at
+    // a -40 dB hiss floor for ever. That floor was audible under everything and
+    // it is the one thing a calm sea must not have.
+    const foamLevel = dB(-32 + 16 * breaking) * breaking;
     this.crest.gain.set(foamLevel, now);
     this.crest.freq.set(2600 - 900 * breaking, now);
     // Deep, slow modulation: foam arrives in sheets, it does not sit there.
     this.crestDepth.set(foamLevel * 0.62, now);
 
-    // --- hull water: THE speedometer. Level ~ v^1.4, centre frequency and
-    // brightness both climb, because faster water is a brighter rush.
+    // --- hull water: THE speedometer, and the one cue that must be unmistakable.
+    // Gated to silence at rest — a hove-to ship makes no bow wave, and the old
+    // dB(-38) floor meant a stationary hull hissed at the same level whether you
+    // were making way or not, which is exactly the wrong thing for the layer
+    // whose whole job is to report speed.
     const v = Math.min(1, sim.speedKnots / 13);
-    const vs = Math.pow(v, 1.4);
+    const making = smoothstep(0.3, 2.4, sim.speedKnots);
+    const vs = Math.pow(v, 1.15);
     for (let i = 0; i < this.hull.length; i++) {
       const h = this.hull[i];
       const trim = i === 0 ? 1 : 0.62;
-      h.gain.set(dB(-38 + 28 * vs) * trim, now);
-      h.freq.set((250 + 1150 * Math.pow(v, 0.85)) * (i === 0 ? 1 : 0.72), now);
+      h.gain.set(dB(-36 + 26 * vs) * trim * making, now);
+      h.freq.set((240 + 1260 * Math.pow(v, 0.8)) * (i === 0 ? 1 : 0.72), now);
       h.q?.set(0.85 - 0.25 * v, now);
-      h.shelf?.set(-14 + 20 * v, now);
+      h.shelf?.set(-16 + 22 * v, now);
     }
     this.hullPan[0].set(anchorWorld(sim, ANCHOR.bow), now);
     this.hullPan[1].set(anchorWorld(sim, ANCHOR.hullStbd), now);
 
-    // --- wake foam
-    const foam = Math.min(1, vs * 1.1 + 0.25 * smoothstep(3, 7, seaState));
-    this.wake.gain.set(dB(-42 + 25 * foam), now);
-    this.wake.freq.set(2400 + 1600 * v, now);
+    // --- wake foam. The bright half of the speed cue, and it has to grow faster
+    // than the hull rush does or going faster only makes the sea duller.
+    const foam = Math.min(1, Math.pow(v, 0.9) * 1.05) * making;
+    this.wake.gain.set(dB(-38 + 27 * foam) * foam, now);
+    this.wake.freq.set(2200 + 2100 * v, now);
     this.wakePan.set(anchorWorld(sim, ANCHOR.wake), now);
 
     // Air absorption + level for the ship-relative water.

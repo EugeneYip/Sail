@@ -93,8 +93,22 @@ void main(){
     float bowBump = exp(-sq((t - 0.085) / 0.150));
     float quarter = 0.5 * exp(-sq((t - 0.80) / 0.14));
     float slamGain = 1.0 + min(uSlam * 0.05, 1.4);
-    float crest = stag * (0.80 * bowBump * slamGain + quarter) * heelGain
+    float crestRaw = stag * (0.80 * bowBump * slamGain + quarter) * heelGain
                   * smoothstep(0.03, 0.30, uSpeedN);
+    // EXTENT — READ THIS BEFORE RAISING ANY COEFFICIENT HERE.
+    //
+    // A bow wave does not keep growing with the stagnation rise. The crest
+    // breaks once it is steep enough, and for a fine-bowed hull the breaking
+    // crest tops out at a fraction of the beam however hard you drive it.
+    // Unbounded, which is how this read, 16 kn with 15 deg of heel and a slam
+    // gave stag = 3.6 m, heelGain = 2.1, slamGain = 2.4 and therefore
+    // crest = 14 m — and because the sheet's WIDTH is derived from the crest
+    // (below), a plate 48 m across and 14 m tall. That is the flat white slab
+    // off the bow, and it is the "wake footprint far larger than the ship".
+    // Saturating exponentially keeps the low-speed response linear and exact
+    // while capping the extent at something a 13 m beam can actually throw.
+    float crestCap = uBeam * 0.17;
+    float crest = crestCap * (1.0 - exp(-crestRaw / crestCap));
 
     float ruf = ruffle(t * 9.0 + side * 3.0, side, uTime) * (0.10 + 0.16 * uChop);
     // j = 0 at the hull/water root, 1 at the tip of the overturning lip. The lip
@@ -104,9 +118,12 @@ void main(){
     float over = smoothstep(0.54, 1.0, j);
     float curl = 0.55 + 0.55 * uSpeedN;
     float y = crest * (rise * (1.0 + ruf * 0.5) - over * curl);
-    // The sheet is thrown outboard and slightly aft as it climbs.
-    float width = (1.4 + crest * 1.55) * heelGain;
-    float outb = hb + width * (j * 0.9 + over * 0.7);
+    // The sheet is thrown outboard and slightly aft as it climbs. The outboard
+    // reach is bounded twice over: 'crest' is already capped, and heelGain is
+    // clamped here as well, so the widest the sheet can get is about one beam
+    // outboard of the hull — a bow wave, not a raft.
+    float width = (0.75 + crest * 0.90) * min(heelGain, 1.55);
+    float outb = hb + width * (j * 0.9 + over * 0.5);
     float zAft = (t + over * 0.045 * (1.0 + uSpeedN)) * uLwl - uLwl * 0.5;
 
     p = vec3(side * outb, wl + y, zAft);
@@ -124,9 +141,15 @@ void main(){
     float pad = exp(-aft * 2.1) * (1.0 - abs(across) * 0.35);
     float plume = exp(-sq((across - wash) / 0.3)) * exp(-sq((aft - 0.22) / 0.24));
     float ruf = ruffle(aft * 7.0 + across * 5.0, across, uTime * 1.6) * 0.2;
-    float y = stag * (0.5 * pad + 0.85 * plume) * (1.0 + ruf)
+    float yRaw = stag * (0.5 * pad + 0.85 * plume) * (1.0 + ruf)
               * smoothstep(0.04, 0.34, uSpeedN);
-    p = vec3(across * w, wl + y * 0.9, uLwl * 0.5 + aft * uLwl * 0.34);
+    // Capped for the same reason as the bow crest: a rooster tail scales with
+    // the stagnation rise until it breaks, and an uncapped one reached 4.8 m.
+    float padCap = uBeam * 0.20;
+    float y = padCap * (1.0 - exp(-max(yRaw, 0.0) / padCap));
+    // 0.34 * Lwl put the transom pad 21 m astern, which is a third of the ship
+    // again on the end of it. A frigate's transom wash is spent inside 12 m.
+    p = vec3(across * w, wl + y * 0.9, uLwl * 0.5 + aft * uLwl * 0.20);
     vAer = saturate1(0.52 + 0.34 * plume + ruf);
     vThick = saturate1((0.42 * pad + plume) * 1.15);
     vStream = aft * 24.0;
@@ -169,28 +192,50 @@ void main(){
   // the camera is at the rail — which is exactly where the foam was being
   // described as a mass of soft blobs.
   vec2 uvC = vec2(vStream * 0.40 - flow * 0.29, vJ * 4.6 - vSide * 0.5);
+  // A fourth octave, ~5 cm per feature at the hull. It is the only tap with a
+  // gradient steep enough to tear the SILHOUETTE at the pixel scale when the
+  // camera is at the rail, which is the range this is now judged at.
+  vec2 uvD = vec2(vStream * 1.15 - flow * 0.66, vJ * 12.0 + vSide * 0.75);
   vec4 fa = texture2D(tFoam, uvA);
   vec4 fb = texture2D(tFoam, uvB);
   vec4 fc = texture2D(tFoam, uvC);
-  float bubbles = fa.r * 0.42 + fb.r * 0.34 + fc.r * 0.24;
+  vec4 fd = texture2D(tFoam, uvD);
+  float bubbles = fa.r * 0.32 + fb.r * 0.27 + fc.r * 0.23 + fd.r * 0.18;
   // G is the filament channel at every scale. This used to read fb.b, the
   // isotropic grain, as if it were a streak, which cost the effect its
   // directionality — half the reason the foam did not read as moving water.
-  float streaks = saturate1(fa.g * 0.52 + fb.g * 0.32 + fc.g * 0.30);
-  float grain = fc.b * 0.62 + fb.b * 0.38;
+  float streaks = saturate1(fa.g * 0.40 + fb.g * 0.28 + fc.g * 0.24 + fd.g * 0.22);
+  float grain = fc.b * 0.40 + fb.b * 0.24 + fd.b * 0.36;
 
-  // Aeration field, then a NARROW threshold on it. A wide ramp
-  // ('smoothstep(0.10, 0.45, cover)', which is what used to close this shader)
-  // fades every blob out across its whole radius, and a field of soft-edged
-  // blobs is cotton wool however it is lit. Real aerated water has a film edge
-  // millimetres thick: at this range that is a pixel, so the ramp has to be
-  // narrow and the raggedness has to come from the field instead.
-  float field = vAer * (0.40 + 0.88 * bubbles) + streaks * 0.34 + fa.a * 0.22
-                + grain * 0.10;
-  // The lip tears: the threshold climbs towards the free edge, so the outer
-  // fringe breaks into filaments rather than ending on a smooth contour.
-  float thr = 0.30 + 0.42 * smoothstep(0.35, 1.0, vJ);
-  float cover = smoothstep(thr - 0.085, thr + 0.085, field);
+  // COVERAGE IS A THRESHOLD ON NOISE. AERATION MOVES THE THRESHOLD, NOT THE
+  // FIELD. This is the whole fix for the flat white plate.
+  //
+  // What was here added aeration INTO the field and then thresholded the sum.
+  // On the body of the sheet vAer is ~1, so the sum was ~1.2 against a threshold
+  // of 0.30 and 'cover' clamped to exactly 1 over the entire surface. With the
+  // texture contributing nothing, the silhouette fell through to
+  // 'vThick * edge' — both vertex-interpolated, hence linear across every
+  // triangle. That is why the bow sheet photographed as a hard-edged,
+  // straight-sided, perfectly uniform polygon: a flat white slab off the bow.
+  //
+  // With aeration on the threshold instead, coverage can never saturate
+  // everywhere at once: the field's own range bounds it. Fully aerated water
+  // sits at a low threshold and reads as near-solid froth with holes punched in
+  // it; marginal water puts the threshold through the middle of the noise and
+  // breaks into filaments with the texture's gradient at every edge.
+  float field = bubbles * 0.42 + streaks * 0.28 + fa.a * 0.16 + grain * 0.14;
+  float aer = saturate1(vAer * (0.34 + 0.86 * vThick));
+  // The lip tears: the threshold also climbs towards the free edge, so the
+  // outer fringe breaks into filaments rather than ending on a smooth contour.
+  float thr = mix(0.70, 0.19, aer) + 0.24 * smoothstep(0.30, 1.0, vJ);
+  float cover = smoothstep(thr - 0.055, thr + 0.055, field);
+
+  // INTERIOR STRUCTURE. A raft of whitewater is not one tone: the films between
+  // the bubbles are dark, the filaments catch the light along the flow, and
+  // there is large-scale variation across the whole sheet. A ragged outline
+  // around a single flat value still reads as cut paper, which is what the
+  // stern pad looked like.
+  float tone = clamp(0.50 + 0.58 * bubbles + 0.34 * streaks - 0.26 * grain, 0.40, 1.30);
 
   // Aerated water is a bright, strongly forward-scattering medium.
   vec3 view = normalize(uCameraPos - vWorld);
@@ -204,7 +249,7 @@ void main(){
   // same substance. At the 0.86..0.93 this used to carry, the bow wave was
   // brighter than a sunlit sail and did not match the foam three metres away on
   // the sea, which is the tell that gives away a painted-on effect.
-  vec3 albedo = mix(vec3(0.16, 0.26, 0.28), vec3(0.44, 0.47, 0.49), cover);
+  vec3 albedo = mix(vec3(0.16, 0.26, 0.28), vec3(0.44, 0.47, 0.49) * tone, cover);
   // Wrap lighting: foam has no meaningful normal, it is a scattering slab.
   // uSunIntensity is irradiance and owes the 1/PI; uSkyColor / uGroundColor are
   // radiance and must not be divided again (src/sky/constants.ts).
@@ -235,9 +280,17 @@ void main(){
 
   float edge = smoothstep(0.0, 0.06, vJ) * (1.0 - smoothstep(0.86, 1.0, vJ));
   if (vPart > 0.5) edge = 1.0 - smoothstep(0.55, 1.0, vT);
-  // 'cover' is already a narrow threshold; ramping it a second time here is what
-  // put the soft halo back on every blob.
-  float a = saturate1(vThick * cover * edge * uOpacity * 1.9);
+  // ALPHA IS CARRIED BY THE TEXTURE, NOT BY THE INTERPOLATED THICKNESS.
+  //
+  // 'vThick * cover' with cover pinned at 1 made vThick the sole author of the
+  // silhouette, and vThick is linear across a triangle — a straight edge. The
+  // bubble term is what actually decides where this sheet ends now; vThick only
+  // gates how much of it there can be. Peak is held at 0.95: a bow wave is
+  // nearly opaque but never a perfect occluder, and the last 5% of the sea
+  // showing through is what keeps it looking wet.
+  float a = min(cover * (0.34 + 0.66 * bubbles) * (0.30 + 0.88 * vThick)
+                * edge * uOpacity * 1.75, 0.95);
+  if (a < 0.006) discard;
 
   float dist = length(uCameraPos - vWorld);
   lit = applyAerial(lit, dist, -view, uSunDirection, uFogColor, uSunColor,
@@ -312,31 +365,45 @@ void main(){
   vec2 uvA = vec2(vStream * 0.028 - flow * 0.055, vD * 0.22 + vSide * 0.5);
   vec2 uvB = vec2(vStream * 0.085 - flow * 0.13, vD * 0.55 + vSide);
   vec2 uvC = vec2(vStream * 0.25 - flow * 0.33, vD * 1.7 + vSide * 0.25);
+  // Fourth scale, ~4 cm per feature. The topsides are the surface the camera
+  // gets closest to, so this is where the finest tap earns its keep.
+  vec2 uvD = vec2(vStream * 0.78 - flow * 0.92, vD * 5.4 + vSide * 0.75);
   float s1 = texture2D(tFoam, uvA).g;
   // Was tFoam.b — the isotropic grain channel — which produced blotches
-  // instead of streaks. All three taps now read the filament channel.
+  // instead of streaks. All four taps now read the filament channel.
   float s2 = texture2D(tFoam, uvB).g;
   float s3 = texture2D(tFoam, uvC).g;
-  float bub = texture2D(tFoam, uvB * vec2(2.0, 3.0)).r;
+  vec4 fd = texture2D(tFoam, uvD);
+  float s4 = fd.g;
+  float bub = texture2D(tFoam, uvB * vec2(2.0, 3.0)).r * 0.55 + fd.r * 0.45;
   float grain = texture2D(tFoam, uvC).b;
 
   // Boot top: the strip that has just been wetted, riding the local surface. The
   // wetted line on a real hull is a sharp, ragged edge; a plain gradient over
-  // half a metre reads as an airbrushed band.
-  float wetEdge = (grain - 0.5) * (0.10 + 0.18 * uChop);
-  float wetBand = (1.0 - smoothstep(0.0, 0.20 + uChop * 0.28, vD + wetEdge))
+  // half a metre reads as an airbrushed band. Two scales of displacement, the
+  // finer one unconditional, because at +-14 cm of wobble on a soft ramp the
+  // edge was still smooth at the rail.
+  float wetEdge = (grain - 0.5) * (0.16 + 0.26 * uChop) + (fd.b - 0.5) * 0.09;
+  float wetBand = (1.0 - smoothstep(0.0, 0.13 + uChop * 0.22, vD + wetEdge))
                   * step(-1.6, vD);
   float submerged = 1.0 - smoothstep(-0.9, 0.05, vD);
 
   // Foam streaks: born at the bow shoulder, dragged aft, strongest at the
-  // waterline and climbing higher the faster we go. Thresholded rather than
-  // rescaled, so there is clear water between the filaments.
+  // waterline and climbing higher the faster we go.
+  //
+  // THRESHOLD, THEN MODULATE — DO NOT RESCALE. 'streak * 1.5' into a saturate()
+  // pinned every filament at exactly 1.0 and merged them into one another: the
+  // flat painted band along the topsides the owner reported, with a soft
+  // airbrushed edge and not one visible filament in it. The peak is now held
+  // below 1 and the bubble raft varies the interior, so the hull's own colour
+  // still reads through the froth and the streaks stay separate.
   float bowGain = 0.35 + 1.5 * exp(-vT * 4.5);
   float climb = 1.0 - smoothstep(0.15 + uSpeedN * 1.5, 0.9 + uSpeedN * 2.6, vD);
-  float streakField = s1 * 0.44 + s2 * 0.32 + s3 * 0.24;
-  float streak = smoothstep(0.30, 0.46, streakField) * bowGain * climb;
-  float foamA = saturate1(streak * smoothstep(0.05, 0.32, uSpeedN) * 1.5
-                          + wetBand * bub * 0.22 * uSpeedN);
+  float streakField = s1 * 0.36 + s2 * 0.26 + s3 * 0.20 + s4 * 0.24;
+  float streak = smoothstep(0.34, 0.52, streakField) * (0.42 + 0.78 * bub)
+                 * climb * min(bowGain, 1.45);
+  float foamA = min(streak * smoothstep(0.05, 0.32, uSpeedN)
+                    + wetBand * bub * 0.18 * uSpeedN, 0.90);
 
   vec3 view = normalize(uCameraPos - vWorld);
   float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.5);

@@ -75,6 +75,8 @@ interface SailUniforms {
   uSailD: { value: THREE.Vector3[] };
   uSailState: { value: THREE.Vector4[] };
   uSailInfo: { value: THREE.Vector4[] };
+  /** Per sail: 0 = drawing or slack, 1 = fully aback. See `shaders/sail.ts`. */
+  uSailAback: { value: number[] };
   uSailStep: { value: THREE.Vector2 };
   uSailTime: { value: number };
 }
@@ -103,6 +105,7 @@ export function buildSails(
     uSailD: { value: [] },
     uSailState: { value: [] },
     uSailInfo: { value: [] },
+    uSailAback: { value: new Array<number>(Math.max(1, n)).fill(0) },
     uSailStep: { value: new THREE.Vector2() },
     uSailTime: { value: 0 },
   };
@@ -204,6 +207,7 @@ export function buildSails(
 
     update(w) {
       const st = u.uSailState.value;
+      const abk = u.uSailAback.value;
       u.uSailTime.value = w.time.elapsed;
 
       // Apparent wind in the ship's body frame — the same quantity the rig
@@ -224,6 +228,26 @@ export function buildSails(
           flip = flow > 0 ? 0 : 1;
         }
         st[i].set(s.set, s.luff, s.camber, flip);
+        // ---- THE ABACK HOOK. NOT YET LIVE.
+        //
+        // As of this commit `SailState` (src/types/index.ts) has no aback field:
+        // physics is adding one in a separate session because the rig currently
+        // cannot tell a sail that is drawing from one pressed backwards against
+        // the mast — `luffTarget` uses |alpha| — and so reports the whole sail
+        // plan full and drawing when head to wind, and four fifths of it
+        // flogging on a beat (DIAGNOSIS.md §20). `luff` feeds this shader
+        // directly, so that wrong state is what the player sees.
+        //
+        // The read below is deliberately defensive rather than commented out, so
+        // that the day the field lands this file needs NO edit at all — the
+        // cloth starts rendering aback on the next frame. Until then every sail
+        // reports 0 and `shaders/sail.ts` multiplies its aback terms by exactly
+        // zero, which is why the drawing and shivering shapes are unchanged.
+        //
+        // Expected semantics, which is what the shader is written against:
+        // 0 = drawing or merely slack, 1 = wind full on the forward face.
+        // A plain boolean also works — `+true` is 1.
+        abk[i] = +((s as { aback?: number }).aback ?? 0) || 0;
       }
     },
 
@@ -303,6 +327,7 @@ varying vec4 vCloth;
 varying vec2 vSailUv;
 varying vec3 vSailWP;
 varying vec3 vSailTan;
+varying float vAback;
 `;
 
 const FRAG_HEAD = /* glsl */ `
@@ -311,6 +336,7 @@ varying vec4 vCloth;
 varying vec2 vSailUv;
 varying vec3 vSailWP;
 varying vec3 vSailTan;
+varying float vAback;
 uniform float uClothTrans;
 `;
 
@@ -575,10 +601,18 @@ function makeSailMaterial(
           // No branch around this: 'load' comes from a varying, so a conditional
           // would put the fwidth below in non-uniform control flow, where the
           // derivative is undefined. The weights collapse to zero on their own.
-          float load = clamp(vCloth.w, 0.0, 1.0) * (1.0 - vSail.w);
+          // ABACK. Slack cloth loses its creases because it is carrying nothing;
+          // aback cloth is carrying MORE than a drawing sail, just backwards
+          // over the mast, so it keeps them and sharpens them. The load term
+          // therefore recovers with 'aback' after the luff has killed it, and
+          // the fan reach shortens because the cloth is stretched over an edge a
+          // metre away rather than hauled from a clew ten metres away.
+          float aback = clamp(vAback, 0.0, 1.0);
+          float load = clamp(vCloth.w, 0.0, 1.0) * (1.0 - vSail.w)
+                     + aback * (0.85 - 0.5 * clamp(vCloth.w, 0.0, 1.0));
           vec2 dClew = vec2(vCloth.x, fromFoot);
           vec2 dHead = vec2(vCloth.x, spanM);
-          float reach = max(vCloth.y, 1.0) * ${lwFloat(CREASE_REACH)};
+          float reach = max(vCloth.y, 1.0) * ${lwFloat(CREASE_REACH)} * (1.0 - 0.45 * aback);
           vec2 g1;
           vec2 g2;
           float h1 = lwCreaseFan(dClew, ${lwFloat(CREASE_AMP_M)}, reach,
@@ -631,6 +665,34 @@ function makeSailMaterial(
           diffuseColor.rgb *= 1.0 - 0.09 * clamp(-lwCreaseH / ${lwFloat(CREASE_AMP_M)}, 0.0, 1.0);
           // The gathered bundle lies in its own shadow.
           diffuseColor.rgb *= 1.0 - 0.45 * smoothstep(0.03, 0.5, vSail.z);
+
+          // ---- ABACK: the rig printed on the cloth.
+          //
+          // This is the read that tells aback from slack at a glance. Slack
+          // canvas is uniformly pale and softly folded; canvas pressed onto the
+          // mast and the standing rigging picks up tar and slush from the spars
+          // in HARD-EDGED bands, and the contact itself occludes.
+          //
+          // In FRACTIONAL chord rather than metres, deliberately. The lower mast
+          // is 0.5-0.9 m through and the chords it presses on run 10 m at the
+          // royal to 22 m at the course, so the contact is 4-5% of the chord on
+          // every sail in the suit — near enough constant that a fraction is the
+          // more honest parameter, and it needs no chord length to be recovered
+          // from a varying that can be zero.
+          // No branch on 'aback': it is a varying, so a conditional on it is
+          // non-uniform control flow and the fwidth below would be undefined
+          // inside it. Same trap as the crease fan above; the terms collapse to
+          // zero on their own.
+          float aaF = fwidth(vSail.x) * 0.6 + 1e-5;
+          float mast = lwClothLine(abs(vSail.x - 0.5), 0.024, aaF) * (1.0 - vCloth.z);
+          // Two topmast backstays either side, and the sail rubs hardest where
+          // the cloth is fullest rather than at head or foot.
+          float stay = max(lwClothLine(abs(vSail.x - 0.30), 0.007, aaF),
+                           lwClothLine(abs(vSail.x - 0.70), 0.007, aaF));
+          float press = (mast + stay * 0.7) * smoothstep(0.06, 0.42, vSail.y) * aback;
+          diffuseColor.rgb *= 1.0 - 0.30 * press;
+          // Contact creases kink the surface, so they carry a normal too.
+          lwCreaseG.x += press * 0.55 * sign(vSail.x - 0.5);
         }`,
       )
       .replace(

@@ -30,8 +30,8 @@ export type BusName = 'sea' | 'ship' | 'wind' | 'wildlife' | 'weather' | 'music'
  */
 const BASE_TRIM: Record<BusName, number> = {
   sea: -9,
-  ship: -17,
-  wind: -13,
+  ship: -15,
+  wind: -8,
   wildlife: -16,
   weather: -14,
   music: -14,
@@ -54,6 +54,9 @@ const MODE_TRIM: Record<CameraModeName, Partial<Record<BusName, number>>> = {
  */
 const CEILING = 0.92;
 
+/** Wet level of the music-only wash, as a fraction of the dry music bus. */
+const MUSIC_WET = 0.5;
+
 /**
  * tanh soft clip with UNITY small-signal gain.
  *
@@ -67,8 +70,14 @@ const CEILING = 0.92;
  *
  * `C * tanh(u / C)` has slope exactly 1 at the origin and asymptote C, so it is
  * inaudible until the programme approaches the ceiling and hard-bounded after.
+ * Verified against the built curve: -0.01 dB at 0.05, -0.21 dB at 0.25,
+ * -0.80 dB at 0.5, and a hard ceiling of 0.7321 = -2.71 dBFS at full scale.
+ *
+ * `n` is ODD so that index (n-1)/2 is exactly u = 0 and silence maps to exactly
+ * zero. With an even length the shaper interpolates between two symmetric
+ * neighbours, which is still zero but only by cancellation.
  */
-function softClipCurve(n = 4096): Float32Array<ArrayBuffer> {
+function softClipCurve(n = 4097): Float32Array<ArrayBuffer> {
   const c = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const u = (i / (n - 1)) * 2 - 1;
@@ -81,6 +90,12 @@ export class Mixer {
   readonly buses: Record<BusName, Bus>;
   readonly masterPre: GainNode;
   readonly master: GainNode;
+  /**
+   * The last node before the destination — after the fader AND after the
+   * ceiling. Anything measuring what the player actually hears must tap this,
+   * not `master`.
+   */
+  readonly out: GainNode;
   readonly analyser: AnalyserNode;
   readonly reverb: Reverb;
   private readonly masterLevel: Ramp;
@@ -117,8 +132,16 @@ export class Mixer {
     this.masterPre.connect(dcBlock);
     dcBlock.connect(dcBlock2);
 
+    // The ceiling goes AFTER the fader, which is the second gain-staging bug
+    // found: with the shaper in front of `master`, the amount of saturation was
+    // set by the raw pre-fader sum, so turning the game's volume down could not
+    // make it any cleaner — it only made the distortion quieter. Last in the
+    // chain, the fader is a real attenuator again and the shaper only works when
+    // the mix genuinely asks for it.
+    this.out = n.gain(1);
+    dcBlock2.connect(this.master);
     if (bypassLimiter) {
-      dcBlock2.connect(this.master);
+      this.master.connect(this.out);
     } else {
       // A seat belt, and nothing else. There USED to be a DynamicsCompressorNode
       // in front of the shaper. Blink's implementation applies an unconditional
@@ -129,51 +152,61 @@ export class Mixer {
       // private empirical formula cannot be made honest, so it is gone: the
       // soft clip alone is transparent below the ceiling and bounded above it.
       const clip = n.shaper(softClipCurve(), '2x');
-      dcBlock2.connect(clip);
-      clip.connect(this.master);
+      this.master.connect(clip);
+      clip.connect(this.out);
     }
-    this.master.connect(destination);
+    this.out.connect(destination);
 
     this.analyser = n.analyser(withAnalyser ? 2048 : 32);
-    if (withAnalyser) this.master.connect(this.analyser);
+    if (withAnalyser) this.out.connect(this.analyser);
     this.timeBuf = new Float32Array(this.analyser.fftSize);
     this.freqBuf = new Float32Array(this.analyser.frequencyBinCount);
 
     this.reverb = new Reverb(n, buffers, this.masterPre);
 
-    const mk = (name: BusName, level: number, send: number): Bus => {
+    // Each bus is BUILT at its trim. It used to be built at unity and only
+    // ramped down to BASE_TRIM on the first frame, so for the first second —
+    // exactly while the master fades in — every family ran 9 to 17 dB hot into
+    // the ceiling. That is a burst of saturation on every start, every resume
+    // and every unhide, which is the first half of the reported popping.
+    const mk = (name: BusName, send: number): Bus => {
+      const level = dB(BASE_TRIM[name]);
       const inNode = n.gain(level);
       const sendNode = n.gain(send);
       inNode.connect(this.masterPre);
       inNode.connect(sendNode);
       sendNode.connect(this.reverb.input);
-      return {
+      const bus: Bus = {
         name,
         in: inNode,
         level: new Ramp(inNode.gain, 0.3, 3e-4),
         send: new Ramp(sendNode.gain, 0.5, 3e-4),
       };
+      bus.level.snap(level);
+      return bus;
     };
 
     this.buses = {
-      sea: mk('sea', 1, 0.1),
-      ship: mk('ship', 1, 0.45),
-      wind: mk('wind', 1, 0.08),
-      wildlife: mk('wildlife', 1, 0.7),
-      weather: mk('weather', 1, 0.3),
-      music: mk('music', 0.0001, 0.12),
+      sea: mk('sea', 0.1),
+      ship: mk('ship', 0.45),
+      wind: mk('wind', 0.08),
+      wildlife: mk('wildlife', 0.7),
+      weather: mk('weather', 0.3),
+      music: mk('music', 0.12),
     };
 
     // The music gets its own long wash so the ship does not sound like a chapel.
+    // The IRs are energy-normalised (see `IrSpec.gain`), so 0.5 x 0.55 really is
+    // a wash at 28% of the dry level and not, as it was, nine times it.
     this.convMusic = n.convolver(buffers.irMusic);
     this.musicSend = n.gain(0.55);
-    const wet = n.gain(0.9);
+    const wet = n.gain(MUSIC_WET);
     this.buses.music.in.connect(this.musicSend);
     this.musicSend.connect(this.convMusic);
     this.convMusic.connect(wet);
     wet.connect(this.masterPre);
     this.musicVerbWet = new Ramp(wet.gain, 0.6, 3e-4);
-    this.musicVerbWet.snap(0.9);
+    this.musicVerbWet.snap(MUSIC_WET);
   }
 
   /** Family trims, master volume and reverb blend. Called every frame. */
@@ -194,7 +227,7 @@ export class Mixer {
 
     this.lastVolume = sim.masterVolume;
     this.masterLevel.set(Math.max(0.0001, sim.masterVolume * (1 - this.hushed)), now);
-    this.musicVerbWet.set(0.9 * duck, now);
+    this.musicVerbWet.set(MUSIC_WET * duck, now);
     this.reverb.update(sim, now);
   }
 
@@ -302,7 +335,11 @@ export class Reverb {
         peak,
       };
     };
-    this.slots = [mk(buffers.irSea, 0.6), mk(buffers.irDeck, 0.55), mk(buffers.irCliff, 0.85)];
+    // `peak` is now a true wet/dry ratio, because the IRs are energy-normalised.
+    // The old numbers looked like these but multiplied by the convolvers' own
+    // x1.8 / x6.1 / x7.1 (at 24 kHz; x2.6 / x8.6 / x10.0 at 48 kHz), so the
+    // cliff wall returned six times the signal that was sent to it.
+    this.slots = [mk(buffers.irSea, 0.45), mk(buffers.irDeck, 0.5), mk(buffers.irCliff, 0.7)];
   }
 
   update(sim: SimView, now: number): void {
