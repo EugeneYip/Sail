@@ -596,3 +596,40 @@ for both and re-measure Pro's polar (correct, costs a calibration pass).
   app booting entirely; `src/vfx/textures.ts` `worley is not defined`) were fixed
   by their owners. Noted only because live verification is fragile while several
   agents edit concurrently.
+
+## 21. Repo migration DONE (2026-08-19) — this project now lives at Desktop/sail/leeward
+
+**The problem the owner spotted was real and worse than a wrong path.** The git repo
+was rooted at `/Users/eugene` (the whole home directory), `main` there tracked only
+`global-trade-shock-monitor`, and **all 21 of this game's commits had gone into that
+other project's repository**. On top of that, two unrelated agent worktrees
+(`exciting-jang-c78a92`, `mystifying-cartwright-0a80c4`, 19 MB) were sitting
+physically nested inside `tallship/`.
+
+Now: `/Users/eugene/Desktop/sail/leeward` is a standalone repo on `main` with all
+21 commits, history rewritten so the project is at the ROOT (no `tallship/` prefix).
+Clean by construction — `git subtree split` carries only tracked content, and the
+nested worktrees were never tracked, so none of that came across. Verified:
+
+- `git ls-files | grep -c '\.claude/'` → **0**
+- `npm ci && npm run build` → **green**, `dist` **386 KB gzipped** total
+- boots and renders from the new repo: noon p25 25.4 ms, 83 draw calls, 0.60 Mtri
+- `.tmp/`, `.DS_Store`, `shots/`, `dist/` now gitignored and untracked
+
+**The old worktree at `.claude/worktrees/sailing-game-aaa-quality-ca2247` is now a
+stale backup.** Do not work in it. `/Users/eugene/Desktop/sail/leeward` is the single
+source of truth; `.claude/launch.json` points the dev server there.
+
+The two nested worktrees are still registered in the home repo and belong to other
+sessions, so I left them alone rather than deleting another session's work.
+
+## 22. A tooling bug that invalidated earlier crops
+
+`.tmp/crop.mjs` mixed CSS-percentage and pixel coordinate systems, so its zoom and
+registration disagreed by a factor of 1600/1400. **Every crop any agent took with it
+landed off-register at the wrong magnification.** Fixed by the ocean agent.
+
+This does not invalidate the *observations* made from those crops — the pixels were
+real pixels from a real frame, including the flat grey slab off the bow (§17 defect
+A). It does invalidate the **coordinates**: the region examined was not the region
+requested. Re-crop before trusting any position stated in §17.
