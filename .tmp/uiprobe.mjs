@@ -98,6 +98,27 @@ async function settle(page, s) {
   await page.waitForTimeout(s * 1000);
 }
 
+/**
+ * A screenshot that cannot take the run down with it.
+ *
+ * Several agents share this machine; at load 200 Chromium's GPU process gets
+ * starved and `captureScreenshot` simply never returns. Losing one frame is a
+ * nuisance, losing the assertions that came after it is what actually wasted a
+ * session — so retry once, then record the gap and carry on.
+ */
+async function shot(page, rel, opts = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await page.screenshot({ path: stage(rel), timeout: 90000, ...opts });
+      return true;
+    } catch {
+      if (attempt === 0) await page.waitForTimeout(4000);
+    }
+  }
+  notes.push(['MISSED SHOT (machine starved)', rel]);
+  return false;
+}
+
 /** Self-cost, read straight off the blackboard the UI writes it to. */
 async function uiCost(page) {
   return page.evaluate(() => +window.__leeward.world.stats['ui:ms'].toFixed(4));
@@ -162,7 +183,7 @@ async function collision(page) {
   await begin(page);
 
   // The hint is live and the player has not touched anything yet.
-  await page.screenshot({ path: stage('shots/probe-hint.png') });
+  await shot(page, 'shots/probe-hint.png');
   notes.push(['first-run hint', JSON.stringify(await state(page))]);
 
   // Steer, the way the hint says to. The hint should give up.
@@ -170,7 +191,7 @@ async function collision(page) {
   await page.waitForTimeout(1400);
   await page.keyboard.up('ArrowLeft');
   await settle(page, 5);
-  await page.screenshot({ path: stage('shots/probe-minimal.png') });
+  await shot(page, 'shots/probe-minimal.png');
   const minCost = await uiCost(page);
   const minState = await state(page);
   notes.push(['minimal', `${minCost.toFixed(4)} ms  ${JSON.stringify(minState)}`]);
@@ -184,14 +205,14 @@ async function collision(page) {
   // The toggle, clicked exactly where a player would click it.
   await page.click('.modesw-b:last-child');
   await settle(page, 4);
-  await page.screenshot({ path: stage('shots/probe-pro.png') });
+  await shot(page, 'shots/probe-pro.png');
   const proCost = await uiCost(page);
   notes.push(['pro', `${proCost.toFixed(4)} ms  ${JSON.stringify(await state(page))}`]);
 
   // ...and back, by key this time.
   await page.keyboard.press('i');
   await settle(page, 3);
-  await page.screenshot({ path: stage('shots/probe-back.png') });
+  await shot(page, 'shots/probe-back.png');
   notes.push(['back via I', JSON.stringify(await state(page))]);
 
   // Does the helm still answer after clicking the toggle? (Focus theft check.)
@@ -205,7 +226,7 @@ async function collision(page) {
   // Idle fade, and the panel.
   await page.click('.menu');
   await settle(page, 1.5);
-  await page.screenshot({ path: stage('shots/probe-panel.png') });
+  await shot(page, 'shots/probe-panel.png');
   await page.keyboard.press('Escape');
 
   await ctx.close();
@@ -225,7 +246,7 @@ for (const [label, viewport] of [
   );
   await begin(page);
   await settle(page, 5);
-  await page.screenshot({ path: stage(`shots/probe-phone-${label}.png`) });
+  await shot(page, `shots/probe-phone-${label}.png`);
   const st = await state(page);
   notes.push([`phone ${label}`, `${(await uiCost(page)).toFixed(4)} ms  ${JSON.stringify(st)}`]);
   const col = await collision(page);
@@ -267,15 +288,14 @@ for (const [label, viewport] of [
 
   // The thumb pads over sunlit wake — the background they actually have to beat.
   // Clipped to the bottom strip at device scale 2 so the chevron weight is real.
-  await page.screenshot({
-    path: stage(`shots/probe-pads-${label}.png`),
+  await shot(page, `shots/probe-pads-${label}.png`, {
     clip: { x: 0, y: viewport.height - 110, width: viewport.width, height: 110 },
   });
 
   if (label === 'landscape') {
     await page.click('.modesw-b:last-child');
     await settle(page, 3);
-    await page.screenshot({ path: stage('shots/probe-phone-pro.png') });
+    await shot(page, 'shots/probe-phone-pro.png');
     notes.push(['phone pro', JSON.stringify(await state(page))]);
     // Pro adds the sail pair. It must not land on top of an instrument.
     const overlap = await page.evaluate(() => {
@@ -293,8 +313,7 @@ for (const [label, viewport] of [
     });
     notes.push(['phone pro sail pads', overlap]);
     if (overlap.startsWith('OVERLAPS')) errors.push(`[phone-${label}] sail pads ${overlap}`);
-    await page.screenshot({
-      path: stage('shots/probe-pads-pro.png'),
+    await shot(page, 'shots/probe-pads-pro.png', {
       clip: { x: 0, y: viewport.height - 130, width: viewport.width, height: 130 },
     });
   }
@@ -340,7 +359,7 @@ for (const [label, viewport] of [
     const up = await page.evaluate(() => window.__leeward.world.ext.ui?.hudVisible);
     if (!up) errors.push(`[zoom-${label}] the HUD was faded out — nothing to judge`);
     for (const [c, clip] of Object.entries(corners)) {
-      await page.screenshot({ path: stage(`shots/probe-zoom-${label}-${c}.png`), clip });
+      await shot(page, `shots/probe-zoom-${label}-${c}.png`, { clip });
     }
   }
   notes.push(['zoom pass', `${(await uiCost(page)).toFixed(4)} ms`]);

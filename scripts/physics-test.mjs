@@ -339,56 +339,105 @@ check(dHeel < 0.5, 'heel identical at 30 and 144 fps', `${dHeel.toFixed(3)} deg 
  * ------------------------------------------------------------------ */
 
 console.log('\nSTABILITY — 10 simulated minutes of gale on the real wave field');
-const gale = await page.evaluate(() => {
-  const w = window.__leeward.world;
-  const px = w.ext.physics;
-  w.env.windSpeed = 24;
-  w.env.gust = 1.25;
-  w.env.waveHeight = 7;
-  w.env.seaState = 8;
-  w.input.steer = 0;
-  px.flatSea = false;
-  const heading = (w.env.windBearing * 180 / Math.PI - 130 + 720) % 360;
-  px.reset(heading, 6);
-  px.sailLevel = 16;
-  for (const s of w.ship.sails) s.set = 1;
-  const tr = px.run(600, 1 / 60, true);
-  let bad = 0;
-  let maxKn = 0;
-  let maxHeel = 0;
-  let maxSlam = 0;
-  let maxPitch = 0;
-  for (const s of tr) {
-    for (const k in s) if (!Number.isFinite(s[k])) bad++;
-    maxKn = Math.max(maxKn, s.knots);
-    maxHeel = Math.max(maxHeel, Math.abs(s.heelDeg));
-    maxSlam = Math.max(maxSlam, Math.abs(s.bowSlam));
-    maxPitch = Math.max(maxPitch, Math.abs(s.pitchDeg));
-  }
-  const last = tr[tr.length - 1];
-  return {
-    bad,
-    frames: tr.length,
-    maxKn,
-    maxHeel,
-    maxSlam,
-    maxPitch,
-    lastKn: last.knots,
-    lastHeel: last.heelDeg,
-    y: w.ship.position.y,
-    volume: px.volume,
-    canvas: last.sailArea,
-    sailLevel: px.sailLevel,
-  };
-});
-note('frames simulated', gale.frames);
-note('peak speed / heel / pitch', `${gale.maxKn.toFixed(2)} kn / ${gale.maxHeel.toFixed(1)} deg / ${gale.maxPitch.toFixed(1)} deg`);
-note('peak bow acceleration', `${gale.maxSlam.toFixed(1)} m/s^2 (${(gale.maxSlam / 9.81).toFixed(2)} g)`);
+/*
+ * READ THIS BEFORE YOU "FIX" A FAILURE HERE.
+ *
+ * `px.run()` steps the solver but never ticks the ocean, so all 36 000 frames of
+ * one gale sail through a SINGLE frozen wave snapshot — whichever one happened to
+ * be current when `run()` was called. The ocean's phase advances only on real
+ * rendered frames, so which snapshot you get is a function of how long every test
+ * before this one took, and it is not controllable from here: `Ocean.cpu` is
+ * private and neither `IOcean` nor `world.ext.ocean` exposes the sim clock.
+ *
+ * The consequence is that the peak of a single run is a draw from a distribution,
+ * not a property of the ship. Measured, with the ship's state held bit-identical
+ * and ONLY the snapshot varying: peak heel spans 30-62 deg and peak speed spans
+ * 11.5-16.5 kn. Two back-to-back runs of this very suite gave 62.1 deg (fail) and
+ * 31.2 deg (pass) off the same commit.
+ *
+ * Asserting on one draw made this the only intermittent test in the suite, and it
+ * cost a previous session a long hunt for a physics regression that did not exist.
+ * So sample several phases and assert on the ship: NaN-freedom is a true invariant
+ * and is required of EVERY run, while the heel and speed peaks are asserted on the
+ * median with a loose bound on the worst draw — loose enough to survive an unlucky
+ * wave, tight enough that a solver which actually capsizes or surfs away still
+ * fails. If you tighten these, tighten them against a measured spread, not one run.
+ */
+const GALE_PHASES = 5;
+const galeOnce = () =>
+  page.evaluate(() => {
+    const w = window.__leeward.world;
+    const px = w.ext.physics;
+    w.env.windSpeed = 24;
+    w.env.gust = 1.25;
+    w.env.waveHeight = 7;
+    w.env.seaState = 8;
+    w.input.steer = 0;
+    px.flatSea = false;
+    const heading = (w.env.windBearing * 180 / Math.PI - 130 + 720) % 360;
+    px.reset(heading, 6);
+    px.sailLevel = 16;
+    for (const s of w.ship.sails) s.set = 1;
+    const tr = px.run(600, 1 / 60, true);
+    let bad = 0;
+    let maxKn = 0;
+    let maxHeel = 0;
+    let maxSlam = 0;
+    let maxPitch = 0;
+    for (const s of tr) {
+      for (const k in s) if (!Number.isFinite(s[k])) bad++;
+      maxKn = Math.max(maxKn, s.knots);
+      maxHeel = Math.max(maxHeel, Math.abs(s.heelDeg));
+      maxSlam = Math.max(maxSlam, Math.abs(s.bowSlam));
+      maxPitch = Math.max(maxPitch, Math.abs(s.pitchDeg));
+    }
+    const last = tr[tr.length - 1];
+    return {
+      bad,
+      frames: tr.length,
+      maxKn,
+      maxHeel,
+      maxSlam,
+      maxPitch,
+      lastKn: last.knots,
+      lastHeel: last.heelDeg,
+      y: w.ship.position.y,
+      volume: px.volume,
+      canvas: last.sailArea,
+      sailLevel: px.sailLevel,
+      oceanTime: w.time.elapsed,
+    };
+  });
+
+const gales = [];
+for (let i = 0; i < GALE_PHASES; i++) {
+  // The only way to move the wave field on from here is to let the live loop
+  // render: `run()` deliberately does not tick the ocean.
+  if (i > 0) await page.waitForTimeout(1700);
+  gales.push(await galeOnce());
+}
+const median = (xs) => [...xs].sort((a, b) => a - b)[xs.length >> 1];
+const galeHeels = gales.map((g) => g.maxHeel);
+const galeKnots = gales.map((g) => g.maxKn);
+const gale = gales[gales.length - 1];
+const medHeel = median(galeHeels);
+const medKn = median(galeKnots);
+
+note('frames simulated', `${gale.frames} x ${GALE_PHASES} wave phases`);
+note('peak heel per phase', galeHeels.map((h) => h.toFixed(1)).join(' / ') + ` deg, median ${medHeel.toFixed(1)}`);
+note('peak speed per phase', galeKnots.map((k) => k.toFixed(2)).join(' / ') + ` kn, median ${medKn.toFixed(2)}`);
+note('peak pitch / bow acceleration', `${Math.max(...gales.map((g) => g.maxPitch)).toFixed(1)} deg / ${Math.max(...gales.map((g) => g.maxSlam)).toFixed(1)} m/s^2`);
 note('canvas she chose to carry', `${gale.canvas.toFixed(0)} m^2, ${gale.sailLevel.toFixed(1)} sails set`);
 note('hull origin / displacement at the end', `${gale.y.toFixed(2)} m / ${gale.volume.toFixed(0)} m^3`);
-check(gale.bad === 0, 'no NaN after 10 simulated minutes in a gale', `${gale.bad} non-finite values`);
-check(gale.maxKn <= 14.5, 'no wave-riding speed blowout', `peak ${gale.maxKn.toFixed(2)} kn`);
-check(gale.maxHeel < 55, 'never knocked flat', `peak heel ${gale.maxHeel.toFixed(1)} deg`);
+const badTotal = gales.reduce((a, g) => a + g.bad, 0);
+check(badTotal === 0, 'no NaN after 10 simulated minutes in a gale, on any wave phase',
+  `${badTotal} non-finite values over ${GALE_PHASES} x ${gale.frames} frames`);
+check(medKn <= 14.5, 'no wave-riding speed blowout', `median peak ${medKn.toFixed(2)} kn`);
+check(Math.max(...galeKnots) <= 18, 'no blowout even on the unluckiest wave',
+  `worst peak ${Math.max(...galeKnots).toFixed(2)} kn`);
+check(medHeel < 50, 'never knocked flat', `median peak heel ${medHeel.toFixed(1)} deg`);
+check(Math.max(...galeHeels) < 75, 'not knocked flat even on the unluckiest wave',
+  `worst peak heel ${Math.max(...galeHeels).toFixed(1)} deg`);
 // `run()` freezes the wave field in time, so bow accelerations there are only
 // what she generates by sailing through it. Measure the real thing live, with
 // the ocean advancing, which is the signal VFX and the camera actually consume.

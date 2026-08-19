@@ -105,6 +105,31 @@ import { ShipDynamics } from './ShipDynamics';
  * default. `px.reset()` always lands in Pro, so the Pro suite never has to know
  * the assist exists.
  *
+ * TEST ISOLATION — two defects were found here, both in the HARNESS, neither in
+ * the solver. Do not re-chase them:
+ *
+ *   1. RIG STATE SURVIVED A RESET. `px.reset()` restored the pose but not the
+ *      yards, so a case inherited the braces the previous case left. The 30-vs-
+ *      144 fps determinism case therefore compared a run that started from a
+ *      stale rig against one that started from a correctly trimmed one, and read
+ *      as a frame-rate bug. It was not: with the same dt run twice back to back
+ *      the two runs disagreed just as much. Fixed by `SailTrim.reset()`, called
+ *      from `ShipDynamics.reset()`, which braces every yard to the trim the
+ *      current apparent wind calls for. `run()` is now a pure function of
+ *      (pose, rig, weather, dt) — the same dt twice is bit-identical, and 30 vs
+ *      144 fps agree to 0.0001 kn. Frame-rate independence was never broken.
+ *
+ *   2. THE GALE CASE MEASURED THE SEA, NOT THE SHIP. `run()` steps the solver but
+ *      never ticks the ocean, so a 600 s gale sails one frozen wave snapshot, and
+ *      which snapshot you get depends on how long the preceding tests took. With
+ *      the ship held bit-identical, peak heel spans 30-62 deg and peak speed
+ *      11.5-16.5 kn across snapshots; two back-to-back runs of the suite gave
+ *      62.1 deg (fail) and 31.2 deg (pass) off one commit. The harness now
+ *      samples five phases and asserts on the median with a loose bound on the
+ *      worst draw. The sim clock is not reachable from a test — `Ocean.cpu` is
+ *      private and neither `IOcean` nor `world.ext.ocean` exposes it — so this
+ *      cannot be fixed properly without a small addition to `src/ocean`.
+ *
  * If you are resuming: run `node scripts/physics-test.mjs` first. If it passes,
  * the solver is intact and whatever you are chasing is elsewhere. Use
  * `--quick` while iterating; the full run uses 240 s settles per data point.

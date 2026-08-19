@@ -463,3 +463,38 @@ colour with almost no grain; the sails read as flat cloth. The owner specificall
 asked for deck wood grain and sail fabric weave to hold up under close
 inspection. Procedural albedo/normal/roughness detail needs to survive at close
 range, not just read correctly at 80 m.
+
+## 18. Repo migration to a standalone project (owner decision 2026-08-19)
+
+The owner asked for the work to live on `main` rather than in a worktree. Checking
+the topology first turned up a hazard worth recording: **this git repo is rooted at
+`/Users/eugene` — the entire home directory — and `main` is checked out there**,
+tracking only 41 files. A naive merge would have put the game at `~/tallship`,
+committed `.claude/` (session data, worktrees, settings) and `.DS_Store` into
+version control, and left a repo spanning the home directory — which would then
+publish the home directory when pushed to GitHub for Pages.
+
+Owner chose a **standalone repo**. Step 1 is done and durable:
+
+```
+git subtree split --prefix=tallship -b leeward-standalone
+```
+
+That branch has **17 commits with the files at the repo root** (no `tallship/`
+prefix) — full history preserved, correctly rewritten.
+
+**Remaining, to run when no agents are active** (it needs a quiet machine; the
+first attempt timed out at load 163 competing with six agents):
+
+```bash
+DEST=/Users/eugene/Desktop/sail/leeward
+mkdir -p "$DEST" && cd "$DEST" && git init -b main
+git fetch <worktree-path> leeward-standalone && git reset --hard FETCH_HEAD
+# then: add .tmp/ and .DS_Store to .gitignore (both are currently tracked),
+# verify `npm ci && npm run build` is green, and confirm base:'./' still
+# resolves for a GitHub Pages subpath.
+```
+
+Do NOT delete the worktree until the standalone repo is verified building — the
+worktree is where every agent is currently working, and `leeward-standalone` must
+be re-split after their work lands to pick up the final commits.
