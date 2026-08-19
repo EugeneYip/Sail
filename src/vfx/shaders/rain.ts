@@ -159,7 +159,11 @@ vec4 bead(vec2 uv, float scale, float seedOff, float sizeMul){
       vec2 o = vec2(float(i), float(j));
       vec2 cell = id + o;
       vec3 h = hash32(cell + seedOff);
-      if (h.z > 0.30) continue;                       // most cells are empty
+      // Most cells are empty. At 0.30 roughly a third of both bead scales fired,
+      // which put ~40 evenly spaced soft discs over the whole 'storm' frame,
+      // sky included, and they read as dust on the sensor rather than water on
+      // glass. 'h.z' also drives the radius, so tightening this shrinks them too.
+      if (h.z > 0.14) continue;
       // Slip-stick crawl, slower for small beads.
       float t = uTime * (0.05 + h.z * 0.5) + h.x * 9.0;
       float slip = floor(t) + smoothstep(0.55, 1.0, fract(t));
@@ -198,7 +202,11 @@ void main(){
   }
   col += uMoonColor * uMoonIntensity * INV_PI * 0.8 * fres;
 
-  float a = m * uIntensity * (0.16 + 0.5 * fres);
+  // Rim-dominant. We cannot refract the scene from here, so a bead's filled body
+  // is just a pale disc laid over the image — the Fresnel ring is the only part
+  // that is actually informative, and weighting the body up is what made these
+  // read as smudges instead of droplets.
+  float a = m * uIntensity * (0.04 + 0.80 * fres);
   gl_FragColor = vec4(col * a, a);
 }
 `;

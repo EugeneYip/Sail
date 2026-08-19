@@ -29,6 +29,7 @@ const DIRT_STRENGTH = 1.5;
 const CA_STRENGTH = 0.0011; // ~1.3 px of channel split at the corner
 const VIGNETTE_STRENGTH = 0.045;
 const GRAIN_STRENGTH = 0.018;
+const SPLIT_TONE_AMOUNT = 0.16;
 /** Radiance ceiling in exposed units. +6 stops over white. */
 const FIREFLY_CLAMP = 64;
 
@@ -173,7 +174,10 @@ export class Pipeline {
       uGain: { value: new THREE.Vector3(1, 1, 1) },
       uSplitShadow: { value: new THREE.Vector3(0.955, 0.99, 1.07) },
       uSplitHighlight: { value: new THREE.Vector3(1.055, 1.005, 0.95) },
-      uSplitAmount: { value: 0.34 },
+      // The look LUTs carry their own split tone. This is the second one, and
+      // two stacked split tones is exactly how a frame starts reading as a
+      // filter, so it is a whisper on top of the grade, not a partner to it.
+      uSplitAmount: { value: SPLIT_TONE_AMOUNT },
       uSaturation: { value: 1 },
     });
 
@@ -469,7 +473,8 @@ export class Pipeline {
     (this.composite.uniforms.uGain.value as THREE.Vector3).setScalar(1 - lift * 0.8);
     this.composite.uniforms.uSaturation.value = 1 - haze * 0.16;
     // Overcast light is already neutral; splitting it further reads as a filter.
-    this.composite.uniforms.uSplitAmount.value = 0.34 * (1 - clamp01(env.cloudCover) * 0.35);
+    this.composite.uniforms.uSplitAmount.value =
+      SPLIT_TONE_AMOUNT * (1 - clamp01(env.cloudCover) * 0.35);
   }
 
   private renderUnderwater(

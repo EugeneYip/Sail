@@ -80,15 +80,27 @@ uniform mat4  uCloudShadowMatrix;
 uniform float uCloudShadowStrength;
 
 /**
- * Fraction of DIRECT sunlight that reaches a world-space point through the cloud
- * deck. 1.0 outside the map, and 1.0 whenever there are no clouds.
+ * RELATIVE modulation of the direct sun at a world-space point: how much light
+ * this spot gets compared with the deck's average. 1.0 outside the map, 1.0 with
+ * no clouds, above 1 in a sunlit gap and near 0 under a thick cell.
  *
- * Multiply your direct sun term by this and nothing else. In particular do not
- * also scale the ambient or the fog: 'uSunIntensity' already carries the deck's
- * MEAN attenuation, and 'uCloudShadowStrength' is published as that same mean so
- * that mix(1, T, strength) cannot count the deck twice — at solid overcast the
- * mean has done the work and the strength tapers with it, while at broken cover
- * the strength is near 1 and shadows land at full contrast.
+ * Multiply your direct sun term by this and nothing else. Do not also scale the
+ * ambient or the fog.
+ *
+ * The map holds ABSOLUTE transmittance along the sun ray. 'uSunIntensity' has
+ * already been multiplied by the deck's MEAN transmittance, and
+ * 'uCloudShadowStrength' is published as exactly that mean — so the value that
+ * does not double-count the deck is the RATIO, not a blend. This used to be
+ * 'mix(1.0, T, strength)', which is neither: at a mean of 0.7 it lit a gap at
+ * 0.7 of full sun and a shadow at 0.23 instead of 0.035, so the contrast between
+ * sunlit water and shadowed water came out 3:1 when it should be nearly 30:1 —
+ * and under a real overcast, where the mean is small, it faded the shadows out
+ * altogether just when the sky was most dramatic. Moving cloud shadow on open
+ * water is the largest single realism win the sky has to give the sea; it is
+ * worth getting the algebra right.
+ *
+ * Clamped above 1 rather than free, because a gap under a very dark deck would
+ * otherwise ask for a 25x spike and blow the highlight out.
  *
  * One texture fetch. The map is a sea-level slice, so a receiver well above the
  * water drifts by 'altitude / tan(sunElevation)'; at a masthead that is metres
@@ -98,6 +110,7 @@ float lwCloudShadow(vec3 worldPos){
   if (uCloudShadowStrength <= 0.0) return 1.0;
   vec2 uv = (uCloudShadowMatrix * vec4(worldPos, 1.0)).xy;
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
-  return mix(1.0, texture2D(uCloudShadowMap, uv).r, uCloudShadowStrength);
+  float t = texture2D(uCloudShadowMap, uv).r;
+  return clamp(t / max(uCloudShadowStrength, 0.05), 0.0, 1.35);
 }
 `;

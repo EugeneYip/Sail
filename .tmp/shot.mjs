@@ -42,6 +42,8 @@ const browser = await chromium.launch({
   args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--force-color-profile=srgb', '--hide-scrollbars', '--mute-audio', '--autoplay-policy=no-user-gesture-required'],
 });
 const page = await browser.newPage({ viewport: { width: args.w, height: args.h }, deviceScaleFactor: 1, colorScheme: 'dark' });
+page.setDefaultTimeout(240000);
+page.setDefaultNavigationTimeout(240000);
 const logs = [];
 const errors = [];
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));

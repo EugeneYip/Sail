@@ -174,9 +174,28 @@ export class AutoExposure {
    * So: read the buffer while its fence is still alive, and always write the OTHER
    * slot. With metering every third frame the two slots are 6 frames apart, which
    * is far more than the one-to-two frame latency of the copy.
+   *
+   * ## Measured, on a quiet machine, 1600x900 ultra
+   *
+   * | variant | ms per call |
+   * |---|---|
+   * | the three metering passes, `finish`ed | 0.025 |
+   * | `readPixels` into a fenced PBO, consumed later | 0.017 |
+   * | `readRenderTargetPixels`, 1x1 rgba32f | 0.183 |
+   * | fence written and *waited on in the same frame* | 1.53 |
+   *
+   * That last row is the trap, and it is where the 6.8 ms attributed to this pass
+   * came from: touching the buffer before the GPU has drained it turns a free
+   * copy into a full pipeline stall. Nothing here may ever wait on a fence it
+   * created this frame.
+   *
+   * The residual "READ-usage buffer ... fenced ... written again" warnings in the
+   * capture log are NOT from this class — they persist unchanged with this whole
+   * method stubbed out, and the only other reader of a render target in the
+   * project is the ocean's synchronous `readRenderTargetPixels` in
+   * `src/ocean/Ocean.ts`. That one is the ocean module's to own.
    */
   private readback(r: THREE.WebGLRenderer, result: THREE.WebGLRenderTarget): void {
-    if (1) return; // TEMP experiment
     const gl = (this.gl ??= asWebGL2(r));
     if (!gl || this.asyncFailed) {
       this.readbackSync(r, result);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Module, QualityTier, World } from '../types';
 import { AtmosphereLuts } from './AtmosphereLuts';
-import { AERIAL_SLICES, AIRGLOW, KOSCHMIEDER, M_TO_KM } from './constants';
+import { AERIAL_SLICES, AIRGLOW, CLEAR_VISIBILITY_M, KOSCHMIEDER, M_TO_KM } from './constants';
 
 /**
  * Frames between full rebuilds of the aerial-perspective froxel volume. 0 skips
@@ -107,7 +107,9 @@ export class Sky implements Module {
     // the clouds visibly swim behind the ship.
     this.render.onDraw = (camera, renderer2) => {
       this.clouds.render(world, camera, renderer2);
-      this.render.material.uniforms.tClouds.value = this.clouds.texture;
+      const u = this.render.material.uniforms;
+      u.tClouds.value = this.clouds.texture;
+      (u.uCloudTexel.value as THREE.Vector2).copy(this.clouds.texel);
     };
     world.scene.add(this.render.mesh);
 
@@ -134,6 +136,9 @@ export class Sky implements Module {
       horizonColor: this.radiometry.horizonColor,
     };
     world.ext.sky = this.handshake;
+
+    // TEMP-DEBUG-SKY: raw handle for the cloud temporal-convergence probe.
+    (globalThis as unknown as Record<string, unknown>).__skyDbg = this;
 
     // One warm-up so the very first frame is lit, not black.
     this.camPos.setFromMatrixPosition(world.camera.matrixWorld);
@@ -302,6 +307,12 @@ export class Sky implements Module {
     su.uMilkyWay.value = rad.milkyWayBrightness;
     su.uMieMul.value = rad.mieMul;
     su.uSkyTime.value = world.time.elapsed;
+
+    // Weather haze. Only the extinction in EXCESS of a clear 30 km day, because
+    // the sky-view LUT already carries clear-air aerosol through the turbidity
+    // multiplier; adding all of it would haze a clear noon twice.
+    (su.uHazeColor.value as THREE.Vector3).set(rad.fogColor.r, rad.fogColor.g, rad.fogColor.b);
+    su.uHazeBeta.value = Math.max(0, u.uFogDensity.value - KOSCHMIEDER / CLEAR_VISIBILITY_M);
 
     (su.uCloudLightDir.value as THREE.Vector3).copy(rad.cloudLightDir);
     (su.uCloudLightIrradiance.value as THREE.Vector3).copy(rad.cloudLightIrradiance);

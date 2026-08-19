@@ -84,7 +84,23 @@ float heightGradient(float h, float type){
 float coverageAt(float wmR, float cover){
   float t = 1.0 - cover;
   float u = saturate1((wmR - t) / max(0.12, 1.0 - t));
-  return pow(u, mix(1.7, 0.32, cover));
+  float shaped = pow(u, mix(1.7, 0.32, cover));
+  /*
+   * Floor at high cover, and it is not cosmetic.
+   *
+   * This value goes on to threshold the base noise ('density = remap(shape,
+   * 1 - cf, 1, 1)'), and 'shape' has a narrow distribution around 0.63 — so a
+   * column produces no cloud at all until cf clears about 0.37. Measured at
+   * cover 0.855: 27 % of columns fell under that, the top-down shadow slice came
+   * back 44 % mean transmittance, and the CPU mirror's beamTransmittance said
+   * 0.11. A four-fold disagreement between the deck you see and the deck every
+   * material is lit by, and a gale with blue holes in it.
+   *
+   * Lifting the floor as cover closes removes the threshold entirely by ~0.95, so
+   * a solid overcast is a solid sheet. Below 0.72 nothing changes and broken
+   * cumulus keeps its genuinely blue gaps.
+   */
+  return mix(shaped, 1.0, smoothstep(0.72, 1.0, cover));
 }
 
 /**

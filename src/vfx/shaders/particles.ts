@@ -317,6 +317,16 @@ void main(){
   // the INV_PI off made spray and foam PI x too bright and, because foam is the
   // brightest large object in frame, it dragged auto-exposure down over the
   // whole image.
+  //
+  // WHAT THE COEFFICIENTS BELOW MEAN, so nobody 'tunes' them back up. A sprite is
+  // an optically thin scattering slab: its emergent radiance is E/PI times the
+  // NORMALISED phase function, and its optical depth is carried by 'a', not by
+  // the colour. So every coefficient on 'sun' is a phase-function value and must
+  // average to about 1 over the sphere — roughly 0.3..0.8 to the side and back,
+  // with the large excess confined to the forward lobe, which is exactly where
+  // real spray gets its glow. Values summing well above 1 in the side direction
+  // (they used to reach 2.45) say "each individual droplet is brighter than a
+  // sunlit sail", which is what buried the ship in white.
   vec3 sun = uSunColor * uSunIntensity * INV_PI;
   vec3 sky = uSkyColor;
   vec3 moon = uMoonColor * uMoonIntensity * INV_PI;
@@ -360,22 +370,28 @@ void main(){
     a *= dens * 0.5;
   } else if (hard) {
     float wrap = 0.42 + 0.58 * saturate1(uSunDirection.y * 1.6 + 0.15);
-    col = sun * wrap * (0.55 + 0.9 * thick) * spectral;
-    col += sun * lobe * thick * 0.42 * spectral;
+    col = sun * wrap * (0.26 + 0.40 * thick) * spectral;
+    col += sun * lobe * thick * 0.34 * spectral;
     // Sky fill on a scatterer can never exceed the radiance arriving at it.
-    col += sky * (0.42 + 0.5 * rim);
+    col += sky * (0.30 + 0.34 * rim);
     // Specular pip: a curved mirror of the disc, so scaled against radiance.
-    col += sun * pip * 1.3;
-    if (kind > 3.5 && kind < 4.5) col = mix(col, sky * 0.85 + sun * 0.85, 0.5);
+    col += sun * pip * 0.85;
+    // A foam fleck is a raft of aerated water lying on the surface, not a drop in
+    // flight: it is diffuse, and its albedo is the sea-foam albedo the ocean
+    // surface uses (0.38), not a droplet's near-unit scattering.
+    if (kind > 3.5 && kind < 4.5) col = 0.38 * (sky + sun * 0.9);
     col += moon * 0.25;
   } else {
     // Mist / torn sheet: an optically thin scattering slab.
     float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.3 + 0.25);
-    col = sun * wrap * (0.4 + 0.6 * thick) * spectral;
-    col += sun * lobe * 0.5 * (1.0 - thick * 0.5) * spectral;
-    col += sky * 0.8;
+    col = sun * wrap * (0.20 + 0.34 * thick) * spectral;
+    col += sun * lobe * 0.38 * (1.0 - thick * 0.5) * spectral;
+    col += sky * 0.46;
     col += moon * 0.25;
-    a *= 0.5;
+    // Torn sheets and mist are the biggest sprites in the pool, so they are what
+    // actually fills the frame. 0.5 let a few hundred of them stack into an opaque
+    // curtain that swallowed the whole bow.
+    a *= 0.30;
   }
 
   // Soft against the water: fade as the sprite approaches the real surface, so

@@ -70,9 +70,12 @@ uniform float uMilkyWay;
 uniform float uPixelAngle;
 uniform float uMieMul;
 uniform float uSkyTime;
+uniform vec3  uHazeColor;
+uniform float uHazeBeta;
 
 #ifdef SKY_CLOUDS
 uniform sampler2D tClouds;
+uniform vec2 uCloudTexel;
 #endif
 
 #ifdef SKY_ENV_CLOUDS
@@ -177,13 +180,49 @@ void main(){
   L += weakSourceSkyGlow(dir, uMoonDirection, uMoonGlow, uMieMul) * above;
 
 #ifdef SKY_CLOUDS
-  vec4 cl = texture(tClouds, vUv);
+  // Four bilinear taps on a rotated grid one screen pixel out — a near-Gaussian
+  // 3x3 over the half-res buffer for four fetches.
+  //
+  // The march is deliberately under-sampled and dithered per pixel, and the
+  // temporal filter only takes the residual down by about half (measured: 3.8 %
+  // of local radiance raw, 1.9 % after accumulation). What is left is an
+  // interleaved-gradient pattern, and IGN residue does not read as noise — it
+  // reads as a fine horizontal comb combed across every cloud face, which was
+  // the single most artificial thing in the sky. Clouds are the lowest-frequency
+  // thing in the frame, so this costs nothing real.
+  vec2 co = uCloudTexel * 0.5;
+  vec4 cl = 0.25 * (texture(tClouds, vUv + co)
+                  + texture(tClouds, vUv - co)
+                  + texture(tClouds, vUv + vec2(co.x, -co.y))
+                  + texture(tClouds, vUv + vec2(-co.x, co.y)));
   L = L * cl.a + cl.rgb;
 #endif
 #ifdef SKY_ENV_CLOUDS
   vec4 ecl = envCloudMarch(uCameraPosW, dir);
   L = L * ecl.a + ecl.rgb;
 #endif
+
+  /*
+   * Weather haze.
+   *
+   * The sky-view LUT is baked from the atmosphere's own aerosol profile, scaled
+   * by turbidity, and knows nothing whatever about 'env.visibility'. So at 5.2 km
+   * visibility in a gale it still handed back a clean gradient with a bright blue
+   * band at the horizon, and at 1.4 km in fog it handed back a sky. Visibility
+   * reached uFogDensity, the ocean and the shore, and nothing else — which is
+   * also why the horizon read as a seam: the sea was hazed and the sky was not.
+   *
+   * Only the EXCESS over clear air is applied, so a 30 km day is untouched and
+   * the LUT's own aerosol is not double-counted. Weather haze lives in the
+   * boundary layer, so the column a view ray accumulates is HAZE_H/|dir.y| —
+   * bounded looking up, unbounded along the horizon, which is exactly the shape
+   * that makes a low sky close in around you.
+   */
+  if (uHazeBeta > 1e-7) {
+    const float HAZE_H = 900.0;
+    float hazeTau = uHazeBeta * (HAZE_H / max(abs(dir.y), 0.015));
+    L = mix(uHazeColor, L, exp(-hazeTau));
+  }
 
   fragColor = vec4(max(L, vec3(0.0)), 1.0);
 }

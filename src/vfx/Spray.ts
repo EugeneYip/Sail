@@ -85,8 +85,15 @@ export class Spray {
     // Wave-making rises steeply with Froude number; a short steep sea and a
     // falling bow both multiply it.
     const drive = Math.pow(sN, 2.2) * (0.55 + 1.5 * seaway + 0.5 * chop);
-    const rate = 2600 * drive * d;
-    const sheetRate = 380 * drive * d;
+    // RATES. Measured against the `waterline` capture: at 2600 + 380 per second
+    // the pool held ~4000 sprites in a 40 m envelope around the bow and rendered
+    // as one opaque white mass that hid the entire forward half of the hull. A
+    // frigate at 11 kn in a rough sea throws a visible FAN of spray off each bow,
+    // through which you can still see the topsides. Sheets are the expensive ones
+    // visually — they grow to ~2 m and are shaded as a scattering slab — so they
+    // are the deepest cut.
+    const rate = 850 * drive * d;
+    const sheetRate = 85 * drive * d;
 
     this.accBow += rate * dt;
     this.accSheet += sheetRate * dt;
@@ -132,16 +139,16 @@ export class Spray {
       if (sheet) {
         p.spawn(
           _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
-          0.75 + Math.random() * 0.85,
-          0.7 + Math.random() * 1.5,
+          0.6 + Math.random() * 0.7,
+          0.45 + Math.random() * 0.75,
           KIND.SHEET, 0.9 + Math.random(),
         );
       } else {
         const fine = Math.random();
         p.spawn(
           _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
-          1.1 + Math.random() * 1.9,
-          0.055 + fine * fine * 0.42,
+          0.85 + Math.random() * 1.4,
+          0.045 + fine * fine * 0.30,
           KIND.DROPLET, 0.45 + fine * 2.6,
         );
       }
@@ -167,7 +174,7 @@ export class Spray {
 
     const power = clamp01((mag - g * 0.55) / (g * 2.2));
     const sN = Math.max(ctx.speedN, 0.12);
-    const n = Math.min(Math.floor((90 + 420 * power) * (0.4 + sN) * d), p.room);
+    const n = Math.min(Math.floor((55 + 230 * power) * (0.4 + sN) * d), p.room);
     const stag = (ctx.speed * ctx.speed) / 19.62;
 
     ctx.toWorld(_local.set(0, 0, -HULL.lwl * 0.5 + 1.5), _c);
@@ -186,11 +193,11 @@ export class Spray {
       _b.addScaledVector(ctx.fwd, 2.0 + Math.random() * 7.0);
       _b.addScaledVector(ctx.world.ship.velocity, 0.45);
 
-      const sheet = Math.random() < 0.3;
+      const sheet = Math.random() < 0.24;
       p.spawn(
         _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
-        sheet ? 0.9 + Math.random() * 0.9 : 1.5 + Math.random() * 2.2,
-        sheet ? 1.1 + Math.random() * 1.9 : 0.07 + Math.random() * 0.5,
+        sheet ? 0.8 + Math.random() * 0.8 : 1.3 + Math.random() * 1.8,
+        sheet ? 0.7 + Math.random() * 1.1 : 0.06 + Math.random() * 0.34,
         sheet ? KIND.SHEET : KIND.DROPLET,
         sheet ? 0.8 : 0.5 + Math.random() * 2.4,
       );
@@ -211,7 +218,7 @@ export class Spray {
     if (sN < 0.22) return;
     const rudder = Math.abs(ctx.rudder);
     const drive = Math.pow(sN, 2.4) * (1 + rudder * 1.6);
-    this.accStern += 700 * drive * d * dt;
+    this.accStern += 240 * drive * d * dt;
     let n = Math.floor(this.accStern);
     this.accStern -= n;
     n = Math.min(n, p.room);
@@ -229,9 +236,9 @@ export class Spray {
 
       p.spawn(
         _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
-        0.9 + Math.random() * 1.5,
-        0.09 + Math.random() * 0.5,
-        Math.random() < 0.25 ? KIND.SHEET : KIND.DROPLET,
+        0.8 + Math.random() * 1.2,
+        0.07 + Math.random() * 0.32,
+        Math.random() < 0.18 ? KIND.SHEET : KIND.DROPLET,
         0.6 + Math.random() * 2.0,
       );
     }
@@ -241,7 +248,7 @@ export class Spray {
   private wakeFlecks(ctx: VfxCtx, p: Particles, dt: number, d: number): void {
     const sN = ctx.speedN;
     if (sN < 0.14) return;
-    this.accFleck += 900 * Math.pow(sN, 1.6) * d * dt;
+    this.accFleck += 340 * Math.pow(sN, 1.6) * d * dt;
     let n = Math.floor(this.accFleck);
     this.accFleck -= n;
     n = Math.min(n, p.room);
@@ -260,7 +267,7 @@ export class Spray {
       p.spawn(
         _a.x, _a.y, _a.z, _b.x, 0, _b.z,
         2.5 + Math.random() * 4.0,
-        0.35 + Math.random() * 1.5,
+        0.28 + Math.random() * 0.85,
         KIND.FLECK, 0.05,
       );
     }
@@ -279,11 +286,11 @@ export class Spray {
     const w = ctx.windSpeed;
     if (w < SPINDRIFT_ONSET) return;
     const f = smoothstep(SPINDRIFT_ONSET, SPINDRIFT_FULL, w);
-    this.accDrift += 2400 * f * f * d * dt;
+    this.accDrift += 950 * f * f * d * dt;
     let n = Math.floor(this.accDrift);
     this.accDrift -= n;
     if (n === 0) return;
-    n = Math.min(n, 260, p.room);
+    n = Math.min(n, 180, p.room);
 
     const res = probe.res;
     const cells = res * res;
@@ -317,11 +324,11 @@ export class Spray {
       // Spindrift is overwhelmingly *streaks* — long thin ribbons of torn foam
       // running downwind off the crest. Only a small fraction atomises into a
       // cloud, and it stays small: fat mist puffs read as weather, not as sea.
-      const streak = Math.random() < 0.86;
+      const streak = Math.random() < 0.92;
       p.spawn(
         px, py, pz, _b.x, _b.y, _b.z,
-        streak ? 0.7 + Math.random() * 1.1 : 1.2 + Math.random() * 1.6,
-        streak ? 0.08 + Math.random() * 0.24 : 0.45 + Math.random() * 1.0,
+        streak ? 0.7 + Math.random() * 1.1 : 1.0 + Math.random() * 1.2,
+        streak ? 0.07 + Math.random() * 0.20 : 0.35 + Math.random() * 0.7,
         streak ? KIND.SPINDRIFT : KIND.MIST,
         streak ? 1.8 + Math.random() * 2.6 : 3.0 + Math.random() * 2.0,
       );
@@ -340,7 +347,7 @@ export class Spray {
     const w = ctx.windSpeed;
     const f = smoothstep(14, 26, w) * (0.45 + 0.55 * clamp01(ctx.world.env.waveHeight / 6));
     if (f < 0.01) return;
-    this.accMist += 130 * f * d * dt;
+    this.accMist += 55 * f * d * dt;
     let n = Math.floor(this.accMist);
     this.accMist -= n;
     n = Math.min(n, p.room);
@@ -363,7 +370,7 @@ export class Spray {
       p.spawn(
         px, wy + 0.3 + Math.random() * 0.9, pz, _b.x, _b.y, _b.z,
         3.0 + Math.random() * 3.0,
-        1.1 + Math.random() * 2.2,
+        0.9 + Math.random() * 1.5,
         KIND.MIST, 1.2 + Math.random(),
       );
     }

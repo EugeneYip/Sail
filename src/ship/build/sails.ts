@@ -29,7 +29,7 @@ import * as THREE from 'three';
 import type { World } from '../../types';
 import { GLSL, lwFloat } from '../../util/glsl';
 import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
-import { JIB_CUT, JIB_IDS, PART, SAIL_YARDS, SPANKER_CLEW, squareCut } from '../dims';
+import { JIB_CUT, JIB_IDS, MASTS, PART, SAIL_YARDS, SPANKER_CLEW, squareCut } from '../dims';
 import { PARTS_DECL } from '../shaders/parts';
 import {
   PANEL_TILE_M, PANEL_WIDTH_M, SAIL_VERT_BODY, SEAM_TILE_M, sailDecl,
@@ -60,6 +60,13 @@ const GRID: readonly [number, number][] = [[13, 9], [17, 11], [21, 15], [27, 19]
 
 /** How much light comes through the cloth, relative to its diffuse albedo. */
 const CLOTH_TRANSMISSION = 0.34;
+
+/** Depth of a tension crease at the clew, metres. */
+const CREASE_AMP_M = 0.05;
+/** How far a crease reaches into the sail, as a fraction of the hoist. */
+const CREASE_REACH = 0.4;
+/** Ridges in the fan from one corner, in cycles of the fan parameter. */
+const CREASE_CYCLES = 2.4;
 
 interface SailUniforms {
   uSailA: { value: THREE.Vector3[] };
@@ -130,12 +137,16 @@ export function buildSails(
       const yf = frame.yards.find((v) => v.spec.id === yard.id);
       if (!yf) continue;
       const cut = squareCut(yard);
-      // The head is bent to the jackstay, tucked just abaft the yard so the
-      // spar hides the seam and the belly can go either side of it.
+      // The head is bent to a jackstay on the FORE side of the yard, and the
+      // foot carries the mast's own rake so the cloth hangs parallel to the
+      // spar instead of crossing it. Both matter: the mast moves ~0.43 m forward
+      // over the drop of a course while the sail used to hang plumb, so the
+      // lower third of every square sail had the mast straight through it.
+      const rake = yard.mast < MASTS.length ? Math.tan(MASTS[yard.mast].rake) : 0;
       const hy = yf.centre.y;
-      const hz = yf.centre.z + yard.radius * 0.55;
+      const hz = yf.centre.z - yard.radius * 0.35;
       const fy = hy - cut.drop;
-      const fz = hz + cut.drop * 0.03;
+      const fz = hz - cut.drop * rake;
       A.set(-cut.headHalf, hy, hz);
       B.set(cut.headHalf, hy, hz);
       C.set(cut.footHalf, fy, fz);
@@ -291,6 +302,7 @@ varying vec4 vSail;
 varying vec4 vCloth;
 varying vec2 vSailUv;
 varying vec3 vSailWP;
+varying vec3 vSailTan;
 `;
 
 const FRAG_HEAD = /* glsl */ `
@@ -298,6 +310,7 @@ varying vec4 vSail;
 varying vec4 vCloth;
 varying vec2 vSailUv;
 varying vec3 vSailWP;
+varying vec3 vSailTan;
 uniform float uClothTrans;
 `;
 
@@ -315,6 +328,37 @@ const CLOTH_DETAIL = /* glsl */ `
 float lwClothLine(float distM, float widthM, float aa) {
   float w = max(widthM, aa);
   return (1.0 - smoothstep(0.0, w, distM)) * clamp(widthM / w, 0.25, 1.0);
+}
+
+/**
+ * Tension creases fanning out of a corner of the sail.
+ *
+ * A drawing sail is a membrane hauled at discrete points, so the cloth gathers
+ * into a fan of shallow ridges running from each clew up into the belly. They
+ * are the detail that separates cloth under load from a smooth bent plane, and
+ * they are far too fine for a 21x15 vertex grid, so they live in the normal.
+ *
+ * The ridges are laid out in the projective fan parameter y / (x + y), which is
+ * constant along rays from the corner and — unlike atan — differentiable in two
+ * multiplies. That matters: the slopes come back analytically in 'g', so the
+ * normal never needs 'dFdx' of a high-frequency function, which is exactly what
+ * turns fine detail into sparkle in the mid-distance.
+ *
+ *   d      metres from the corner, (along the chord, along the span)
+ *   decayM how far the crease reaches before it dies out
+ *   g      out: (dh/dchord, dh/dspan), dimensionless slopes
+ */
+float lwCreaseFan(vec2 d, float amp, float decayM, float cycles, float phase, out vec2 g) {
+  float s = d.x + d.y + 1e-3;
+  float r = length(d) + 1e-3;
+  float k = cycles * 6.2831853;
+  float A = amp * exp(-r / decayM);
+  float a = k * (d.y / s) + phase;
+  float sn = sin(a);
+  float cs = cos(a);
+  // d/dx of the envelope along the ray, plus d/dx of the ridge across it.
+  g = (-A / decayM) * (d / r) * sn + (A * cs * k) * (vec2(-d.y, d.x) / (s * s));
+  return A * sn;
 }
 `;
 
@@ -391,6 +435,10 @@ function makeSailMaterial(
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        // Declared outside the block so the normal-map stage below can consume
+        // the creases without evaluating the fan a second time.
+        vec2 lwCreaseG = vec2(0.0);
+        float lwCreaseH = 0.0;
         {
           float spanM = vSailUv.x;
           float chordM = vSailUv.y;
@@ -421,6 +469,42 @@ function makeSailMaterial(
           float qf = chordM / 0.52;
           float pts = band * lwClothLine(min(fract(qf), 1.0 - fract(qf)) * 0.52, 0.035, aaC);
 
+          // Cringles: a roped and thimbled eyelet at every corner, and one more
+          // wherever a reef band runs out to a leech.
+          float fromFoot = max(vCloth.y - spanM, 0.0);
+          float cornerR = length(vec2(vCloth.x, min(spanM, fromFoot)));
+          float cring = lwClothLine(abs(cornerR - 0.11), 0.030, aaC);
+          float reefCring = band * lwClothLine(abs(vCloth.x - 0.14), 0.032, aaC);
+
+          // Tension creases from the clews, and a weaker, finer gather at the
+          // head where the cloth is seized to the jackstay. Both die away as
+          // their spacing approaches a pixel: a crease fan that outruns the
+          // sample rate stops reading as cloth and starts reading as noise.
+          // No branch around this: 'load' comes from a varying, so a conditional
+          // would put the fwidth below in non-uniform control flow, where the
+          // derivative is undefined. The weights collapse to zero on their own.
+          float load = clamp(vCloth.w, 0.0, 1.0) * (1.0 - vSail.w);
+          vec2 dClew = vec2(vCloth.x, fromFoot);
+          vec2 dHead = vec2(vCloth.x, spanM);
+          float reach = max(vCloth.y, 1.0) * ${lwFloat(CREASE_REACH)};
+          vec2 g1;
+          vec2 g2;
+          float h1 = lwCreaseFan(dClew, ${lwFloat(CREASE_AMP_M)}, reach,
+                                 ${lwFloat(CREASE_CYCLES)}, 0.0, g1);
+          float h2 = lwCreaseFan(dHead, ${lwFloat(CREASE_AMP_M)} * 0.4, reach * 0.55,
+                                 ${lwFloat(CREASE_CYCLES)} * 1.4, 1.7, g2);
+          // Fade each fan out as its ridge spacing approaches a pixel, and near
+          // the corner itself where the fan parameter is singular.
+          float aaFan = aaC * 5.0;
+          float res1 = clamp((dClew.x + dClew.y) / (${lwFloat(CREASE_CYCLES)} * aaFan) - 1.0, 0.0, 1.0)
+                     * smoothstep(0.05, 0.35, length(dClew));
+          float res2 = clamp((dHead.x + dHead.y) / (${lwFloat(CREASE_CYCLES)} * 1.4 * aaFan) - 1.0, 0.0, 1.0)
+                     * smoothstep(0.05, 0.35, length(dHead));
+          float w1 = load * res1;
+          float w2 = load * res2;
+          lwCreaseH = h1 * w1 + h2 * w2;
+          lwCreaseG = g1 * w1 + g2 * w2;
+
           // Weathering: dirt and mildew collect toward the foot and in patches.
           float stain = noise2(vec2(spanM, chordM) * 0.085);
           float foot = smoothstep(0.5, 1.0, vSail.y);
@@ -431,8 +515,29 @@ function makeSailMaterial(
                                  foot * 0.4 + smoothstep(0.5, 0.9, stain) * 0.35);
           diffuseColor.rgb *= 1.0 - seam * 0.28 - band * 0.2 - pts * 0.5;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.45, rope * 0.9);
+          diffuseColor.rgb *= 1.0 - cring * 0.5 - reefCring * 0.42;
+          // Grime settles in the bottom of a crease.
+          diffuseColor.rgb *= 1.0 - 0.09 * clamp(-lwCreaseH / ${lwFloat(CREASE_AMP_M)}, 0.0, 1.0);
           // The gathered bundle lies in its own shadow.
           diffuseColor.rgb *= 1.0 - 0.45 * smoothstep(0.03, 0.5, vSail.z);
+        }`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        if (dot(lwCreaseG, lwCreaseG) > 1e-12) {
+          // Perturb along the sail's own surface frame. vSailTan is the world
+          // chord direction from the vertex shader, so the only work here is one
+          // Gram-Schmidt against the shaded normal.
+          vec3 lwWn = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
+          vec3 lwT = vSailTan - lwWn * dot(lwWn, vSailTan);
+          float lwTl = length(lwT);
+          if (lwTl > 1e-4) {
+            lwT /= lwTl;
+            vec3 lwB = cross(lwWn, lwT);
+            lwWn = normalize(lwWn - (lwCreaseG.x * lwT + lwCreaseG.y * lwB));
+            normal = normalize((viewMatrix * vec4(lwWn, 0.0)).xyz);
+          }
         }`,
       )
       .replace(
@@ -494,6 +599,7 @@ function makeSailDepth(
         vec4 vSail;
         vec4 vCloth;
         vec3 vSailWP;
+        vec3 vSailTan;
         ${PARTS_DECL}${sailDecl(count)}`,
       )
       .replace('void main() {', `vec3 vPosL;\nvec3 vNormalL;\nvoid main() {\n${SAIL_VERT_BODY}`)

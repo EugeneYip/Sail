@@ -19,6 +19,10 @@ export interface SkyUniforms {
   uMilkyWay: THREE.IUniform<number>;
   uMieMul: THREE.IUniform<number>;
   uSkyTime: THREE.IUniform<number>;
+  /** Horizon radiance the weather haze inscatters — the same value as uFogColor. */
+  uHazeColor: THREE.IUniform<THREE.Vector3>;
+  /** Extinction in EXCESS of clear air, 1/m. 0 on a 30 km day. */
+  uHazeBeta: THREE.IUniform<number>;
   [key: string]: THREE.IUniform;
 }
 
@@ -46,6 +50,8 @@ export function createSkyUniforms(): SkyUniforms {
     uMilkyWay: { value: 0 },
     uMieMul: { value: 1 },
     uSkyTime: { value: 0 },
+    uHazeColor: { value: new THREE.Vector3(0.6, 0.7, 0.82) },
+    uHazeBeta: { value: 0 },
 
     /* --- cloud density field, written by CloudField --- */
     tCloudBase: { value: null },
@@ -123,6 +129,7 @@ export class SkyRender {
         uCameraPosW: { value: new THREE.Vector3() },
         uPixelAngle: { value: 0.001 },
         tClouds: { value: null },
+        uCloudTexel: { value: new THREE.Vector2(1 / 800, 1 / 450) },
       },
       depthTest: false,
       depthWrite: false,

@@ -26,6 +26,25 @@ await page.waitForTimeout(9000);
 const out = await page.evaluate(() => {
   const w = window.__leeward.world;
   const oc = w.ocean;
+
+  // ACCURACY FIRST, BEFORE ANY BENCH. The benches below drive `cpu.update(t)`
+  // with their own clock starting at 0, which walks the CPU mirror to a sim time
+  // the GPU is nowhere near; measuring agreement afterwards compares two
+  // different instants of the same sea and reports a metre of "error" that is
+  // really just elapsed time. Same class of bug as the shared-scratch alias in
+  // `bilinear()` and the capture harness invalidating its own screenshots.
+  const compare = (() => {
+    try {
+      const c = w.ext.ocean.debugCompare(4096);
+      return {
+        rmsDiff: +c.rmsHeight.toFixed(4), maxDiff: +c.maxHeight.toFixed(4),
+        rmsSlopeDiff: +c.rmsSlope.toFixed(4), rmsGpu: +c.rmsGpuField.toFixed(4),
+        rmsCpu: +c.rmsCpuField.toFixed(4), corr: +c.correlation.toFixed(4),
+        cascades: c.cascades,
+      };
+    } catch (e) { return 'ERR ' + e.message; }
+  })();
+
   const bench = (fn, n = 20, k = 5) => {
     const runs = [];
     for (let j = 0; j < k; j++) {
@@ -71,7 +90,7 @@ const out = await page.evaluate(() => {
     fps: Math.round(w.time.fps),
     hs: +oc.params.hs.toFixed(3),
     slopeRms: +oc.params.slopeRms.toFixed(4),
-    compare: (() => { try { const c = w.ext.ocean.debugCompare(4096); return { rmsDiff: +c.rmsHeight.toFixed(4), maxDiff: +c.maxHeight.toFixed(4), rmsSlopeDiff: +c.rmsSlope.toFixed(4), rmsGpu: +c.rmsGpuField.toFixed(4), rmsCpu: +c.rmsCpuField.toFixed(4), corr: +c.correlation.toFixed(4), cascades: c.cascades }; } catch (e) { return 'ERR ' + e.message; } })(),
+    compare,
   };
 });
 

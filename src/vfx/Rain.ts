@@ -101,11 +101,13 @@ export class Rain {
         // redeclared the GLSL uniform and stole the post stack's exposure.
         uShutter: { value: 0.085 },
         // Fraction of instances assigned to the out-of-focus near layer. These
-        // sit 0.3-1.6 m from the lens, so post's DoF turns each one into a large
-        // bokeh disc. At 0.035 (287 drops at ultra) the frame filled with evenly
-        // scattered soft circles and read as snow, not rain. A handful is all the
-        // foreground cue needs.
-        uNearFrac: { value: 0.018 },
+        // sit 0.3-1.6 m from the lens and are drawn 6.5x wider, so each one is a
+        // large soft disc. The count is what matters, not the fraction: at 0.035
+        // (287 discs at ultra) and even at 0.018 (148) the `storm` frame was
+        // covered in evenly spaced circles that read as dust on the sensor. Ten
+        // is enough to say "there is rain between you and this" and few enough
+        // that each one is read as a drop.
+        uNearFrac: { value: 10 / streakCount(world.settings.quality) },
         uIntensity: { value: 0 },
       },
       vertexShader: rainVert,
@@ -228,7 +230,7 @@ export class Rain {
     // Rain wets the lens; so does heavy spray, but only in the exposed
     // camera positions. Slew slowly — the glass takes time to clear.
     const spray = clamp01(ctx.speedN * 1.4) * clamp01((ctx.windSpeed - 13) / 12);
-    const target = smoothstep(0.42, 0.92, rain) * 0.85 + spray * 0.35;
+    const target = smoothstep(0.42, 0.92, rain) * 0.55 + spray * 0.20;
     this.lensAmount = damp(this.lensAmount, Math.min(target, 1), 0.55, dt);
 
     const vis = this.lensAmount > 0.008;

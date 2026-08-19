@@ -38,9 +38,15 @@ const DRAFT_EXP = Math.log(0.5) / Math.log(DRAFT_AT);
 /** Belly depth as a fraction of the chord at camber = 1. */
 const CAMBER_GAIN = 0.42;
 /** Radius of a fully gathered bundle as a fraction of the sail's hoist. */
-const BUNDLE_R = 0.1;
-/** Turns of canvas in a fully gathered bundle. */
-const BUNDLE_TURNS = 2.2;
+const BUNDLE_R = 0.078;
+/**
+ * Turns of canvas in a fully gathered bundle. The whole roll is resolved by the
+ * span rows of the grid — 15 of them at high quality — so 2.2 turns gave under
+ * seven samples per turn and the bundle faceted into hard alternating bands
+ * instead of reading as rolled cloth. Keep this under about a sixth of the row
+ * count or the spiral aliases.
+ */
+const BUNDLE_TURNS = 1.2;
 /** Gaskets across the spar that pinch the bundle in. */
 const GASKETS = 4;
 /**
@@ -194,8 +200,9 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
  * Vertex body. Evaluates the sail three times for an exact normal, then pushes
  * position and normal through the animated-part transform so a braced yard
  * carries its sail round and a sheeted jib swings about its own stay.
- * Requires the varyings `vSail` / `vCloth` and the locals `vPosL` / `vNormalL`
- * / `vSailUv` to be declared, and `shipPart` from PARTS_DECL.
+ * Requires the varyings 'vSail' / 'vCloth' / 'vSailWP' / 'vSailTan' and the
+ * locals 'vPosL' / 'vNormalL' / 'vSailUv' to be declared, and 'shipPart' from
+ * PARTS_DECL.
  */
 export const SAIL_VERT_BODY = /* glsl */ `
   int lwSi = int(iSail + 0.5);
@@ -221,8 +228,17 @@ export const SAIL_VERT_BODY = /* glsl */ `
   vNormalL = shipPartN(lwN, lwPart);
   vSailUv = lwMet.xy;
   vSail = lwAux;
-  vCloth = vec4(lwMet.z, lwMet.w, uSailInfo[lwSi].y, 0.0);
+  // w carries how hard the cloth is loaded, which is what decides whether the
+  // fragment shader draws tension creases at all.
+  vCloth = vec4(lwMet.z, lwMet.w, uSailInfo[lwSi].y, abs(uSailState[lwSi].z));
   vSailWP = (modelMatrix * vec4(vPosL, 1.0)).xyz;
+  // World-space chord tangent, for perturbing the normal with creases. The
+  // difference is taken in the same direction the normal was, so it stays
+  // consistent at the leech and foot where lwSailPoint's clamp reverses the
+  // step. Passing it costs one varying and saves a 2x2 derivative solve in
+  // every sail fragment.
+  vSailTan = normalize(mat3(modelMatrix)
+    * shipPartN((lwPu - lwP) * lwSx + vec3(1e-6, 0.0, 0.0), lwPart));
 `;
 
 /** Metres of sailcloth per texture tile, along the seams and across them. */

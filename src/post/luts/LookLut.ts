@@ -9,9 +9,21 @@ import * as THREE from 'three';
  * per-frame CPU rebake of 32768 texels — the time of day changes every frame, so
  * a CPU rebake would be a permanent 1-2 ms hitch.
  *
- * The domain is display-referred: these run *after* AgX, on values in [0,1].
- * That is where a look LUT belongs — grading scene-linear radiance means the
- * grade fights the tone curve.
+ * The domain is display-referred AND display-ENCODED: these run after `agx()`,
+ * which ends on the AgX outset matrix without the EOTF, so its output is already
+ * sRGB-gamma in [0,1] and nothing after it re-encodes (see composite.ts). That is
+ * where a look LUT belongs — grading scene-linear radiance means the grade fights
+ * the tone curve — and it is why `pivot` sits near 0.45: AgX puts an 18 % grey
+ * card at 0.496 in this domain, so a pivot just below that adds contrast while
+ * leaving middle grey almost exactly where the meter put it.
+ *
+ * These were authored while a stray second sRGB encode was lifting middle grey
+ * from 0.50 to 0.72, so everything was tuned against an image that was already
+ * three-quarters white: contrast near 1.0, saturation near 1.0, and lifted black
+ * floors all looked reasonable there and are far too timid on a correct frame.
+ * The numbers below are the re-authored set. The parameters that carry the look
+ * are `contrast`, `vibrance` and `blueTeal`; `gain`/`lift` are trims, not the
+ * grade, and pushing them is how a frame ends up looking like a filter.
  */
 
 export interface Look {
@@ -46,10 +58,10 @@ export const LOOKS: Look[] = [
     name: 'Blue Hour',
     temp: -0.22,
     gain: [0.9, 0.96, 1.12],
-    lift: [0.008, 0.011, 0.019],
+    lift: [0.004, 0.006, 0.012],
     gamma: [1.0, 1.0, 1.06],
-    contrast: 1.02,
-    pivot: 0.34,
+    contrast: 1.12,
+    pivot: 0.3,
     // Rods are achromatic: a saturated night reads as a teal filter, not as night.
     saturation: 0.68,
     vibrance: 0.16,
@@ -58,59 +70,63 @@ export const LOOKS: Look[] = [
     toneBalance: -0.08,
     blueTeal: 0.04,
     shoulder: 0.22,
-    blackFloor: 0.007,
+    blackFloor: 0.003,
   },
   {
     name: 'Cold Morning',
     temp: -0.07,
     gain: [1.0, 1.0, 1.035],
-    lift: [0.006, 0.008, 0.013],
+    lift: [0.002, 0.003, 0.007],
     gamma: [1.0, 1.0, 1.0],
-    contrast: 1.0,
-    pivot: 0.42,
-    saturation: 0.98,
-    vibrance: 0.15,
+    contrast: 1.16,
+    pivot: 0.44,
+    saturation: 1.04,
+    vibrance: 0.2,
     shadowTint: [0.92, 0.98, 1.12],
     highlightTint: [1.07, 1.01, 0.95],
     toneBalance: 0.0,
-    blueTeal: 0.1,
+    blueTeal: 0.14,
     shoulder: 0.3,
-    blackFloor: 0.0045,
+    blackFloor: 0.002,
   },
   {
     name: 'Amber Reach',
     temp: 0.13,
     gain: [1.055, 1.0, 0.935],
-    lift: [0.0, 0.004, 0.011],
+    lift: [0.0, 0.002, 0.006],
     gamma: [0.99, 1.0, 1.025],
-    contrast: 1.06,
-    pivot: 0.44,
-    saturation: 1.05,
-    vibrance: 0.1,
-    shadowTint: [0.89, 0.97, 1.15],
+    contrast: 1.18,
+    pivot: 0.45,
+    saturation: 1.1,
+    vibrance: 0.14,
+    // A warm key wants a genuinely cool fill or the whole frame reads as one
+    // sepia wash, which is the classic golden-hour failure. The shadow tint is
+    // the only thing in the grade that can put the blue back into water that is
+    // reflecting a sky the sun has already left.
+    shadowTint: [0.83, 0.95, 1.24],
     highlightTint: [1.1, 1.02, 0.89],
     toneBalance: 0.06,
     blueTeal: 0.12,
     // A low sun is the one thing guaranteed to be blown out; give it a shoulder.
     shoulder: 0.42,
-    blackFloor: 0.0035,
+    blackFloor: 0.0018,
   },
   {
     name: 'Open Sea',
     temp: -0.025,
     gain: [1.0, 1.0, 1.012],
-    lift: [0.0, 0.001, 0.004],
+    lift: [0.0, 0.0005, 0.002],
     gamma: [1.0, 1.0, 1.0],
-    contrast: 1.1,
-    pivot: 0.45,
-    saturation: 1.05,
-    vibrance: 0.08,
-    shadowTint: [0.95, 0.99, 1.08],
+    contrast: 1.22,
+    pivot: 0.46,
+    saturation: 1.12,
+    vibrance: 0.16,
+    shadowTint: [0.94, 0.99, 1.1],
     highlightTint: [1.03, 1.01, 0.98],
     toneBalance: 0.02,
-    blueTeal: 0.17,
+    blueTeal: 0.2,
     shoulder: 0.32,
-    blackFloor: 0.0022,
+    blackFloor: 0.0012,
   },
 ];
 

@@ -42,12 +42,24 @@ import { VfxWeather } from './VfxWeather';
  *    long, so a `smoothstep` on distance-to-ship, or simply on foam strength,
  *    is enough).
  *
- *    Foam (R) is persistent: decayed each frame with a tau of 22 s in calm air
- *    down to 6.5 s in a gale, and topped up with a MAX blend so it saturates
- *    rather than running away. Elevation and slope (GBA) are zeroed and fully
- *    re-rendered each frame from the ship's track, because the Kelvin pattern
- *    is stationary in the ship's frame — that is what keeps it crisp and lets
- *    it curve correctly through a turn.
+ *    Foam (R) is persistent: decayed each frame with a tau of 9 s in calm air
+ *    down to 4 s in a gale, and topped up with a MAX blend so it saturates
+ *    rather than running away. It is deliberately CAPPED at 0.78, never 1.0 —
+ *    consumers amplify it (the ocean surface does
+ *    `saturate((foam * 1.35 - breakup * 0.55) * 2.0)`) and a channel that
+ *    reaches 1.0 leaves no ragged edge left to erode. Elevation and slope (GBA)
+ *    are zeroed and fully re-rendered each frame from the ship's track, because
+ *    the Kelvin pattern is stationary in the ship's frame — that is what keeps
+ *    it crisp and lets it curve correctly through a turn.
+ *
+ *    RANGES, measured, so a consumer can size its own response:
+ *      R  0 .. 0.78   peak only in the froth band hugging the topsides
+ *      G  -0.7 .. +0.1 m   and windowed to a few transverse wavelengths astern,
+ *                     because a coherent signal further out is not resolved by a
+ *                     clipmap ring and point-samples into a hard straight groove
+ *      BA -0.3 .. 0.3 slope, same window as G
+ *    Beyond roughly 3 lambda astern only R is non-zero: the persistent trail is
+ *    a COVERAGE signal, not geometry.
  *
  * 2. `interactionTexture` / `interactionMatrix` / `interactionWorldSize` — a
  *    fine 128 m window centred on the camera, cleared and redrawn every frame

@@ -19,6 +19,23 @@ import { LUT_SIZE } from '../luts/LookLut';
  * The dither is not decoration. A clear sky is a smooth 30:1 gradient across
  * 900 rows; at 8 bits that is a visible Mach band every ~30 rows. One LSB of
  * triangular-PDF noise removes it completely and costs a single hash.
+ *
+ * ## Where the sRGB encode is — and where it is NOT
+ *
+ * `agx()` ends with the AgX outset matrix and NOT with the AgX EOTF, so its
+ * output is **already display-encoded** (sRGB gamma, values in [0,1]); three's
+ * own `AgXToneMapping` finishes with `pow(col, 2.2)` for exactly this reason,
+ * to hand a *linear* value back to the renderer's automatic encode. We have no
+ * automatic encode, so everything after `agx()` here — the look LUT, the trim,
+ * the split tone, the grain, the dither — is display-encoded, which is the
+ * correct domain for all five, and the frame is written out as-is.
+ *
+ * Calling `linearToSrgb()` at the end was a second encode on top of AgX's. It
+ * mapped middle grey from 0.50 to 0.72 and a near-black 0.02 to 0.16, which is
+ * the whole of the "pale, milky, no contrast, blacks never reach black" defect:
+ * an 8-stop scene arrived on screen occupying barely three stops of the top of
+ * the range. Measured on the noon frame it moved the median from 189 to 96 and
+ * took the 1st percentile from 108 to 12. Do not put it back.
  */
 export const COMPOSITE_FRAG = /* glsl */ `
 precision highp float;
@@ -171,7 +188,9 @@ void main() {
     col += g * uGrain * shape;
   }
 
-  col = linearToSrgb(max(col, vec3(0.0)));
+  // No sRGB encode here. AgX already left us display-encoded and everything
+  // since has been display-encoded too — see the header note.
+  col = max(col, vec3(0.0));
 
   // Triangular-PDF dither at exactly one 8-bit LSB. Without this the sky bands.
   float d1 = hash12(gl_FragCoord.xy + vec2(uFrame * 1.61803399, uFrame * 0.7548777));

@@ -125,7 +125,16 @@ vec3 kelvinSource(float xi, float eta, float k0, float hs){
 
   float r = sqrt(xi * xi + eta * eta);
   // 1/sqrt(|phi''|): the roots merge on the cusp line, giving the bright arms.
-  float caustic = pow(xi * xi / max(disc, 0.014 * xi * xi), 0.25);
+  //
+  // The clamp sets both the height AND the WIDTH of the caustic, and the width is
+  // what decides whether the arm reads as a wave or as a drawn line. Stationary
+  // phase is singular here, so the clamp is the only thing bounding it: at
+  // 0.014 the peak was 2.9x and only ~6% of xi wide, which the ocean clipmap
+  // resolves as a 2 px razor edge in the normal — and a razor edge in the normal
+  // at golden hour flips the reflected sky from orange to zenith blue and draws a
+  // hard line on the sea. 0.09 gives a 1.8x peak about a sixth of xi wide, which
+  // is both closer to the real Airy envelope and inside what the mesh can carry.
+  float caustic = pow(xi * xi / max(disc, 0.09 * xi * xi), 0.25);
   // Stationary phase is singular ON the cusp and simply undefined outside it, so
   // the raw solution steps from caustic x amp straight to zero across the cusp
   // line. That step is a hard 19.47 deg crease in both elevation and slope and
@@ -133,7 +142,7 @@ vec3 kelvinSource(float xi, float eta, float k0, float hs){
   // ship. The true field decays as an Airy tail; a smooth window over the last
   // stretch of 'disc' reproduces the peak-just-inside-the-cusp look with a
   // continuous outer edge, which is what an Airy function actually does.
-  caustic *= smoothstep(0.0, 1.0, disc / (0.11 * xi * xi));
+  caustic *= smoothstep(0.0, 1.0, disc / (0.30 * xi * xi));
   float spread = 1.0 / sqrt(1.0 + k0 * r * 0.5);
 
   vec3 acc = vec3(0.0);
@@ -250,7 +259,7 @@ void main(){
   //    filled footprint — filling it is what produced a solid white wedge.
   float hullT = linstep(uLwl * 1.06, 0.0, xi);
   float hbLocal = uBeam * 0.5 * pow(sin(PI * pow(saturate1(xi / uLwl), 0.58)), 0.62) + 0.7;
-  float hullBand = exp(-sq((aeta - hbLocal) / 2.3));
+  float hullBand = exp(-sq((aeta - hbLocal) / 1.8));
   float hullFoam = hullBand * hullT * (0.55 + 0.45 * hullT);
   // A heeled ship buries the lee bow and throws far more water that side.
   float lee = sign(vHeel) * sign(eta);
@@ -258,10 +267,19 @@ void main(){
 
   // 2. Turbulent core the hull drags behind it. Deflected by the rudder. Narrow
   //    (roughly the beam), and torn into streaks rather than laid on solid.
+  //
+  //    LENGTH. A frigate's white turbulent core is spent within two or three
+  //    ship lengths; what carries on for half a kilometre is the divergent arms
+  //    and a slick, not white water. The old 0.55 * uCoreLen e-folding held the
+  //    core near its peak for 150 m, and because this channel is MAX-blended
+  //    into a persistent buffer that painted a continuous white slab from the
+  //    stern to the far edge of the field. That slab is what read as snow.
   float washOff = -vRudder * 5.5 * linstep(uLwl * 0.75, uLwl + 45.0, xi);
   float coreW = uBeam * 0.34 + 0.8 + xi * 0.022;
   float core = exp(-pow(abs(eta - washOff) / coreW, 2.4));
-  float coreLife = exp(-xi / (uCoreLen * 0.55));
+  // Terminating, for the same reason as the arm below: no infinite faint tail.
+  float coreLife = exp(-xi / (uCoreLen * 0.26))
+                 * (1.0 - smoothstep(uCoreLen * 0.6, uCoreLen * 1.1, xi));
   float coreFoam = core * coreLife * saturate1(0.35 + 1.05 * detail);
 
   // 3. Breaking crests. The divergent arms break along the cusp; transverse
@@ -275,25 +293,46 @@ void main(){
   // arms are a row of separate crescents about 0.70 * V^2 metres apart, not a
   // painted line. That periodicity is the single strongest "this is a real ship
   // wake" cue in the whole effect.
+  // The 0.06 floor matters: at the old 0.35 the crescents never went out, so the
+  // arm was a CONTINUOUS band of foam ruled hundreds of metres across the sea.
   float armPhase = 0.9186 * k0 * xi;
-  float crescent = 0.35 + 0.65 * pow(saturate1(cos(armPhase) * 0.5 + 0.5), 1.6);
-  float armFoam = cuspBand * crescent * exp(-xi / (uCoreLen * 2.4))
-                  * (0.45 + 0.75 * bubble);
-  float crestFoam = crest * exp(-xi / (uCoreLen * 0.9)) * (0.5 + 0.6 * detail);
+  float crescent = 0.06 + 0.94 * pow(saturate1(cos(armPhase) * 0.5 + 0.5), 2.4);
+  // TERMINATE THE ARM. DO NOT REPLACE THIS WITH AN EXPONENTIAL.
+  //
+  // 'cuspBand' is a narrow ridge, so wherever the arm's amplitude crosses the
+  // consumer's visibility threshold it does so along a LINE. A consumer composites
+  // foam partly by suppressing the water's specular reflection, so a value too
+  // small to read as white still reads as a DARK line — and at golden hour, when
+  // the reflection it suppresses is the bright orange sky, an unmistakable one.
+  // That is DIAGNOSIS 8.5: three thin blue-grey lines ruled across the sea,
+  // radiating from the ship at the Kelvin half-angle. An exp() tail never reaches
+  // zero, so it always leaves that line somewhere; a smoothstep does, and past it
+  // there is nothing to draw a line with. Anything that cannot be white must be
+  // exactly nothing.
+  float armTrail = 1.0 - smoothstep(uCoreLen * 1.0, uCoreLen * 2.2, xi);
+  float armFoam = cuspBand * crescent * armTrail * (0.45 + 0.75 * bubble);
+  float crestFoam = crest * (1.0 - smoothstep(uCoreLen * 0.30, uCoreLen * 0.75, xi))
+                    * (0.5 + 0.6 * detail);
 
   // 4. The rudder itself sheds a short, ragged, very white wash.
   float rudW = 1.6 + xi * 0.09;
   float rud = exp(-sq((eta - washOff * 1.25) / rudW)) *
-              linstep(uLwl * 0.8, uLwl * 1.05, xi) * exp(-(xi - uLwl) / 55.0);
+              linstep(uLwl * 0.8, uLwl * 1.05, xi) * exp(-(xi - uLwl) / 55.0) *
+              (1.0 - smoothstep(uLwl * 2.4, uLwl * 4.2, xi));
   float rudFoam = rud * min(abs(vRudder) * 3.0, 1.0) * (0.4 + 0.9 * detail);
 
   float gate = smoothstep(0.05, 0.30, uSpeedN);
-  float foam = hullFoam * 0.85 + coreFoam * 0.60 + armFoam * 0.95 +
-               crestFoam * 0.55 + rudFoam * 0.8;
+  float foam = hullFoam * 0.72 + coreFoam * 0.62 + armFoam * 1.00 +
+               crestFoam * 0.34 + rudFoam * 0.55;
   foam *= gate * vFade;
   // Chop tears the wake apart faster.
   foam *= mix(1.0, 0.72, uChop);
-  foam = saturate1(foam * (0.72 + 0.55 * bubble));
+  // CEILING, not saturate. Downstream this channel is amplified (the ocean
+  // surface currently does 'saturate((foam * 1.35 - breakup * 0.55) * 2.0)'), so
+  // anything reaching 1.0 here becomes a flat, pure-white, texture-free slab with
+  // no ragged edge left to erode. Holding the peak at 0.78 keeps the brightest
+  // froth just below that and lets the breakup noise still bite.
+  foam = min(foam * (0.66 + 0.5 * bubble), 0.78);
 
   gl_FragColor = vec4(foam, 0.0, 0.0, 0.0);
 #else

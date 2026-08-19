@@ -217,6 +217,7 @@ export class Ocean implements Module, IOcean {
       uWaveHeight: { value: 1 },
       uHasReflection: { value: 0 },
       uFoamAmount: { value: 1 },
+      uFoamThreshold: { value: 0.79 },
       uWake: { value: this.stub },
       uWakeMatrix: { value: new THREE.Matrix3() },
       uWakeStrength: { value: 0 },
@@ -295,7 +296,17 @@ export class Ocean implements Module, IOcean {
     // Monahan: whitecap coverage grows as U^3.4. Below a fresh breeze there
     // simply are no whitecaps, and the fold mask must not invent any.
     const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(env.windSpeed, 0.5), 3.41) * 24);
-    this.material.uniforms.uFoamAmount.value = 0.18 + 1.9 * cover;
+    // Where the fold mask cuts. Measured against the Jacobian's own distribution:
+    // the surface spends most of its area between fold 0.8 and 1.1, so a fixed
+    // 0.78 threshold selected almost nothing even in a gale. These two ends give
+    // ~0.2% coverage in a moderate breeze and ~15% in a full gale, which is what
+    // the Monahan law above actually asks for.
+    this.material.uniforms.uFoamThreshold.value = 0.79 + 0.1 * cover;
+    // OPACITY, not gain. The threshold above is what carries the coverage now, so
+    // scaling the mask as well double-counts the wind: at 1.9 this saturated a
+    // gale to 100% foam and turned the whole sea into a white sheet with the
+    // detail texture's tiling showing through it as diagonal streaks.
+    this.material.uniforms.uFoamAmount.value = 0.5 + 0.5 * cover;
   }
 
   /* ------------------------------------------------------------------ *

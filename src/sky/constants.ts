@@ -166,6 +166,13 @@ export const SEA_BOUNCE_ALBEDO = new THREE.Vector3(0.028, 0.045, 0.062);
  */
 export const KOSCHMIEDER = 3.912;
 
+/**
+ * Visibility at which weather haze is considered to be entirely accounted for by
+ * the atmosphere LUT's own aerosol profile. Above this the sky gets no extra
+ * haze; below it, the difference is what `SkyRender`'s `uHazeBeta` applies.
+ */
+export const CLEAR_VISIBILITY_M = 30000;
+
 /* ------------------------------------------------------------------ *
  *  Shadows
  * ------------------------------------------------------------------ */
@@ -303,15 +310,25 @@ export const CLOUD_SHAFT_RANGE_M = 26000;
  * out of it too bright; this is the correction, and the gaps in it are the
  * crepuscular rays. Full strength would be 1.0 — held below that because the
  * LUT's multiple-scattering term genuinely does still light shadowed air.
+ *
+ * 0.55 left the strip of sky under the deck edge at the horizon reading as a
+ * bright blue band in the middle of a gale — 23 % darkening where the eye
+ * expects the darkest thing in the frame.
  */
-export const CLOUD_AIR_SHADOW = 0.55;
+export const CLOUD_AIR_SHADOW = 0.75;
 
 /**
  * Temporal accumulation weight for the quarter-res cloud buffer, per frame at
- * 60 Hz. 0.09 needs ~11 frames to converge, which is what lets 40 march steps
- * look like 400; the neighbourhood clamp in the resolve is what stops that
- * becoming a smear when the camera turns.
+ * 60 Hz. 0.05 needs ~20 frames (a third of a second) to converge, which is what
+ * lets 80 march steps look like a thousand; the neighbourhood clamp in the
+ * resolve is what stops that becoming a smear when the camera turns.
+ *
+ * Measured residual high-frequency energy on the resolved buffer, as a fraction
+ * of local cloud radiance: 3.8 % with no accumulation, 1.9 % at 0.09, 0.95 % at
+ * 0.03. It is a clean 1/sqrt law, so the filter is working and the visible comb
+ * pattern was simply the tail of it — the halving from 0.09 to 0.05 is worth the
+ * extra fifth of a second of latency on a field that evolves over minutes.
  */
-export const CLOUD_TEMPORAL_ALPHA = 0.09;
+export const CLOUD_TEMPORAL_ALPHA = 0.05;
 /** Divisor on each screen axis for the cloud raymarch target. */
 export const CLOUD_RESOLUTION_DIVISOR = 2;

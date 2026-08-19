@@ -130,7 +130,9 @@ export function makeShipMaterial(
           float up = clamp(vShipWN.y, 0.0, 1.0);
           float n = hash13(floor(vShipWP * 3.7));
           float acc = smoothstep(0.42, 0.95, up) * (0.55 + 0.45 * n) * uGrime;
-          vec3 salt = vec3(0.78, 0.79, 0.80);
+          // Linear albedo of a dried salt crust. 0.78 was brighter than fresh
+          // snow and chalked every up-facing surface on the ship.
+          vec3 salt = vec3(0.50, 0.51, 0.52);
           diffuseColor.rgb = mix(diffuseColor.rgb, mix(diffuseColor.rgb * 0.72, salt, 0.35), acc);
           diffuseColor.rgb *= mix(1.0, 0.66, uWetness * (0.35 + 0.65 * up));
         }`,

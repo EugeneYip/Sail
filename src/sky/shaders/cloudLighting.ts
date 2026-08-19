@@ -212,6 +212,13 @@ vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
     // deck is a few hundred metres across on screen; this spends the budget
     // where the cloud is actually resolvable and costs nothing extra.
     const float GROWTH = 1.055;
+    // Cap on one step, km. Without it the last steps of an 80-step 55 km chord
+    // are over 3 km long, the per-pixel start dither shifts the sample by that
+    // much, and the far half of the deck comes back as pure noise for the
+    // temporal filter to fail to remove. Capping costs reach — 42 km instead of
+    // 55 — which is past the point where the deck is more aerial haze than
+    // cloud, and buys 2.5x less variance where the big masses actually are.
+    const float DT_MAX = 1.2;
     float dt = seg * (GROWTH - 1.0) / (pow(GROWTH, steps) - 1.0);
     float t = t0 + dt * jitter;
     float h;
@@ -232,7 +239,8 @@ vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
         T *= stepT;
       }
       t += dt;
-      dt *= GROWTH;
+      dt = min(dt * GROWTH, DT_MAX);
+      if (t - t0 > seg) break;
     }
   }
 

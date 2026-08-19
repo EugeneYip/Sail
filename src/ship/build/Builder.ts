@@ -43,8 +43,15 @@ export class MeshBuilder {
     this.color.setRGB(r, g, b);
     return this;
   }
+  /**
+   * `setHex` already converts sRGB -> the linear working space, because three's
+   * ColorManagement is enabled by default. Calling `convertSRGBToLinear` after
+   * it applied the transfer function a second time, which cost the inboard buff
+   * 1.6x and the stern-gallery glass 5.7x of their intended value. Whites were
+   * unaffected, which is why it survived this long.
+   */
   setColorHexLinear(hex: number, scale = 1): this {
-    this.color.setHex(hex).convertSRGBToLinear().multiplyScalar(scale);
+    this.color.setHex(hex, THREE.SRGBColorSpace).multiplyScalar(scale);
     return this;
   }
 

@@ -57,6 +57,8 @@ export class Clouds {
     return this.history[this.current].texture;
   }
   readonly shadowMatrix = new THREE.Matrix4();
+  /** 1/size of the resolved buffer, for the consumer's reconstruction filter. */
+  readonly texel = new THREE.Vector2(1 / 800, 1 / 450);
   get shadowTexture(): THREE.Texture {
     return this.enabled ? this.shadow.texture : this.fallback;
   }
@@ -208,6 +210,7 @@ export class Clouds {
       this.history[1].setSize(w, h);
       (this.marchPass.uniforms.uResolution.value as THREE.Vector2).set(w, h);
       (this.resolvePass.uniforms.uTexel.value as THREE.Vector2).set(1 / w, 1 / h);
+      this.texel.set(1 / w, 1 / h);
       this.reset = true;
     }
 

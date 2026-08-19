@@ -244,3 +244,47 @@ dispatching** — this looked like a doubled-rotation bug and was not.
    once (1) and (2) are fixed.
 6. 11x `THREE.Material: parameter 'defines' has value of undefined` and 12x
    `GL_INVALID_VALUE: glGetProgramiv` remain in the console.
+
+## 10. State 2026-08-18 evening — the look landed, performance regressed
+
+Clean run: zero GLSL errors, zero failing materials.
+
+| scene | fps | draw calls | tris |
+|---|---|---|---|
+| noon | 12 | 70 | 0.60 M |
+| golden | 11 | 86 | 0.60 M |
+| orbit | 12 | 67 | 0.59 M |
+| storm | 10 | 74 | 0.60 M |
+
+**Visually this is the best the game has looked.** Golden hour reads
+cinematically: warm structured clouds with silver-lit edges, a sun-glitter path,
+deep water with real wave structure and colour, the black hull with its gunport
+stripe silhouetted, islands sitting correctly in the haze, foam finally at a
+plausible quantity, and genuine blacks in the frame.
+
+**But fps went 18-23 -> 10-12.** That is a regression, and performance is now the
+single dominant defect. Draw calls (67-86) and triangles (0.60 M) are still tiny,
+so this remains CPU `update()` and per-pass GPU cost, not batching or geometry.
+
+Known contributors to chase, in order:
+1. The exposure readback fence: **160x** `READ-usage buffer was written, then
+   fenced, but written again before being read back`, previously measured at
+   **6.8 ms** for the exposure pass alone. The async path is saving nothing and
+   may cost more than the sync path did.
+2. Volumetric clouds — new since the last measurement, budgeted at 2.5 ms GPU.
+   Verify the actual cost.
+3. `upd:ocean`, last measured at 18.9 ms and only partially reduced.
+4. `upd:vfx`, reported down to ~1.3 ms p50 but unverified on a quiet machine.
+
+### Resolved: the stray waterline lines
+
+Not a debug helper and not a clipmap seam. The VFX agent identified them as
+**the Kelvin wake arms** — a faint-foam tail that reads as a dark line against
+the water at golden hour. It was fixing this with a hard termination of the tail
+when interrupted. I had mis-routed this to the ship agent; it was VFX's all along.
+
+### Still open visually
+
+- Sails read flat and pale — closer to bent planes than loaded cloth. Camber
+  shaping, cloth translucency and the woven sheen still need work.
+- Composition: the ship sits right of centre and grazes the right frame edge.

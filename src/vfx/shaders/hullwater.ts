@@ -176,7 +176,12 @@ void main(){
   // The lip is thin enough to light through, and it disperses slightly.
   vec3 disperse = vec3(1.06, 1.0, 0.92) + vec3(-0.10, 0.02, 0.16) * forward;
 
-  vec3 albedo = mix(vec3(0.28, 0.44, 0.46), vec3(0.86, 0.90, 0.93), cover);
+  // FOAM IS NOT WHITE PAINT. Broadband albedo of whitecaps and aerated water is
+  // 0.4..0.55 (Koepke 1984, Frouin 1996); the ocean surface uses 0.38 for the
+  // same substance. At the 0.86..0.93 this used to carry, the bow wave was
+  // brighter than a sunlit sail and did not match the foam three metres away on
+  // the sea, which is the tell that gives away a painted-on effect.
+  vec3 albedo = mix(vec3(0.16, 0.26, 0.28), vec3(0.44, 0.47, 0.49), cover);
   // Wrap lighting: foam has no meaningful normal, it is a scattering slab.
   // uSunIntensity is irradiance and owes the 1/PI; uSkyColor / uGroundColor are
   // radiance and must not be divided again (src/sky/constants.ts).
@@ -186,7 +191,7 @@ void main(){
                        + uSkyColor * 0.85 + uGroundColor * 0.12);
   // Light coming THROUGH the thin part of the lip. Backlit breaking water is
   // the whole reason a bow wave reads as water rather than as paint.
-  lit += sun * forward * (1.0 - vThick) * 0.55 * cover * disperse;
+  lit += sun * forward * (1.0 - vThick) * 0.40 * cover * disperse;
   lit += uMoonColor * uMoonIntensity * INV_PI * 0.2;
 
   float edge = smoothstep(0.0, 0.12, vJ) * (1.0 - smoothstep(0.80, 1.0, vJ));
@@ -284,7 +289,8 @@ void main(){
   vec3 view = normalize(uCameraPos - vWorld);
   float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.5);
   vec3 sun = uSunColor * uSunIntensity * INV_PI;
-  vec3 foamCol = vec3(0.88, 0.92, 0.95) * (sun * wrap + uSkyColor * 0.9);
+  // Same foam albedo as the bow sheet and the ocean surface — see the note there.
+  vec3 foamCol = vec3(0.44, 0.47, 0.49) * (sun * wrap + uSkyColor * 0.9);
   // Wet paint: darker, much glossier. A sharp specular sells it — and a mirror
   // returns sun RADIANCE, so this term is scaled against 'sun * PI', not 'sun'.
   float spec = pow(saturate1(dot(reflect(-uSunDirection, vec3(0.0, 1.0, 0.0)), view)), 26.0);

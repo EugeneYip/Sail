@@ -196,10 +196,16 @@ export function makeHullBlack(size = 512): TexSet {
     const grain = oakGrain(u, v, 11);
 
     // Paint sits on the wood: the grain still telegraphs through.
-    let l = 0.052 + grain * 0.016 + _pl.tone * 0.008;
+    //
+    // This map is tagged sRGB, so 'l' is an encoded value. Lamp-black oil paint,
+    // weathered, has a linear reflectance around 0.02 — sRGB ~0.16. The earlier
+    // 0.052 here decoded to 0.004 linear, darker than black velvet, which is
+    // what flattened the topsides into a silhouette with no form in them: at
+    // that albedo neither the plank grain nor the sheer can show at all.
+    let l = 0.135 + grain * 0.028 + _pl.tone * 0.014;
     // Broad patchy fade from sun and salt.
     const fade = fbm(u, v, 5, 5, 3, 71);
-    l += fade * 0.032;
+    l += fade * 0.045;
 
     // Chips: small worley cells that break through to primer/oak.
     worleyCell(u, v, 26, 41, _cell);
@@ -211,7 +217,7 @@ export function makeHullBlack(size = 512): TexSet {
     const salt = streak * smoothstep(0.35, 0.75, fbm(u, v, 6, 3, 2, 211));
 
     const seam = smoothstep(0.028, 0.0, _pl.seam) * 0.8 + smoothstep(0.03, 0.0, _pl.butt) * 0.5;
-    l = mix(l, 0.03, clamp01(seam));
+    l = mix(l, 0.12, clamp01(seam));
 
     let r = l;
     let g = l;
@@ -224,7 +230,10 @@ export function makeHullBlack(size = 512): TexSet {
 
     p.r = r; p.g = g; p.b = b;
     p.h = grain * 0.22 - clamp01(seam) * 1.2 - chip * 0.5 + salt * 0.1;
-    p.rough = 0.36 + fade * 0.18 + chip * 0.3 + salt * 0.25;
+    // Weathered oil paint is satin at best. At the old 0.36 the topsides worked
+    // as a near-mirror for a deep blue sky and the hull read slate-blue instead
+    // of black — the specular was carrying more of the pixel than the albedo.
+    p.rough = 0.58 + fade * 0.14 + chip * 0.24 + salt * 0.16;
     p.ao = 1 - clamp01(seam) * 0.4 - chip * 0.15;
     p.metal = 0;
   });
@@ -236,7 +245,11 @@ export function makeStripeWhite(size = 512): TexSet {
     plankLayout(u, v, 11, 2, _pl);
     const grain = oakGrain(u, v, 11);
     const fade = fbm(u, v, 5, 5, 3, 71);
-    let l = 0.76 + grain * 0.05 + _pl.tone * 0.02 - fade * 0.08;
+    // Lead white in oil, weathered — a warm off-white, not paper. At 0.76 the
+    // stripe was the brightest surface in the frame, brighter than the sunlit
+    // canvas, which is what made the hull read as two-tone graphics rather than
+    // a black ship with one painted band on it.
+    let l = 0.66 + grain * 0.045 + _pl.tone * 0.018 - fade * 0.075;
 
     worleyCell(u, v, 24, 61, _cell);
     const chip = _cell.r < 0.11 ? smoothstep(0.26, 0.05, _cell.d) : 0;
@@ -247,8 +260,8 @@ export function makeStripeWhite(size = 512): TexSet {
     l = mix(l, 0.44, grime * 0.5);
 
     p.r = mix(l * 1.0, 0.4, chip * 0.6);
-    p.g = mix(l * 0.975, 0.33, chip * 0.6);
-    p.b = mix(l * 0.9, 0.24, chip * 0.6);
+    p.g = mix(l * 0.965, 0.33, chip * 0.6);
+    p.b = mix(l * 0.855, 0.24, chip * 0.6);
     p.h = grain * 0.2 - clamp01(seam) * 1.2 - chip * 0.5;
     p.rough = 0.44 + fade * 0.16 + chip * 0.28 + grime * 0.2;
     p.ao = 1 - clamp01(seam) * 0.4 - chip * 0.15;

@@ -600,13 +600,25 @@ export class WakeField {
     u.uSrcDepth.value = world.ship.draught * 0.38;
     u.uCoreLen.value = THREE.MathUtils.lerp(60, 250, speedN) * THREE.MathUtils.lerp(1, 0.7, world.env.choppiness);
 
-    // Foam persistence: long in a calm sea, torn apart quickly in a gale.
-    const tau = THREE.MathUtils.lerp(22, 6.5, clamp01(world.env.windSpeed / 24));
+    // Foam persistence, e-folding seconds. Torn apart faster in a gale.
+    //
+    // THIS IS THE LENGTH OF THE WHITE PART OF THE WAKE, and it was the single
+    // biggest reason the sea read as snow. The channel is MAX-blended into a
+    // persistent buffer, so every world point the froth band swept over holds its
+    // peak value until this decay eats it. The ocean's compositing goes visibly
+    // white above about 0.20, and the peak written here is 0.78, so the white
+    // trail runs for 1.34 * tau seconds of steaming — at tau = 22 s and 11 kn
+    // that was 165 m of unbroken white water, a wake wider and longer than the
+    // ship and brighter than the sails. Real white water astern of a frigate is
+    // spent inside a ship length or two; what carries on is a slick and the
+    // divergent arms, which the ribbon redraws every frame and does not need
+    // persistence for. 9 s gives about 65 m at cruising speed.
+    const tau = THREE.MathUtils.lerp(9, 4, clamp01(world.env.windSpeed / 24));
     this.decayMat.uniforms.uDecay.value = Math.exp(-ctx.dt / tau);
 
     // Published to the consumer. Non-zero while there is anything in the buffer
     // worth sampling: the ribbon may have stopped drawing but the persistent
-    // foam channel takes a good half-minute to decay away.
+    // foam channel still takes some 15 s to decay away.
     this.strength = this.trackFilled > 3 ? 1 : 0;
   }
 
