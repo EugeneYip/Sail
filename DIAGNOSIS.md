@@ -1477,3 +1477,192 @@ integrates far more movement than it would at 16 ms. Contention does not change
 pixels, but it *does* change motion blur, so **a contended frame is not a valid
 reference for anything the camera moves through.** Use `orbit` or a static mode
 when the box is busy.
+
+## 40. Audio: the click question, and why every previous zero was unverified
+
+The owner's "chains of noise, popping and distortion" (§19) is now measured
+rather than argued, and the headline is that **the measurement was the missing
+piece, not the fix**. Every predecessor reported 0 clicks. None had shown that
+their detector could count a click that was really there.
+
+**The positive control.** `ClickWatcher.inject` schedules 4 ms attack ramps of
+known amplitude at a known lead, straight into the detector's own input
+(inaudible — the detector's output is zeroed). Sweeping the lead:
+
+| lead | caught | worst jump |
+|---|---|---|
+| -20 ms | **6/6** | -25.9 dBFS, x99 over local |
+| -5 ms | **6/6** | -26.0 dBFS, x100 |
+| 0 ms | 0/6 | none |
+| +2 ms | 0/6 | none |
+| +55 ms (LEAD_S) | 0/6 | none |
+
+So the detector is not blind: it catches a deliberate step with a 99x margin.
+
+**But the mechanism written into `Probe.ts` and `ClickProbe.ts` does not
+reproduce.** Those files state that online, an event at `currentTime + 2 ms`
+lands in the PAST and collapses a ramp into a step. On this box it does not:
+0 ms lead is clean, and only a NEGATIVE lead steps. `baseLatency` is 5.33 ms and
+Chrome picks the automation up about one 2.7 ms quantum after `currentTime`, so a
+4 ms ramp is *compressed*, not collapsed. LEAD_S stays at 55 ms — it costs
+nothing audible and a device with a larger buffer may need it — but the margin is
+the whole 55 ms, not the few milliseconds the comments imply. `needLeadS`
+measured 16.00 ms (3 quanta) against LEAD_S 55 ms, shortfall 0.
+
+**The acceptance test.** Live `AudioContext`, per-sample detector on the master,
+main thread blocked by spinning 80-150 ms at intervals — which on the title
+screen is the normal state, not a corner case (§32).
+
+    140 stalls, 16 960 ms blocked, worst frame gap 198 ms  ->  0 clicks, 0.00/s
+
+across calm / gale / worst case. Peak -9.8 to -32.5 dBFS, 0 clipped samples,
+DC 1.3e-5, 0 NaN, 0 denormals, 556 nodes live == created in every scene, main
+thread 0.10-0.15 ms/frame against a 1.5 ms budget.
+
+**The limitation that matters, and it is not fixable by tuning.** The detector's
+threshold is 12x the LOCAL first-difference RMS, so it rises with the programme.
+Measured detection floors:
+
+| bed | floor | programme peak | verdict |
+|---|---|---|---|
+| calm | **-41.9 dBFS** | -32.5 dBFS | 9.4 dB of margin — the zero is real evidence |
+| gale | -12.0 dBFS | -14.0 dBFS | floor ABOVE the peak — the zero is weak |
+| worst case | -6.0 dBFS | -9.8 dBFS | weak |
+
+A bright broadband bed masks a step that a calm bed makes obvious. That is
+auditory masking, not a bug: dropping CLICK_RATIO would buy ~3 dB against a
+>12 dB gap and spend the false-positive margin the constant exists to protect.
+The right reading is that **the calm bed — directive 5's priority, and the title
+screen where the owner heard the worst of it — is proven clean, and a gale's zero
+must never be quoted as proof.** Every click count in `audio-live.mjs` is now
+printed next to the floor of the bed it was measured under.
+
+**Two holes closed in the lead invariant.** `minLeadS` can only see events that
+carry a time, so a bare `.value =` on a running parameter — the classic click —
+was invisible to it. `LeadSpy` now patches the `value` setter too: 0 bare
+assignments across 19 949 timed automation calls. `late` (backstop clamps) is 0
+both offline and on live hardware.
+
+**Sea bed rebalanced (directive 5).** At sea state 7 the 150-800 Hz band had
+collapsed to 9% of the bed while everything above 3 kHz held 34% — exactly the
+"rumble with a hiss on top and nothing in between" `Sea.ts` exists to prevent.
+Mid rush given 17 dB of range instead of 14 and a shelf that opens less far, foam
+hiss 6 dB quieter at full breaking, wake 5 dB quieter at full speed. Result:
+
+| state | RMS | body 150-800 Hz | above 3 kHz | envelope cv | breath |
+|---|---|---|---|---|---|
+| flat calm | -44.6 | 29% | 0.0% | 0.13 | 4 s |
+| light air | -42.8 | 41% | 0.6% | 0.12 | 34 s |
+| moderate | -37.2 | 53% | 1.1% | 0.12 | 25 s |
+| gale | -27.1 | 22% (was 9%) | 11% (was 34%) | 0.12 | 9 s |
+
+Worst-case peak improved from -9.70 to -12.18 dBFS as a side effect, and so did
+the detector's own sensitivity, because a less bright bed masks less. The speed
+cue survived the cut: centroid 959 -> 3878 Hz over 0-13 kn, monotonic.
+
+**Tooling.** `scripts/audio-live.mjs` needs no dev server and no game: it bundles
+`src/audio` with esbuild and builds the rig against a real `AudioContext` inside
+the page. Two runs were lost to the old coupling — Vite full-reloads on any
+module it cannot hot-patch, which destroys the `AudioContext` and the detector's
+counters while every call still succeeds. It also means a broken ocean shader
+could stop audio being measured at all. One trap worth not re-finding:
+`about:blank` has an opaque origin, so `URL.createObjectURL` yields
+`blob:null/...` and `audioWorklet.addModule` refuses it — both worklets here load
+that way, so the rig silently fell back to biquads and the detector failed to
+attach, reporting `usesWorklet=false` and a null `watch`. Intercepting a fake
+https origin with `page.route` fixes it and still needs no server.
+
+45/45 checks green, `node scripts/audio-live.mjs`, exit 0, reproducible across
+three runs.
+
+## 41. Audio: a mechanism I recorded as fact does NOT reproduce here
+
+**Correction to §19 and to several briefs I wrote.** `Probe.ts` states — and I
+repeated to three agents — that an event scheduled at `currentTime + 2 ms` lands in
+the past and collapses a 4 ms ramp into a step. **On this box it does not.**
+Measured with a positive control that injects known 4 ms ramps at known leads:
+
+| lead | click caught |
+|---|---|
+| **−20 ms** | 6/6, worst jump −25.9 dBFS, ×99 over local threshold |
+| **−5 ms** | 6/6 |
+| 0 / +2 / +5 / +20 / +55 ms | **0/6** |
+
+Only *negative* lead steps. `baseLatency` is 5.33 ms, `outputLatency` 32.00 ms, and
+Chrome picks automation up about one 2.7 ms quantum after `currentTime`, so a 4 ms
+ramp at +2 ms is **compressed, not collapsed**. `LEAD_S` stays at 55 ms because it
+costs nothing audible and a device with a larger buffer may need it — but the real
+margin is the whole 55 ms, not 2 ms.
+
+### The gap was the instrument, not the count
+The click count was already 0 everywhere. **Nobody had shown the detector could
+count a click that was really there**, so the zeros carried no information. That
+positive control is now the thing that makes every subsequent zero meaningful.
+
+Two holes closed in the lead invariant: `minLeadS` was blind to a bare `.value =`
+assignment — no time argument, so no lead, a step by construction. A spy on the
+value setter reports **0 bare assignments** across **19,949** automation calls,
+min lead 55.00 ms, 0 backstop clamps. **A grep was not an invariant.**
+
+### An honest limit that must be quoted with every zero
+**The detector cannot resolve a click inside a loud bed, and this is not tunable.**
+Measured noise floors against programme peak:
+
+| scene | floor | peak | margin |
+|---|---|---|---|
+| calm | −41.9 dBFS | −32.5 | **9.4 dB — the zero is real evidence** |
+| gale | −12.0 | −14.0 | floor above peak |
+| worst case | −6.0 | −9.8 | floor above peak |
+
+In bright broadband beds the floor sits *above* the programme peak. That is
+masking, not a bug — lowering the ratio buys ~3 dB against a >12 dB gap and spends
+the false-positive margin. So: **the calm bed is proven clean; a gale's zero must
+never be quoted as proof.** Every count now prints beside its floor.
+
+That is the right priority anyway — the title screen, where the owner heard the
+worst of it, is a calm bed.
+
+### Instrument bug #11, and it inverted a result
+`uifoam.mjs`'s palest-tercile statistic lies about thin marks. The HUD divider is
+1×10 px, so its padded box is mostly halo and the palest third *by ground* can
+contain no lit pixel at all — `q(0.98)` then returns a shadow pixel. It printed
+"ink 1.1:1" for a hairline measured elsewhere at sRGB 255 on a ground of 61, i.e.
+**11:1**. That empty sample made the first after-run look flat (storm 1.70→1.86)
+when the real move was **3.32→4.48**. Fixed by scoring thin marks over their whole
+length against the palest ground they land on.
+
+### Two serverless harnesses now exist
+The dev server has been down for whole agent sessions, so two agents built around
+it rather than waiting:
+- `scripts/audio-live.mjs` bundles `src/audio` with the esbuild already inside vite
+  and builds the rig against a real `AudioContext` in-page. **Trap worth not
+  re-finding:** `about:blank` has an opaque origin, so `blob:null/...` URLs make
+  `audioWorklet.addModule` fail — the rig then silently fell back to biquads and the
+  detector never attached (`usesWorklet=false`, null watch). `page.route` on a fake
+  https origin fixes it, still serverless.
+- `.tmp/glslcompile.mjs` compiles real WebGL2 programs on a `data:` URL. Its own
+  first version compiled as GLSL ES 1.00 and reported eight bogus `textureLod`
+  errors — the instrument was fixed, not the shader.
+
+## 42. Findings handed over from the UI agent
+
+**Helm view: not the UI.** The readout is 112×117 px bottom-left over deck planking
+and fully legible; UI is under 2% of the frame. For `src/camera`: the eye sits
+~0.5–1.5 m from the grating and fife rail so timber fills the centre-bottom ~45%
+with no silhouette, **no ship's wheel is identifiable anywhere in the frame**, and
+the lens is low and pitched down so the horizon survives only in the left third —
+a helmsman steers by horizon and bow.
+
+Also: near timber is heavily smeared while sails and distant deck are sharp — a
+TAA/motion-blur history problem on **near** geometry (`src/post`/`src/vfx`) — and
+the shrouds render as dense moiré (`src/ship`).
+
+**Phone chase framing:** the chase camera does not adapt to a 0.46 aspect ratio; on
+a 390×844 viewport the ship fills the left half with the bow cut off. `src/camera`,
+and direction 4 makes small viewports a real target.
+
+**Open question for the owner.** `KN` and `PRO` are the weakest marks left (ink
+221/237 against 255 for `MINIMAL`/`NNE`) because K, N, P, R and O at 9 px are
+diagonals and curves that never reach full pixel coverage. The fix is 10 px caps,
+which changes a look the owner has already approved — so it is a question, not a
+change.
