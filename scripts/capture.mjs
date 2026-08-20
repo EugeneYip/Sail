@@ -12,8 +12,15 @@
  *   node scripts/capture.mjs --out shots/x --scene noon --settle 6 --console
  *
  * Scenes are declared in SCENES below. `--scene all` renders every one.
- * Exit code is non-zero if the page threw or WebGL failed, so it doubles as a
- * smoke test.
+ *
+ * Exit codes — this doubles as a smoke test:
+ *   0  clean
+ *   1  the page threw, WebGL failed, or the engine never booted
+ *   2  bad arguments
+ *   3  a scene was timed while rival renderers were on the GPU, so the
+ *      frame-period numbers are not trustworthy. Add --allow-contention if you
+ *      only wanted the PNGs (screenshots are fine under load; timings are not),
+ *      or --wait-quiet <seconds> to sit and wait for a genuine quiet window.
  */
 
 import { chromium } from 'playwright';
@@ -32,6 +39,22 @@ import process from 'node:process';
  * freshly booted, unsettled engine — wrong waves, wrong exposure, wrong
  * everything, with nothing in the output to say so.
  */
+
+/**
+ * Headless Chromium caps rAF at 60 Hz, so 16.6 ms is the FLOOR of anything this
+ * harness can observe, not a performance target that was met.
+ */
+const VSYNC_MS = 1000 / 60;
+
+/**
+ * Tokens (`--user-data-dir=...`, unique per Playwright launch) belonging to our
+ * own browser tree. Learned on first sight via the ppid chain and remembered, so
+ * that a reparented child of ours is never miscounted as somebody else's.
+ * Over-reporting would be as damaging as under-reporting: a gate that cries wolf
+ * gets ignored, and then we are back to trusting contended numbers.
+ */
+const ownProfileTokens = new Set();
+
 /**
  * Count headless Chromium processes that are NOT ours.
  *
@@ -45,30 +68,55 @@ import process from 'node:process';
  *
  * So: measure the competition, and refuse to print an unflagged number when
  * there is any.
+ *
+ * Returns `{ procs, browsers }`, or `{ procs: -1 }` when `ps` could not be read
+ * — never 0 on failure, because "I could not look" must not read as "quiet".
+ * Both numbers are reported because one browser is ~5 processes (main, gpu,
+ * renderer, network, audio), so a raw process count of 5 means ONE rival agent.
  */
 function competingRenderers() {
   try {
     const out = execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], { encoding: 'utf8' });
-    const mine = new Set([process.pid]);
-    const rows = out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-      const m = /^(\d+)\s+(\d+)\s+(.*)$/.exec(l);
-      return m ? { pid: +m[1], ppid: +m[2], cmd: m[3] } : null;
-    }).filter(Boolean);
-    // Our own browser is a descendant of this process; walk parents to exclude it.
+    const rows = [];
+    for (const line of out.split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (m) rows.push({ pid: +m[1], ppid: +m[2], cmd: m[3] });
+    }
+    // byPid spans EVERY process, not just the browsers, so the walk can climb
+    // through the intermediate node/shell links up to this process.
     const byPid = new Map(rows.map((r) => [r.pid, r]));
-    const isMine = (r) => {
-      let cur = r, hops = 0;
-      while (cur && hops++ < 40) {
-        if (mine.has(cur.pid)) return true;
+    const profileOf = (r) => /--user-data-dir=(\S+)/.exec(r.cmd)?.[1];
+    const descendsFromUs = (r) => {
+      let cur = r;
+      for (let hops = 0; cur && hops < 64; hops++) {
+        if (cur.pid === process.pid) return true;
         cur = byPid.get(cur.ppid);
       }
       return false;
     };
-    return rows.filter(
-      (r) => /(Chromium|Google Chrome|chrome)/i.test(r.cmd) && /--headless/.test(r.cmd) && !isMine(r),
-    ).length;
+    // Playwright's chromium under either name (`chrome-headless-shell` is what
+    // it actually runs on this box — matching only /Chromium/ missed it), plus
+    // anything explicitly launched --headless. Keying on the ms-playwright cache
+    // path as well as the flag also catches an agent that launched
+    // headless:false, which contends for the GPU exactly the same, while still
+    // ignoring the owner's everyday Chrome and Claude's Electron.
+    const isRenderer = (r) =>
+      /chrome-headless|ms-playwright|Chromium/i.test(r.cmd) || /--headless(=\S+)?(\s|$)/.test(r.cmd);
+
+    const renderers = rows.filter(isRenderer);
+    for (const r of renderers) {
+      if (!descendsFromUs(r)) continue;
+      const tok = profileOf(r);
+      if (tok) ownProfileTokens.add(tok);
+    }
+    const isMine = (r) => descendsFromUs(r) || ownProfileTokens.has(profileOf(r) ?? '\0');
+
+    const rivals = renderers.filter((r) => !isMine(r));
+    // A tree root is a rival whose parent is not itself a rival: one per agent.
+    const rivalPids = new Set(rivals.map((r) => r.pid));
+    return { procs: rivals.length, browsers: rivals.filter((r) => !rivalPids.has(r.ppid)).length };
   } catch {
-    return -1; // unknown; do not claim the box is quiet
+    return { procs: -1, browsers: -1 }; // unknown; do not claim the box is quiet
   }
 }
 
@@ -107,6 +155,8 @@ function parseArgs(argv) {
     console: false,
     quality: 'ultra',
     dpr: 1,
+    waitQuiet: 0,
+    allowContention: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -117,9 +167,14 @@ function parseArgs(argv) {
       out.console = true;
       continue;
     }
+    if (key === 'allow-contention') {
+      out.allowContention = true;
+      continue;
+    }
     if (next === undefined || next.startsWith('--')) continue;
     i++;
-    if (['w', 'h', 'settle', 'timeout', 'dpr'].includes(key)) out[key] = Number(next);
+    if (key === 'wait-quiet') out.waitQuiet = Number(next);
+    else if (['w', 'h', 'settle', 'timeout', 'dpr'].includes(key)) out[key] = Number(next);
     else out[key] = next;
   }
   return out;
@@ -315,8 +370,45 @@ const gpuInfo = await page.evaluate(() => {
 });
 
 const results = [];
-/** Set if any scene saw a competing renderer; makes the summary refuse to lie. */
-let contended = false;
+/** Scenes whose timings were taken with rivals present (or unverifiable). */
+const tainted = [];
+
+/**
+ * Sit out the competition, if asked. Opt-in via `--wait-quiet <seconds>`: the
+ * default of 0 preserves the old behaviour of measuring now and flagging it.
+ *
+ * Waiting here rather than at boot is deliberate — the page is already loaded
+ * and converging, so when a quiet window does appear we spend it measuring
+ * instead of booting.
+ */
+async function waitForQuiet(label) {
+  if (!(args.waitQuiet > 0)) return;
+  const deadline = Date.now() + args.waitQuiet * 1000;
+  let announced = false;
+  for (;;) {
+    const r = competingRenderers();
+    if (r.procs === 0) {
+      if (announced) console.log(`[capture] ${label}: quiet — measuring now`);
+      return;
+    }
+    if (Date.now() >= deadline) {
+      console.log(
+        `[capture] ${label}: no quiet window in ${args.waitQuiet}s ` +
+          `(${r.procs < 0 ? 'contention unknown' : `${r.procs} rival proc(s)`}) — ` +
+          'measuring anyway, flagged below',
+      );
+      return;
+    }
+    if (!announced) {
+      console.log(
+        `[capture] ${label}: waiting up to ${args.waitQuiet}s for a quiet GPU ` +
+          `(${r.procs < 0 ? '?' : r.procs} rival proc(s) now)...`,
+      );
+      announced = true;
+    }
+    await page.waitForTimeout(2000);
+  }
+}
 
 for (const name of sceneNames) {
   const scene = SCENES[name];
@@ -340,6 +432,8 @@ for (const name of sceneNames) {
     },
     { scene, quality: args.quality },
   );
+
+  await waitForQuiet(name);
 
   // Record frame periods across the settle window. Wall-clock "fps" averaged
   // over a noisy machine is worthless — this session measured the same
@@ -372,7 +466,7 @@ for (const name of sceneNames) {
   }
 
   const rivalsAfter = competingRenderers();
-  const stats = await page.evaluate(() => {
+  const stats = await page.evaluate((VSYNC) => {
     const w = window.__leeward.world;
     const P = (window.__periods ?? []).slice(10).sort((a, b) => a - b);
     cancelAnimationFrame(window.__periodRaf);
@@ -381,6 +475,19 @@ for (const name of sceneNames) {
       p25: pct(0.25),
       p50: pct(0.5),
       p95: pct(0.95),
+      // min and the 1-vsync share are the two statistics contention cannot
+      // fake, because a rival can only ADD time to a frame. They are what
+      // disproved the "3x regression" of §29: an engine that genuinely costs
+      // 50 ms/frame cannot also produce a 6 ms frame, or land 7% of its frames
+      // on the very next vsync. Read them as a one-sided bound on the real cost.
+      min: P.length ? +P[0].toFixed(1) : 0,
+      // Period quantised to whole vsync intervals, counting those that took
+      // exactly one — i.e. everything under 25 ms (1.5 intervals). Same rule
+      // that produced the figures in DIAGNOSIS §31, kept identical so the
+      // numbers stay comparable across sessions.
+      vsync1: P.length
+        ? +((P.filter((v) => Math.round(v / VSYNC) <= 1).length / P.length) * 100).toFixed(0)
+        : 0,
       frames: P.length,
       fps: Math.round(w.time.fps),
       drawCalls: w.stats.drawCalls ?? 0,
@@ -391,27 +498,52 @@ for (const name of sceneNames) {
       timeOfDay: +w.env.timeOfDay.toFixed(2),
       sunY: +w.env.sunDirection.y.toFixed(3),
     };
-  });
+  }, VSYNC_MS);
 
   const file = sceneNames.length > 1 ? `${args.out}-${name}.png` : `${args.out}.png`;
   // 30s (playwright's default) aborts outright when other renderers
   // are competing for the GPU. Wait instead of losing the whole run.
   await page.screenshot({ path: stage(file), animations: 'allow', timeout: 120000 });
 
-  results.push({ name, label: scene.label, file, fps: lastFps ? Math.round(lastFps) : stats.fps, ...stats });
+  // Sampled at BOTH ends of the window, and the worse end wins: rivals spin up
+  // *during* a run, which is precisely how §29 recorded "load 1.9 at start" and
+  // still measured 50 ms.
+  const unknown = rivalsBefore.procs < 0 || rivalsAfter.procs < 0;
+  const procs = Math.max(rivalsBefore.procs, rivalsAfter.procs);
+  const browsers = Math.max(rivalsBefore.browsers, rivalsAfter.browsers);
+  // Unknown counts as tainted. "I could not check" is not "the box was quiet".
+  const dirty = unknown || procs > 0;
+  if (dirty) tainted.push({ name, procs, browsers, unknown });
+
+  results.push({
+    name, label: scene.label, file,
+    fps: lastFps ? Math.round(lastFps) : stats.fps,
+    ...stats,
+    rivalProcs: unknown ? -1 : procs,
+    rivalBrowsers: unknown ? -1 : browsers,
+  });
+
   // Headless Chromium caps rAF at 60 Hz, so 16.6 ms IS the floor here and a
   // p25 at the cap means "as fast as this harness can observe", not "exactly 60".
-  const rivals = Math.max(rivalsBefore, rivalsAfter);
-  contended ||= rivals > 0;
   const capped = stats.p25 > 0 && stats.p25 <= 17.2;
-  const flag = rivals > 0 ? `  !! ${rivals} rival renderer(s) — TIMINGS INVALID` : rivals < 0 ? '  !! contention unknown' : '';
+  // The marker rides directly on p25/p50 so the warning cannot be separated from
+  // the number when someone copies one line of this output into a doc.
+  const mark = dirty ? '!' : ' ';
+  const verdict = unknown ? 'CONTENTION-UNKNOWN' : procs > 0 ? 'CONTENDED' : 'quiet';
+  const rivalStr = unknown ? '?' : `${procs}p/${browsers}b`;
+  // Fixed decimals, not String(number) — 55 and 55.8 must not misalign a column
+  // that people read down looking for outliers.
+  const ms = (v, pad = 5) => v.toFixed(1).padStart(pad);
   console.log(
     `[capture] ${name.padEnd(10)} ` +
-      `p25 ${String(stats.p25).padStart(5)}ms${capped ? '*' : ' '} ` +
-      `p50 ${String(stats.p50).padStart(5)}ms  ` +
-      `p95 ${String(stats.p95).padStart(6)}ms  ` +
+      `p25 ${mark}${ms(stats.p25)}ms${capped ? '*' : ' '} ` +
+      `p50 ${mark}${ms(stats.p50)}ms  ` +
+      `p95 ${ms(stats.p95, 6)}ms  ` +
+      `min ${ms(stats.min)}ms  ` +
+      `1vsync ${String(stats.vsync1).padStart(3)}%  ` +
+      `rivals ${rivalStr.padEnd(6)} ${verdict.padEnd(18)} ` +
       `${String(stats.drawCalls).padStart(3)}dc  ` +
-      `${(stats.triangles / 1e6).toFixed(2)}Mtri  -> ${file}${flag}`,
+      `${(stats.triangles / 1e6).toFixed(2)}Mtri  -> ${file}`,
   );
 }
 
@@ -434,19 +566,60 @@ if (navigations > 1) {
 }
 
 console.log('\nGPU: ' + gpuInfo.renderer + (gpuInfo.float ? ' [float-rt ok]' : ' [NO FLOAT RT]'));
-if (contended) {
-  console.log(
-    '\n!! GPU CONTENTION DETECTED — every frame-period number above is INVALID.\n' +
-      '   Other headless renderers were running. Load average cannot see GPU\n' +
-      '   contention, so a quiet-looking box still ruins timings. Re-run when\n' +
-      '   `ps -Ao command= | grep -c "[-]-headless"` reports only your own.',
-  );
-}
+console.log('rivals Np/Nb = N competing renderer processes / N distinct rival browsers,');
+console.log('  sampled before AND after each window; one rival browser is ~5 processes.');
 console.log('* p25 at the 16.6 ms rAF cap — the harness cannot observe faster than 60 Hz.');
+console.log('1vsync = share of frames landing on the next vsync. Contention can only ADD');
+console.log('  time, so a high 1vsync share under load still proves the engine is fast.');
 console.log('Trust p25/p50 (engine cost). p95 and any mean are dominated by machine load.');
+
+// The banner is printed BEFORE the page-error check, unconditionally. Ordering it
+// after cost nothing until a routine console error (the headless AudioContext
+// warning, say) exited first and swallowed the contention warning entirely —
+// leaving flagged p25/p50 numbers on screen with nothing to explain them.
+if (tainted.length) {
+  const worst = tainted.reduce((a, b) => (a.procs >= b.procs ? a : b));
+  console.error(
+    '\n' + '='.repeat(78) + '\n' +
+      '!! GPU CONTENTION — THE FRAME TIMES ABOVE ARE NOT A MEASUREMENT OF THIS ENGINE\n' +
+      '='.repeat(78) + '\n' +
+      `   Tainted scene(s): ${tainted.map((t) => t.name).join(', ')}\n` +
+      `   Worst seen: ${worst.unknown ? 'unknown (ps unreadable)' : `${worst.procs} rival process(es) / ${worst.browsers} rival browser(s)`}\n` +
+      '\n' +
+      '   Load average CANNOT see this: it is a CPU run-queue metric and the GPU is\n' +
+      '   invisible to it. DIAGNOSIS §29 recorded "load 1.9 at start", measured 50 ms,\n' +
+      '   and reported a 3x regression that a full bisect proved did not exist.\n' +
+      '   A contended number is worse than no number, because it reads as authoritative.\n' +
+      '\n' +
+      '   The min and 1vsync columns are still meaningful — contention only adds time,\n' +
+      '   so they bound the real cost from below. p25/p50/p95 here are unusable.\n' +
+      '\n' +
+      '   Re-run with --wait-quiet 600 to measure inside a genuine quiet window, or\n' +
+      '   --allow-contention if you only wanted the PNGs (screenshots are unaffected).\n' +
+      '   To watch the competition directly:\n' +
+      "     ps -Ao command= | grep -c '[c]hrome-headless'\n" +
+      '='.repeat(78),
+  );
+  if (args.allowContention) {
+    console.error('(--allow-contention given: not failing the run. Do not quote the timings.)');
+  } else {
+    // Don't promise exit 3 when a page error below will claim exit 1 instead.
+    const code = errors.length ? '1 (the page error below takes precedence)' : '3';
+    console.error(
+      `\nFAILING, exit ${code}: ${tainted.length} of ${results.length} ` +
+        'scene(s) timed under contention.\n' +
+        'The PNGs were written and are valid; only the timings are refused.',
+    );
+  }
+}
+
+// A page error is the more actionable failure, so it claims the exit code — but
+// only after the contention banner above has had its say.
 if (errors.length) {
   console.error(`\n${errors.length} PAGE ERROR(S):`);
   for (const e of errors.slice(0, 25)) console.error('  ' + e);
   process.exit(1);
 }
+if (tainted.length && !args.allowContention) process.exit(3);
+
 console.log('\nOK — ' + results.length + ' shot(s)');

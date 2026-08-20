@@ -764,7 +764,7 @@ construction (`bearing = atan2(dx,-dz) + yawOff`). That also settled an older
 defect: cinematic declared `lookYawLimit = 0` and gave a dragging player **nothing
 at all**.
 
-## 25. The pattern: eight measurement bugs, and they all read as confident answers
+## 25. The pattern: ten measurement bugs, and they all read as confident answers
 
 This is the most transferable lesson of the project so far. Every one of these
 produced a plausible, confidently-stated number that was wrong:
@@ -780,6 +780,7 @@ produced a plausible, confidently-stated number that was wrong:
 | 7 | camera orbit probe | a 2.4 s window is ~14 simulated seconds here, and orbit drifts 0.055 rad/s by design, so drift swamped the signal |
 | 8 | camera cinematic differential | assumed a common-mode term that does not exist between two separate shot entries |
 | 9 | physics floating-origin assertion | sampled the phase of a 4 km sawtooth; gave 4083 m then 226 m on identical code |
+| 10 | `scripts/capture.mjs` frame-period percentiles (mine) | reported p25/p50 silently inflated up to 3x when other agents ran headless captures on the same GPU. This is the §29 "3x regression" that §31 retracted: `4cbc8c0` and HEAD measure identically. The tell was in the same data all along — min period 5.7-6.7 ms and 6-7% of frames inside one vsync. **Load average cannot see a busy GPU**, so §29 recorded "load 1.9 at start" while 4-9 rival renderers spun up mid-run |
 
 **Rules that follow, and they are cheap:**
 - If a measurement says something is *exactly* zero or *exactly* empty, suspect the
@@ -791,6 +792,15 @@ produced a plausible, confidently-stated number that was wrong:
 - Two-sided bands, not one-sided sign checks — a one-sided check passed happily
   while chase was losing 70% of the drag.
 - Check whether enabling the instrumentation changes the thing being measured.
+- Do not infer contention from a metric that cannot see it. Load average is a
+  CPU run-queue number and the GPU is invisible to it, so count your actual
+  competitors — at BOTH ends of the window, because they arrive mid-run.
+  `capture.mjs` now does this and exits 3 rather than print a contended timing:
+  a contended number is worse than no number, because it reads as authoritative.
+- Prefer a statistic the noise cannot fake. Contention can only ADD time, so the
+  minimum period and the share of frames landing within one vsync bound the real
+  cost from below. Those two, not the percentiles, are what disproved §29 — and
+  they separate "the engine is slow" from "the box is busy" in a single number.
 
 ## 26. Camera Run 4: the unverified changes are now proven
 
@@ -1116,3 +1126,115 @@ square by construction) — the fix is a more anisotropic sheet sprite in
 `textures.ts`, which is exactly the file whose work was destroyed; waterline froth
 is now too sparse, the direction the agent deliberately chose to err in given the
 reported defect was excess regularity.
+
+## 36. The stray line, found: the clipmap cut its holes in the wrong place
+
+Sections 8.5, 10, 14 and 17A are one defect, and it is the ocean's after all — not a
+line primitive, not the Kelvin arms, not a ship mesh. `Ocean.updateClipmap` snapped
+**every level to its own two-cell grid**, which is right, and then let each ring's
+hole sit at **its own centre**, which is wrong: neighbouring levels do not share a
+centre. Level k-1's centre lands 0 or +/-1 of level k's cells away on each axis, so
+the hole overlapped the finer level on one side and left a **gap running the full
+length of the boundary** on the other. A slit of unpainted sea shows the flat grey
+of the distance through it: a plank from above, a line at waterline height edge-on,
+mitred at the corners. It is scale-invariant, which is why it was seen "at different
+distances" — every boundary leaks about the same 20-25 px across.
+
+Measured in the running engine with `.tmp/clipgap.mjs`, which recovers each hole
+from its **index buffer** and compares it with the child level's footprint:
+
+| boundary | gap before | frames w/ gap | gap after |
+|---|---|---|---|
+| L0/L1 | 1.5 m x 96 m | 290/400 | 0 |
+| L1/L2 | 3 m x 192 m | 307/400 | 0 |
+| L2/L3 | 6 m x 384 m | 299/400 | 0 |
+| L3/L4 | 12 m x 768 m | 309/400 | 0 |
+| L4/L5 | 24 m x 1536 m | 264/400 | 0 |
+| L5/L6 | 48 m x 3072 m | 196/400 | 0 |
+| L6/L7 | 96 m x 6144 m | 218/400 | 0 |
+| L7/L8 | 192 m x 12288 m | 400/400 | 0 |
+| L8/L9 | 384 m x 24576 m | 192/400 | 0 |
+| L9/L10 (skirt) | 768 m x 49152 m | 400/400 | 0 |
+
+Overlap on the opposite side was equal to the gap in every case, and is also now 0.
+
+**Do not "snap all levels to one common grid" — it is the obvious fix and it is
+wrong.** The only grid common to every level is the skirt's, whose snap is 12.288 km:
+simulated over 20 000 camera positions that leaves the camera up to 3.7 km from the
+centre of a level 0 whose half-extent is 48 m, i.e. no fine water under the ship at
+all. Snapping all levels to the *finest* grid does close the gap and keep the camera
+centred, but then every coarse level's lattice drifts a fraction of its own cell as
+the camera moves, so the far sea resamples itself every 1.5 m of travel. The
+per-level snap is load-bearing: two of level k's cells is a whole number of cells of
+every finer level, which is what lands a fine level's morphed outer band exactly on
+the coarse level's vertices, and it pins each level to one fixed world lattice.
+
+The fix keeps all of that and moves the hole instead. The offset is always a whole
+level-k cell, so nine ring index buffers (hole displaced -1/0/+1 on each axis, all
+nine sharing one vertex buffer, ~1.3 MB at gridM 128) cover every case, and
+`updateClipmap` picks the one that frames the level below it. Zero extra triangles,
+zero extra draw calls, 0.60 Mtri unchanged. The skirt is the exception — its snap is
+sixteen of the last ring's, so its offset is a fraction of a skirt cell and cannot
+come out of the hole; it is flat and unmorphed (every cascade has faded out by its
+6 km cell), so it has no lattice to keep and simply takes the last ring's centre.
+That also makes the `HORIZON_RADIUS` comment true in practice for the first time.
+
+`.tmp/gapshot.mjs` projects the strips through the live camera and prints the crop
+rectangle for each, so the next person does not have to hunt for a 20 px line in a
+1600x900 frame. Before: 14 strips at 5 boundaries on screen in `masthead`, two of
+them photographed as hard-edged bands crossing open water. After: "no uncovered
+strip at any boundary" in `orbit`, `masthead` and `waterline`.
+
+**Residual, for whoever chases 17C (the flickering streaks):** `effCell` in
+`surface.ts` is `max(cell, 2*cheb/uGridM)`, and the second term only reaches `cell`
+at a ring's outer edge, so the max picks `cell` throughout — `effCell` is piecewise
+constant per level and steps **2x at every boundary**. The morph aligns the two
+sides' vertex *positions* exactly; their displacement *mip* still differs by a full
+level, so the heights need not match. Not visible in the crops taken here, but it is
+the remaining mechanism that can put a hairline at a level boundary.
+
+The fix is mirrored into the stale `ca2247` backup worktree (both files byte-identical
+to this repo's) only because the task naming that path predates §21.
+
+## 36. State 2026-08-20, quiet box (0 rivals) — and one severe new artefact
+
+First capture on a genuinely uncontended machine since the harness gained its
+contention gate. Zero GLSL errors, zero failing materials, **zero warnings**.
+
+| scene | p25 | p50 | min | 1-vsync | dc |
+|---|---|---|---|---|---|
+| noon | 21.6 ms | 40.1 | **6.5 ms** | 29% | 85 |
+| orbit | 35.4 | 50.5 | 7.0 | 14% | 83 |
+| golden | 35.2 | 54.1 | 8.7 | 13% | 74 |
+
+A **6.5 ms minimum against a 40 ms median** is not steady cost — it is intermittent
+stalling, which corroborates §31: the engine can render the frame, something
+periodically prevents it.
+
+**Landed and confirmed good:** the minimal default UI is in and reads exactly as the
+owner asked — speed, heading, wind, and a `MINIMAL | PRO` toggle, nothing else. The
+full sail plan renders as discrete sails on three masts. The hull-side "waterfall"
+is gone.
+
+### SEVERE: a soft opaque cloud smear covering most of the sky
+
+In `orbit` a large soft-edged pinkish-grey mass covers roughly the upper-left 60% of
+the sky. **At full frame it reads as a dark bite taken out of the sky; zoomed 2x it
+is the opposite** — the mass is a cloud layer *in front*, and the dark blue region is
+correct sky showing through a hole in it, with properly-formed cirrus streaks and
+cumulus visible inside. So the defect is that layer, not the blue.
+
+Observations, without a diagnosis attached — do not guess, bisect:
+- the mass is soft, blobby and directional, with a scalloped boundary
+- there is a **matching hard vertical discontinuity in the water** below its right
+  edge, so whatever it is also drives the water's lighting or shadow
+- the whole frame carries a warm cast that appears to come from this layer
+- it is prominent in `orbit`, where the camera **rotates continuously**
+
+That last point is the cheapest thing to test first: the cloud march runs at quarter
+resolution with **temporal reprojection**, and a continuously rotating camera is the
+classic disocclusion case. A history that cannot keep up smears into exactly this
+kind of soft mass. But the two-layer system (cumulus deck plus high cirrus) could
+equally be rendering the cirrus as an opaque sheet, and the water discontinuity
+points at `cloudShadowMap` extent. **Bisect by disabling reprojection, then each
+layer, then the shadow slice** — three cheap ablations that separate all three.
