@@ -63,6 +63,12 @@ readouts (`world.ship.*`, `world.stats`) are unaffected; only timings are.
 uncommitted work in the same tree and that command destroys it. Use a `git
 worktree` with its own dev server.
 
+**Never `git add -A` in this tree.** Stage explicit paths. A blanket add swept a
+ship agent's uncommitted `Parts.ts`, `ensign.ts` and 159 lines of `hull.ts` into a
+commit whose message was about the sky — the work survived but is filed under the
+wrong change, and a blanket add is one keystroke away from committing another
+agent's half-finished state as if it were reviewed.
+
 **Commit source and docs separately.** A commit labelled `docs:` that also carries
 source changes makes `git log` useless for bisecting, and has already sent one
 investigation to an empty window.

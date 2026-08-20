@@ -1347,3 +1347,86 @@ a regression.
   made the exit code meaningless — a real GLSL failure and "this box has no sound
   card" became indistinguishable. Environment noise is now separated from real page
   errors. Fixed.
+
+## 39. The ensign, the see-through hull, and TWO objects at the same station
+
+### The stars were inverted pentagrams
+Stripe and star *counts* were already right (15/15, `RWRWRWRWRWRWRWR`, 3 columns x
+5 rows). But ray-casting one star's outline gave arms at **36.8, 108.5, 180.3,
+252.5, 325.5 degrees** instead of 0/72/144/216/288 — **a point straight down**.
+`starSd()` takes `+y` as the star's up; the caller passed `fy - cy` while `v` runs
+*down* the hoist. Fixed with `cy - fy`.
+
+**This is the case for dumping the texture rather than reading the generator.** The
+code computed a correct star at a correct position; only the rendered pixels showed
+it upside down.
+
+### I gave a wrong specification and was corrected with evidence
+I specified the canton spanning the top **7** of 15 stripes. The agent kept **8**
+(measured 7.992) and explained why: 7 is a count belonging to a **13**-stripe field
+(7/13 = 0.538 of the hoist), and the same *proportion* on 15 stripes is 8.08 —
+which is what the surviving flag's 16 ft 1 in union on a 30 ft hoist measures.
+Carrying the count rather than the proportion would put the union at 0.467 and leave
+it visibly shallower than the real flag. **It is right and I was wrong.** Recorded at
+`UNION_STRIPES` so nobody "fixes" it back.
+
+### The hull was see-through because of face culling, not missing lids
+Worse than reported: spar-deck ports showed the far-side **sails** straight through
+the ship. The surfaces that should stop the eye — the gun deck's inner shell, the
+inboard face of the bulwark — are single-sided and face *inboard*, so from outside
+they are back faces and get culled. Fixed with port backing quads (two, not a
+double-sided material, because the family shares one material and the faces want
+different values), a gun in every open port sized from the aperture's measured
+depth, and a liner brightness gradient — sighted *along* the hull the ports had read
+as a row of glowing ochre slots, which was the "openwork lattice".
+
+Also: **the port lids were rotating the wrong way.** `-ang` carried the hanging
+direction inboard on *both* sides, so every open lid swung in through the bulwark,
+leaving the aperture completely unobstructed and laying a black plate flat on the
+spar-deck planking.
+
+### The four-times-misattributed object is TWO objects at the same station
+1. **Ours: the spritsail yard.** `Parts.ts` gave every non-mast yard
+   `pivot.set(0,0,0)`, so its 60° brace was applied about the **ship's origin
+   31.7 m away** instead of its own centre. Ship-local extent, by mirroring
+   `shipPart()` on the CPU:
+   `x [22.91, 30.12] -> x [-3.61, 3.61]` against a **6.65 m half-beam**. It was
+   hanging 23-30 m out to starboard, 8 m above the water, with its gear stretched
+   out to it.
+2. **Not ours: `vfx-hull-skirt`** (`src/vfx/HullWater.ts:113`) — a flat hard-edged
+   white slab on the water running forward past the stem. **Its geometry is a unit
+   grid displaced entirely in the vertex shader, which is why every bounding-box
+   hunt came back empty.**
+
+**Two different objects at one station is why this was misattributed four times** —
+each investigation found *a* cause, fixed it, and the other remained.
+
+### Rope survey, measured before touching
+Piercings by family in live trim: `ratline-lower` 17-23, `brace` 15,
+`shroud-lower` 7-10, `headstay` 4, `backstay` 3-4, `buntline` 2, others ≤2.
+Course braces re-routed aft to a pin rail — which is where they actually lead, not
+to the next mast — took brace 15 -> 12. A second change measured no better and was
+**reverted rather than kept unmeasured**.
+
+### A probe artefact retracted mid-run
+The agent was convinced the sails were ~25% transparent and had measured an alpha.
+They are not: DoF was focused by the camera rig for *its* eye 70-110 m astern while
+the probe's eye was 3 m from the subject, and TAA was reprojecting with the rig's
+matrices rather than the ones forced inside `render()`. Material reads
+`transparent: false, opacity: 1, transmission: 0`. **Tenth measurement bug** (§25).
+
+### Still open
+- **Ratlines and lower shrouds pierce the bellying courses** (17-23 and 7-10) —
+  this is the *sail* reaching into the shroud gang, not a misrouted rope, so it needs
+  a camber-envelope clamp or contact-aware routing, not a constant. Largest count by
+  far.
+- Upper-tier braces pierce 12: a straight chord from a topgallant yardarm to the next
+  mast cannot clear that mast's own canvas; needs a curved route.
+- **Spanker cluster:** the mizzen crossjack yard sits at y 15.4, *below* the gaff at
+  16.4, so braced round, its after arm sweeps into the spanker's cloth and its
+  footropes, lifts and topping lift pierce with it.
+- **The bowsprit is too long** — `ship-oak` reaches z = -51.6, i.e. 24.6 m forward of
+  the stem, giving ~78 m sparred length against the 62 m in AGENTS.md.
+- Hull salt-streak weathering reads as heavy vertical rain streaks at close range.
+- The ensign hides behind the spanker in light air.
+- The helm camera frames wheel, fife rail and grating as an unreadable jumble.
