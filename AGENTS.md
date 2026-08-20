@@ -73,6 +73,19 @@ agent's half-finished state as if it were reviewed.
 source changes makes `git log` useless for bisecting, and has already sent one
 investigation to an empty window.
 
+## Keeping the repo publishable
+
+`npm run preflight` must stay green — it also runs in CI before any deploy. It
+fails on tracked scratch files, captures, credentials, oversized assets, missing
+docs, HTML missing its crawler/share metadata, and a `vite` `base` that is not
+`'./'`. If you add a probe, put it in `.tmp/` (gitignored). If you add an asset,
+keep it small and say why it is not procedural.
+
+`index.html` carries the SEO and share metadata. Two standing notes: webfonts load
+**non-blocking** on purpose (a render-blocking third-party stylesheet was costing
+first paint, leaking every visitor's IP and breaking offline) and there is
+deliberately **no canonical tag** until the deploy URL is known.
+
 ## Non-negotiables
 
 1. **Modules talk only through the blackboard.** Never import another
