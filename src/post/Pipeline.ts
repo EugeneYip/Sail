@@ -196,8 +196,6 @@ export class Pipeline {
       vram: () => ({ total: this.targets.bytes() / 1048576, targets: this.targets.breakdown() }),
     };
     world.ext.post = this.ext;
-    // TEMP-DEBUG-RC: raw handle for the render-correctness instrumentation.
-    (globalThis as unknown as Record<string, unknown>).__rcPipe = this;
   }
 
   /* ------------------------------------------------------------------ *
@@ -260,6 +258,30 @@ export class Pipeline {
     const budget = BUDGET[s.quality] ?? BUDGET.high;
     const prof = this.profiler;
     prof.enabled = s.debug || this.profileFrames > 0;
+
+    /*
+     * Raw handle for the render-correctness probes, GATED. This used to be set
+     * unconditionally in the constructor, which shipped every internal render
+     * target and pass of the post stack on `globalThis` in a production build.
+     *
+     * It cannot be gated in the constructor: settings arrive after boot, so a
+     * construction-time check would be false for every probe and the handle
+     * would never appear. Gating here instead costs one comparison a frame and
+     * tracks the setting live.
+     *
+     * WHAT THIS BREAKS: the fifteen `.tmp/*.mjs` probes that reach for
+     * `window.__rcPipe` must now set `world.settings.debug = true` and let one
+     * frame pass first. `.tmp/bench.mjs`, `slope.mjs`, `gpubudget.mjs`,
+     * `stall.mjs`, `expcost.mjs`, `exptime.mjs`, `aetest.mjs`, `final.mjs`,
+     * `floor.mjs`, `gap.mjs`, `wallab.mjs`, `storm.mjs`, `stormbudget.mjs`,
+     * `fbudget.mjs`, `gpuab.mjs`. Note DIAGNOSIS 25 #5: `settings.debug` also
+     * arms a synchronous readback costing 117-370 ms every 60 frames, so any
+     * probe that wants the handle AND a timing must read `ext.post.profile()`
+     * rather than wall-clock frame periods.
+     */
+    const g = globalThis as unknown as Record<string, unknown>;
+    if (s.debug) g.__rcPipe = this;
+    else if (g.__rcPipe === this) delete g.__rcPipe;
 
     const camExt = world.ext.camera as
       | { cut?: boolean; underwater?: number }

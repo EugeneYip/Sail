@@ -270,6 +270,39 @@ export const CLOUD_SHADOW_SIZE = 512;
 /** Metres covered by the cloud shadow map, centred on the camera. */
 export const CLOUD_SHADOW_EXTENT_M = 26000;
 
+/**
+ * Independent weather columns a view ray crosses inside the deck — the factor
+ * between "fraction of COLUMNS that are cloudy" and "fraction of SKY that looks
+ * cloudy", and the reason `DIAGNOSIS.md` section 36's opaque smear existed.
+ *
+ * `coverageAt` thresholds a histogram-flattened weather map, so it selects a
+ * fraction of *columns* equal to the knob. That equals the fraction of *sky*
+ * for a vertical ray and for nothing else. Measured on this field:
+ *
+ *   marched shell span   4785 m  (cloudShells: 240 m to 5025 m — the 3300 m
+ *                                nominal slab plus the base-wander and tower
+ *                                paddings, both multiples of the slab)
+ *   decorrelation length 2500 m  (weather R autocorrelation 0.86 at 750 m,
+ *                                0.59 at 1500 m, 0.08 at 3000 m)
+ *   reference elevation  25 deg  (top of a 40 deg lens from a deck-level
+ *                                camera; `orbit` measured 25.8 deg)
+ *
+ *   4785 / (2500 * tan 25 deg) = 4.1
+ *
+ * A ray is opaque if ANY of those columns is dense, so sky coverage is
+ * 1 - (1-p)^4.1, not p. Uncorrected, cloudCover 0.4 rendered a 99 % opaque
+ * ceiling above 15 deg elevation and 78 % at 10-15 deg, with the whole usable
+ * range of the knob squeezed into 0.05-0.15. `coverageAt` now inverts this, and
+ * `CloudField`'s CPU mirror consumes the same inverted value — the two must not
+ * disagree, or the deck you see and the deck every material is lit by come
+ * apart, which is the failure that section's floor comment already records.
+ *
+ * The independent check: the inversion maps the `orbit` scene's 0.4 to 0.12, and
+ * 0.12 forced onto the uncorrected build is the value whose render reads as the
+ * broken cumulus the scene asks for.
+ */
+export const CLOUD_COLUMNS_PER_RAY = 4.1;
+
 /** Wind multiplier at cloud altitude — the deck runs ahead of the surface wind. */
 export const CLOUD_WIND_GAIN = 1.6;
 

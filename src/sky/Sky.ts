@@ -147,9 +147,6 @@ export class Sky implements Module {
     };
     world.ext.sky = this.handshake;
 
-    // TEMP-DEBUG-SKY: raw handle for the cloud temporal-convergence probe.
-    (globalThis as unknown as Record<string, unknown>).__skyDbg = this;
-
     // One warm-up so the very first frame is lit, not black.
     this.camPos.setFromMatrixPosition(world.camera.matrixWorld);
     for (let i = 0; i < 5; i++) {
@@ -181,6 +178,16 @@ export class Sky implements Module {
     // p95 unreadable while it rode on `settings.debug`.
     const cpuTiming = world.settings.debug;
     this.timing = world.settings.debugStalls === true;
+
+    // Raw handle for the cloud probes, gated on the same flag for the same
+    // reason as `__rcPipe` in post/Pipeline.ts: it was set unconditionally at
+    // init, so a shipped build published the whole sky module — every render
+    // target, every pass — on `globalThis`. It cannot be gated at init because
+    // settings arrive after boot. Probes must now set `settings.debug = true`
+    // and let a frame pass: `.tmp/cloudtemporal.mjs` already does.
+    const g = globalThis as unknown as Record<string, unknown>;
+    if (cpuTiming) g.__skyDbg = this;
+    else if (g.__skyDbg === this) delete g.__skyDbg;
 
     // CPU-only, so no finish(): a serialising timer here would just charge the
     // sky for whatever the ocean and the ship left in the queue.

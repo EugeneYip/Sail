@@ -4,6 +4,7 @@ import { clamp01 } from '../util/math';
 import {
   CLOUD_BASE_NOISE_SIZE,
   CLOUD_BASE_TILE_M,
+  CLOUD_COLUMNS_PER_RAY,
   CLOUD_DETAIL_NOISE_SIZE,
   CLOUD_DETAIL_TILE_M,
   CLOUD_LOW_BOTTOM_M,
@@ -165,7 +166,15 @@ export class CloudField {
     const slant = 1 / sunY;
     // Chance the beam intercepts the deck at all. A low sun sees far more of it,
     // which is exactly why the last hour before an overcast sunset goes flat.
-    const hit = clamp01(1 - Math.pow(1 - cover, 0.45 + 0.5 * slant));
+    //
+    // The base of the power is the PER-COLUMN coverage the GPU field actually
+    // builds, not the knob. `coverageAt` inverts the slant multiplicity now (see
+    // CLOUD_COLUMNS_PER_RAY), so raising the knob here as if it were a column
+    // probability would charge the sun for a deck four times denser than the one
+    // on screen — the exact "deck you see versus deck every material is lit by"
+    // divergence that shader's floor comment was written about.
+    const column = 1 - Math.pow(1 - cover, 1 / CLOUD_COLUMNS_PER_RAY);
+    const hit = clamp01(1 - Math.pow(1 - column, 0.45 + 0.5 * slant));
     this.beamTransmittance = Math.max(
       0.035,
       1 - hit + hit * Math.exp(-Math.min(tauVertical * slant, 60)),

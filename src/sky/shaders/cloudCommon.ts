@@ -2,6 +2,7 @@ import {
   CLOUD_CIRRUS_MAP_SCALE,
   CLOUD_CIRRUS_OPTICAL_DEPTH,
   CLOUD_CIRRUS_THICKNESS_M,
+  CLOUD_COLUMNS_PER_RAY,
   CLOUD_EXTINCTION_PER_M,
   CLOUD_HIGH_M,
 } from '../constants';
@@ -34,6 +35,7 @@ const float CIRRUS_ALT_KM = ${f(CLOUD_HIGH_M / 1000)};
 const float CIRRUS_TAU = ${CLOUD_CIRRUS_OPTICAL_DEPTH};
 const float CIRRUS_THICK_M = ${f(CLOUD_CIRRUS_THICKNESS_M)};
 const float CIRRUS_MAP_SCALE = ${f(CLOUD_CIRRUS_MAP_SCALE)};
+const float CLOUD_COLUMNS_PER_RAY = ${f(CLOUD_COLUMNS_PER_RAY)};
 
 uniform highp sampler3D tCloudBase;
 uniform highp sampler3D tCloudDetail;
@@ -72,18 +74,45 @@ float heightGradient(float h, float type){
  * Column coverage from the weather map's R channel.
  *
  * R is baked histogram-flattened (see gaussCdf in cloudNoise.ts), so it is
- * uniform on 0..1 and a threshold at '1 - cover' selects a fraction of sky
- * equal to 'cover'. That is the whole reason cloudCover is now a linear knob.
+ * uniform on 0..1 and a threshold at '1 - p' selects a fraction of COLUMNS equal
+ * to p.
+ *
+ * SLANT MULTIPLICITY, and it is not a detail. A fraction of columns equals a
+ * fraction of SKY for a vertical ray and for nothing else. This deck's marched
+ * shells span 4.8 km and its weather field decorrelates in 2.5 km, so a ray at
+ * 25 deg elevation crosses CLOUD_COLUMNS_PER_RAY = 4.1 independent columns and
+ * is opaque if any one of them is dense: sky coverage is 1 - (1-p)^4.1, not p.
+ * Feeding the knob in as p is what made cloudCover 0.4 render as a 99 % opaque
+ * featureless ceiling above 15 deg elevation — DIAGNOSIS.md section 36's
+ * "soft opaque cloud smear covering most of the sky" — while leaving the whole
+ * usable range of the knob inside 0.05..0.15. Invert it here, once, so
+ * 'cloudCover' means the fraction of sky a player sees covered. The derivation
+ * and the measurements are on CLOUD_COLUMNS_PER_RAY.
  *
  * The exponent is what separates weather from mere quantity: below about 0.5 the
  * field is pushed DOWN so isolated columns reach full density and the gaps stay
  * properly blue, and as cover closes it is pushed UP so the deck becomes a
  * continuous sheet with holes rather than dense cumulus with blue between. A
- * gale is not "lots of fair-weather cloud".
+ * gale is not "lots of fair-weather cloud". It rides the ORIGINAL knob, not the
+ * per-column value, because it is describing the weather the player asked for.
  */
+float columnCoverage(float cover){
+  return 1.0 - pow(1.0 - saturate1(cover), 1.0 / CLOUD_COLUMNS_PER_RAY);
+}
+
 float coverageAt(float wmR, float cover){
-  float t = 1.0 - cover;
-  float u = saturate1((wmR - t) / max(0.12, 1.0 - t));
+  float p = columnCoverage(cover);
+  float t = 1.0 - p;
+  /*
+   * No 0.12 floor on the denominator. It used to stop 'u' ever reaching 1 once p
+   * fell below 0.12, and since a column produces no cloud at all until cf clears
+   * about 0.37 (see the floor note below), that turned a thin deck into a
+   * COMPLETELY clear sky rather than a sparse one: measured, cloudCover 0.05
+   * rendered exactly zero cloud at every elevation. The inversion above puts the
+   * common covers right at that cliff — 0.4 maps to p = 0.12 — so the floor had
+   * to go with it.
+   */
+  float u = saturate1((wmR - t) / max(1e-3, p));
   float shaped = pow(u, mix(1.7, 0.32, cover));
   /*
    * Floor at high cover, and it is not cosmetic.

@@ -236,12 +236,31 @@ vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
     // cloud, and buys 2.5x less variance where the big masses actually are.
     const float DT_MAX = 1.2;
     float dt = seg * (GROWTH - 1.0) / (pow(GROWTH, steps) - 1.0);
-    float t = t0 + dt * jitter;
+    float t = t0;
     float h;
 
+    /*
+     * DITHER EVERY STEP, not just the first one.
+     *
+     * The offset used to be applied once, as 't0 + dt * jitter', with 'dt' the
+     * length of the FIRST step. Because the steps then grow by GROWTH^steps —
+     * 1.055^48 = 13x — the offset deep in the march was a thirteenth of the
+     * interval it was supposed to be randomising, so the far samples sat at
+     * distances that were the same for every pixel on screen. Fixed sample
+     * distances paint iso-distance shells onto the cloud, and because the step
+     * grid is geometric the shells are geometrically spaced: measured, the
+     * cumulus in 'orbit' and 'noon' carried nested arc ridges whose spacing grew
+     * outward exactly like GROWTH. That is the ring pattern in DIAGNOSIS 36's
+     * follow-up crops, and it survived 96 steps, so it was never undersampling.
+     *
+     * Sampling a uniformly random point INSIDE each interval is also simply the
+     * unbiased estimator for that interval's contribution, which sampling the
+     * interval's start is not. Same cost: one add.
+     */
     for (float i = 0.0; i < steps; i += 1.0) {
       if (T < 0.012) break;
-      vec3 p = pos + dir * t;
+      float ts = t + dt * jitter;
+      vec3 p = pos + dir * ts;
       float density = cloudDensityAt(p, detail, h);
       if (density > 0.0015) {
         float sigma = density * CLOUD_SIGMA_T;
@@ -250,7 +269,7 @@ vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
         float stepT = exp(-sigma * dt * 1000.0);
         L += T * S * (1.0 - stepT);
         float w = T * (1.0 - stepT);
-        depthSum += t * w;
+        depthSum += ts * w;
         depthWeight += w;
         T *= stepT;
       }
