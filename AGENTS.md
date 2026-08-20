@@ -175,7 +175,9 @@ start and trust its numbers over your own guesses.
 | | |
 |---|---|
 | Hull length (gun deck) | 53.3 m |
-| Length overall w/ bowsprit | 62 m |
+| Length overall, transom to bowsprit **cap** | 62 m |
+| Length transom to flying-jibboom tip | ~71 m |
+| Sparred length (spanker boom overhangs the transom by 11 m) | ~82 m |
 | Beam | 13.3 m |
 | Draught | 6.4 m |
 | Displacement | 2200 t |
@@ -184,6 +186,14 @@ start and trust its numbers over your own guesses.
 | Total sail area | ~3968 m² |
 | Top speed | 13 kn |
 | Hull planking | white oak, black paint above the wale, white gunport stripe |
+
+**Three different lengths, and I conflated them.** "62 m" is the figure usually
+printed as *length overall*, and it measures to the **bowsprit cap** — not to the
+tip of the flying jibboom, and not to the aftermost spar. Taking it as
+taffrail-to-tip deletes the jibboom, flying jibboom, martingale and three of four
+headsail tacks; a ship agent measured the cap already sitting at 62.44 m and was
+right to refuse the "overshoot". And the **aftermost spar is not on the bow at all**
+— the spanker boom overhangs the transom by about 11 m. Say which length you mean.
 | Below waterline | copper sheathing (Paul Revere's), oxidised green-brown |
 | Masts | three, square-rigged, plus a fore-and-aft spanker |
 
