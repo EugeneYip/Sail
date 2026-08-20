@@ -1278,3 +1278,72 @@ ocean clipmap, the Kelvin wake arms and a hull skirt, and a background session i
 fixing an ocean clipmap per-level snap gap. **It is still visible.** Whoever next
 touches this: bisect by hiding every mesh in the scene one at a time and name the
 one that removes it — that is the only method that has ever worked here.
+
+## 38. The cloud mass: coverage confused *columns* with *sky*
+
+Isolated by **twelve ablations on fresh pages**, each asserting the ablation applied
+*and still held after 4 s of frames*. All three hypotheses I supplied were wrong,
+and one rested on a false premise:
+
+| my hypothesis | verdict |
+|---|---|
+| temporal reprojection smearing under a rotating camera | **wrong — and the premise is false.** The orbit camera does not rotate continuously during a capture; `CameraRig`'s capture hold stops the azimuth dead 3.4 s in, ~8.6 s before the shot |
+| high cirrus rendering as an opaque sheet | wrong — with the deck off, cirrus renders as correct thin wisps |
+| cloud-shadow extent | **half right**: the shadow slice is the *water* discontinuity but not the sky mass. Two separable defects that shared a cause |
+
+**The mechanism.** `coverageAt` thresholds a histogram-flattened weather map, so its
+knob selects a fraction of **columns** — which equals a fraction of **sky** only for
+a vertical ray. Measured: marched shells span **4785 m**, the weather field
+decorrelates in **~2500 m** (ACF 0.86 @750 m, 0.59 @1500 m, 0.08 @3000 m). A ray at
+25° therefore crosses `4785/(2500·tan25°) = 4.1` independent columns and is opaque if
+**any** is dense, so sky coverage is `1-(1-p)^4.1`, not `p`:
+
+| per-column cover | opaque fraction at 10-15° / 15-20° / 20-25° |
+|---|---|
+| 0.05 | 0 / 0 / 0 — literally no cloud anywhere |
+| 0.40 (the scene's value) | 0.78 / 0.995 / 0.998 |
+
+`noon` measures the same — one global defect. `orbit` only *shows* it because it is
+the only shot that looks up (40° lens tilted +6°, top of frame at 25.8°, 63% sky);
+`noon`'s chase looks down so the ceiling is off the top of frame.
+
+Second bug in the same function: `max(0.12, 1-t)` stopped `u` reaching 1 once
+per-column cover fell under 0.12, and a column makes no cloud until `cf` clears
+~0.37 — so **low cover rendered zero cloud rather than sparse cloud**.
+
+**Third bug, visible only once the first was fixed.** Every cumulus carried
+geometrically-spaced concentric ring terraces. The start dither was applied once as
+`t0 + dt*jitter` with `dt` the *first* step, but steps grow `1.055^48 = 13x`, so deep
+in the march the offset randomised **1/13** of the interval it was meant to — fixed
+sample distances paint iso-distance shells. It survived 96 steps, so it was never
+undersampling. Now samples a uniform random point inside each step, which is also
+the unbiased estimator.
+
+**Discipline worth copying:** the agent measured whether *its own* change caused an
+apparent frame-time difference. A matched interleaved A/B in one page, switching only
+`uCoverage` between the new and old values, came out indistinguishable — so it
+reported the difference as not attributable to itself rather than claiming a win or
+a regression.
+
+### Still open in the sky
+1. **`cloudLightDepth` has no dither at all** — five geometrically-growing sun-march
+   steps at fixed offsets, i.e. exactly the bug just fixed in the view march, so
+   `tauLight` is still quantised on fixed cone shells. Best next suspect for residual
+   brightness banding.
+2. Cloud silhouettes stair-step (half-res buffer plus a hard density threshold).
+3. Clouds read as cotton wool, not cauliflower cumulus — `uErosion` 0.376 and a 750 m
+   detail tile barely register at these distances.
+4. `CLOUD_COLUMNS_PER_RAY = 4.1` is one scalar for a quantity that genuinely varies
+   with elevation, and **cannot** be made view-dependent: the density field must be
+   single-valued or clouds would change as you look around and the shadow map would
+   disagree. Calibrated at 25°, so the zenith is slightly under-covered.
+
+### Two infrastructure consequences
+- **Gating the debug globals breaks 15 `.tmp/*.mjs` probes** — they must now set
+  `settings.debug = true` and let a frame pass. Note the trap: `settings.debug` also
+  arms §25 #5's synchronous readback, so a probe wanting the handle *and* a timing
+  must use `ext.post.profile()`.
+- **`capture.mjs` was exiting 1 on a headless `AudioContext` device error**, which
+  made the exit code meaningless — a real GLSL failure and "this box has no sound
+  card" became indistinguishable. Environment noise is now separated from real page
+  errors. Fixed.

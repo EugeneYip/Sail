@@ -52,7 +52,15 @@ export interface EnsignResult {
 /** Fly / hoist. The Star-Spangled Banner is 30 ft by 42 ft. */
 const FLY_RATIO = 42 / 30;
 const STRIPES = 15;
-/** The union covers the top eight stripes: 16 ft 1 in of a 30 ft hoist. */
+/**
+ * The union covers the top EIGHT stripes: 16 ft 1 in of a 30 ft hoist.
+ *
+ * Eight, not the seven of today's flag. Seven is a count that belongs to a
+ * thirteen-stripe field: 7/13 = 0.538 of the hoist, and the same proportion on
+ * fifteen stripes is 8.08 — which is what 16 ft 1 in of 30 ft measures. Carrying
+ * the count across instead of the proportion would put the union at 0.467 and
+ * leave it visibly shallower than the real flag's.
+ */
 const UNION_STRIPES = 8;
 /** Union width as a fraction of the fly — the long-standing 2/5. */
 const UNION_FLY_FRAC = 0.4;
@@ -107,9 +115,17 @@ function vnoise(x: number, y: number, seed: number): number {
 }
 
 /**
- * Signed distance to a regular five-pointed star at the origin, point up.
- * Negative inside. Analytic, so the edge can be antialiased against the
+ * Signed distance to a regular five-pointed star at the origin, point toward
+ * +y. Negative inside. Analytic, so the edge can be antialiased against the
  * texel size instead of being stepped and left to alias.
+ *
+ * `+y` is the star's OWN up, which is not the texture's: `v` runs down the hoist
+ * from the head, so a caller passing `fy - cy` gets a pentagram standing on its
+ * point. That is what shipped, and a dump of the baked texture measured the five
+ * arms at 36.8, 108.5, 180.3, 252.5 and 325.5 degrees from vertical instead of
+ * 0, 72, 144, 216, 288. An upside-down star on a national ensign is exactly the
+ * class of error this file's header is about, and no amount of reading the
+ * generator would have caught it.
  */
 function starSd(x: number, y: number, r: number): number {
   const seg = Math.PI * 0.4;
@@ -186,7 +202,8 @@ function makeEnsignTexture(size: number): { map: THREE.Texture; normalMap: THREE
         const srow = Math.min(STAR_ROWS - 1, Math.floor((fy / ch) * STAR_ROWS));
         const cx = ((col + 0.5) / STAR_COLS) * cw;
         const cy = ((srow + 0.5) / STAR_ROWS) * ch;
-        const sd = starSd(fx - cx, fy - cy, STAR_R);
+        // cy - fy, not fy - cy: v grows DOWN the hoist and the star points UP.
+        const sd = starSd(fx - cx, cy - fy, STAR_R);
         inStar = 1 - Math.min(1, Math.max(0, sd / aa + 0.5));
       }
       if (inStar > 0) {

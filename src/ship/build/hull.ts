@@ -164,12 +164,14 @@ export function buildHull(bins: Bins, quality: number): HullResult {
     }
   }
 
-  // ---- gunport liners and lids
+  // ---- gunport liners, backing, guns and lids
   for (const { p, i0, i1 } of portCols) {
     const jLo = p.gunDeck ? ROW_PORT_SILL : ROW_SPAR_SILL;
     const jHi = p.gunDeck ? ROW_PORT_HEAD : ROW_SPAR_HEAD;
     const th = p.gunDeck ? HULL_THICK : BULWARK_THICK;
-    for (const side of [1, -1] as const) buildPortLiner(bins, stations, P, rowY, p, i0, i1, jLo, jHi, th, side);
+    for (const side of [1, -1] as const) {
+      buildPortLiner(bins, stations, P, rowY, p, i0, i1, jLo, jHi, th, side, quality);
+    }
   }
 
   // ---- keel, deadwood, sternpost and false keel
@@ -315,6 +317,22 @@ function fract(x: number): number {
  *  Gun ports
  * ------------------------------------------------------------------ */
 
+/**
+ * Brightness of the liner where it meets the outer planking, and at its inner
+ * mouth.
+ *
+ * A port is a tunnel through 0.46 m of oak with a deck beam over it, so almost
+ * no sky reaches the inner end. Painting the whole liner one value made the
+ * jambs read as bright ochre slots when the hull was sighted along — the
+ * "openwork lattice" of DIAGNOSIS section 37 — because a jamb faces fore-and-aft
+ * and takes the sun square on at exactly the angle where the aperture is
+ * narrowest. The gradient is doing the job an AO bake would.
+ */
+const LINER_LIT = 0.62;
+const LINER_DARK = 0.1;
+/** The gun deck behind an open port, as seen from bright daylight outside. */
+const PORT_BACK_DARK = 0.055;
+
 function buildPortLiner(
   bins: Bins,
   stations: Station[],
@@ -324,6 +342,7 @@ function buildPortLiner(
   i0: number, i1: number, jLo: number, jHi: number,
   th: number,
   side: number,
+  quality: number,
 ): void {
   const b = bins.buff;
   b.setColorHexLinear(0xffffff, p.gunDeck ? 0.55 : 0.8);
@@ -362,32 +381,50 @@ function buildPortLiner(
   }
   const ctr = new THREE.Vector3();
 
+  /**
+   * `shade` is one brightness per corner, in the same order as the points, so a
+   * jamb can go from daylight at the rabbet to shadow at its inner mouth. The
+   * builder samples its current colour at `vert()` time, which is what makes a
+   * per-vertex gradient possible without a second material.
+   */
   const quadFrom = (
     fa: (o: THREE.Vector3) => void, fb: (o: THREE.Vector3) => void,
     fc: (o: THREE.Vector3) => void, fd: (o: THREE.Vector3) => void,
+    shade?: readonly [number, number, number, number],
   ) => {
     fa(a); fb(bb); fc(cc); fd(dd);
     n.crossVectors(e0.subVectors(bb, a), e1.subVectors(cc, a)).normalize();
     ctr.copy(a).add(bb).add(cc).add(dd).multiplyScalar(0.25);
     const flip = n.dot(e0.subVectors(aim, ctr)) < 0;
     if (flip) n.negate();
+    const sh = shade ?? [1, 1, 1, 1];
+    const base = p.gunDeck ? 1 : 1.18; // the bulwark liners see more sky
+    if (shade) b.setColorHexLinear(0xffffff, sh[0] * base);
     const i0v = b.vert(a, n, 0, 0);
+    if (shade) b.setColorHexLinear(0xffffff, sh[1] * base);
     const i1v = b.vert(bb, n, 0.5, 0);
+    if (shade) b.setColorHexLinear(0xffffff, sh[2] * base);
     const i2v = b.vert(cc, n, 0.5, 0.5);
+    if (shade) b.setColorHexLinear(0xffffff, sh[3] * base);
     const i3v = b.vert(dd, n, 0, 0.5);
     if (flip) b.quad(i0v, i3v, i2v, i1v);
     else b.quad(i0v, i1v, i2v, i3v);
   };
+
+  const OUT_IN: readonly [number, number, number, number] = [LINER_LIT, LINER_LIT, LINER_DARK, LINER_DARK];
+  const IN_OUT: readonly [number, number, number, number] = [LINER_DARK, LINER_DARK, LINER_LIT, LINER_LIT];
 
   // Sill and head: run along the columns so they follow the hull's sheer.
   for (let i = i0; i < i1; i++) {
     quadFrom(
       (o) => outer(i, jLo, o), (o) => outer(i + 1, jLo, o),
       (o) => inner(i + 1, jLo, o), (o) => inner(i, jLo, o),
+      OUT_IN,
     );
     quadFrom(
       (o) => inner(i, jHi, o), (o) => inner(i + 1, jHi, o),
       (o) => outer(i + 1, jHi, o), (o) => outer(i, jHi, o),
+      IN_OUT,
     );
   }
   // Jambs.
@@ -395,12 +432,16 @@ function buildPortLiner(
     quadFrom(
       (o) => inner(i0, j, o), (o) => inner(i0, j + 1, o),
       (o) => outer(i0, j + 1, o), (o) => outer(i0, j, o),
+      IN_OUT,
     );
     quadFrom(
       (o) => outer(i1, j, o), (o) => outer(i1, j + 1, o),
       (o) => inner(i1, j + 1, o), (o) => inner(i1, j, o),
+      OUT_IN,
     );
   }
+
+  buildPortBacking(bins, p, inner, outer, i0, i1, jLo, jHi, side, quality);
 
   // The lid: hinged at the head, closed flush or swung up and out.
   const mid = ((i0 + i1) / 2) | 0;
@@ -439,6 +480,120 @@ function buildPortLiner(
   }
   if (!p.open) ir.box(hingeX + nx * 0.02, yBot + h * 0.42, st.z, 0.05, 0.05, 0.05);
 }
+
+/**
+ * Close the inner end of a port, and put a gun in it if it is open.
+ *
+ * WHY THIS EXISTS. The liner only skins the thickness of the hull. What should
+ * stop the eye at the far end is the gun deck's inner planking — but that shell,
+ * and the inboard face of the bulwark above it, are single-sided and face
+ * INBOARD, so from outside the ship they are back faces and the rasteriser
+ * throws them away. Every open port was therefore a hole clean through the
+ * vessel: sighted along the hull you saw the sea and sky beyond it, and at the
+ * bow and the stern gallery, where the ports crowd together, the result read as
+ * an openwork lattice. That is DIAGNOSIS section 37 items 5-6.
+ *
+ * Two quads instead of a double-sided material, because this geometry shares one
+ * material with the whole buff family: the outboard face is the shadow of a gun
+ * deck, the inboard face is painted bulwark, and they want different values.
+ */
+function buildPortBacking(
+  bins: Bins,
+  p: PortSpec,
+  inner: (i: number, j: number, out: THREE.Vector3) => void,
+  outer: (i: number, j: number, out: THREE.Vector3) => void,
+  i0: number, i1: number, jLo: number, jHi: number,
+  side: number,
+  quality: number,
+): void {
+  const b = bins.buff;
+  const c = [_bA, _bB, _bC, _bD];
+  inner(i0, jLo, c[0]);
+  inner(i1, jLo, c[1]);
+  inner(i1, jHi, c[2]);
+  inner(i0, jHi, c[3]);
+
+  // Outboard direction, measured across the liner rather than assumed: the
+  // topsides tumble home amidships and flare at the bow, so the hull normal is
+  // not a function of `side` alone.
+  const jm = (jLo + jHi) >> 1;
+  const im = ((i0 + i1) / 2) | 0;
+  inner(im, jm, _bMid);
+  outer(im, jm, _bOut);
+  _bN.subVectors(_bOut, _bMid).normalize();
+  /** Depth of the aperture, i.e. the real thickness of the ship's side here. */
+  const depth = _bOut.distanceTo(_bMid);
+  // Centroid of the four corners, not the mid ROW: the port band is three or
+  // four grid rows deep and `(jLo + jHi) >> 1` lands a third of the way up it,
+  // which sat the gun on the sill.
+  _bMid.copy(c[0]).add(c[1]).add(c[2]).add(c[3]).multiplyScalar(0.25);
+
+  _bE0.subVectors(c[1], c[0]);
+  _bE1.subVectors(c[2], c[0]);
+  const wind = _bE0.cross(_bE1).dot(_bN) >= 0;
+
+  const face = (off: number, bright: number, outward: boolean) => {
+    b.setColorHexLinear(0xffffff, bright);
+    _bTmp.copy(_bN).multiplyScalar(off);
+    const ids = c.map((v, k) => {
+      _bV.copy(v).add(_bTmp);
+      _bNn.copy(_bN).multiplyScalar(outward ? 1 : -1);
+      return b.vert(_bV, _bNn, (k === 1 || k === 2) ? 0.5 : 0, k >= 2 ? 0.5 : 0);
+    });
+    const cw = outward ? wind : !wind;
+    if (cw) b.quad(ids[0], ids[1], ids[2], ids[3]);
+    else b.quad(ids[0], ids[3], ids[2], ids[1]);
+  };
+
+  // The outboard face sits flush with the liner's inner mouth so the aperture
+  // keeps the full depth of the hull as its recess; the inboard one is a
+  // centimetre further in so the pair cannot z-fight.
+  face(0, PORT_BACK_DARK, true);
+  face(-0.01, p.gunDeck ? 0.34 : 0.78, false);
+
+  if (!p.open) return;
+
+  /**
+   * The gun. A 24-pounder's muzzle stands about 0.4 m out of its port, and it is
+   * the single detail that makes an open port unmistakably a gun port rather
+   * than a hole. Built in units of the aperture's own depth so the same profile
+   * works through 0.46 m of gun-deck side and 0.3 m of bulwark; `+y` after the
+   * transform runs out through the port, and everything abaft y = 0 is hidden by
+   * the backing panel, which is why there is no carriage here.
+   */
+  const ir = bins.iron;
+  ir.setColorHexLinear(0xffffff, p.gunDeck ? 0.62 : 0.66);
+  const out = depth + (p.gunDeck ? 0.4 : 0.32);
+  const r = p.gunDeck ? 1 : 1.24; // a carronade is a short, fat gun
+  const prof: readonly [number, number][] = [
+    [0.02 * r, -0.5], [0.235 * r, -0.44], [0.228 * r, -0.1],
+    [0.2 * r, out * 0.45], [0.174 * r, out - 0.19],
+    [0.196 * r, out - 0.06], [0.166 * r, out], [0.118 * r, out],
+  ];
+  _bQ.setFromUnitVectors(_UP, _bN);
+  _bM.compose(_bMid, _bQ, _ONE);
+  ir.pushTransform(_bM);
+  ir.revolve(prof, quality >= 2 ? 9 : 7);
+  ir.popTransform();
+  void side;
+}
+
+const _bA = new THREE.Vector3();
+const _bB = new THREE.Vector3();
+const _bC = new THREE.Vector3();
+const _bD = new THREE.Vector3();
+const _bMid = new THREE.Vector3();
+const _bOut = new THREE.Vector3();
+const _bN = new THREE.Vector3();
+const _bNn = new THREE.Vector3();
+const _bE0 = new THREE.Vector3();
+const _bE1 = new THREE.Vector3();
+const _bTmp = new THREE.Vector3();
+const _bV = new THREE.Vector3();
+const _bQ = new THREE.Quaternion();
+const _bM = new THREE.Matrix4();
+const _UP = new THREE.Vector3(0, 1, 0);
+const _ONE = new THREE.Vector3(1, 1, 1);
 
 /* ------------------------------------------------------------------ *
  *  Keel, stem and head

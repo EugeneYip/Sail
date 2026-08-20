@@ -67,8 +67,22 @@ export class PartRig {
       if (y.mast === 3) axis.set(0, 1, 0);
       else PartRig.mastAxis(y.mast, axis);
       const pivot = new THREE.Vector3(0, y.y, 0);
-      if (y.mast < 3) pivot.z = MASTS[y.mast].z + y.y * Math.tan(MASTS[y.mast].rake);
-      else pivot.set(0, 0, 0);
+      if (y.mast < 3) {
+        pivot.z = MASTS[y.mast].z + y.y * Math.tan(MASTS[y.mast].rake);
+      } else {
+        /**
+         * The head yards are slung on the BOWSPRIT, not on a mast, and `y.y` is
+         * 0 for them because their height comes from the spar they sit on.
+         * Taking the pivot from the frame is not a tidy-up: a zero pivot put the
+         * axis of rotation through the ship's origin 31.7 m away, so 60 deg of
+         * brace swung the spritsail yard 26 m sideways and left it hanging in
+         * the air off the starboard bow with its gear stretched out to it. That
+         * is `DIAGNOSIS.md` section 37's "foreign object", reported four times
+         * and attributed to four different modules.
+         */
+        const yf = frame.yards.find((v) => v.spec.part === y.part);
+        if (yf) pivot.copy(yf.pivot);
+      }
       this.joints.push({
         slot: y.part,
         pivot,
