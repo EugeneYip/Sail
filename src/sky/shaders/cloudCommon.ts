@@ -57,17 +57,46 @@ uniform float uDensityScale;
 uniform float uCirrusAmount;
 
 /**
- * Vertical profile per cloud family. Stratus is a thin sheet near the base,
- * cumulus fills most of the slab and only fades at the very top.
+ * Vertical profile: one soft base ramp and one long taper whose BREAKPOINTS move
+ * with cloud family, rather than a weighted average of three fixed profiles.
+ *
+ * WHY THE AVERAGE WAS WRONG, AND WHY IT MADE FLAT-TOPPED MESAS. The three
+ * families died at different heights — the stratocumulus term was identically
+ * zero above h = 0.68 — so averaging their VALUES made the profile collapse to
+ * the weight of whichever families were still alive. At 'cloudType' 0.75, which
+ * noon, golden and orbit all use, the weights are half stratocumulus and half
+ * cumulus, so above h = 0.68 the profile could not exceed 0.5. That matters far
+ * more than a halving sounds, because 'density' below THRESHOLDS this profile:
+ * with 'shape' ~= 0.78 * grad from the baked field's measured means, density
+ * clears '1 - cf' only where local coverage cf > 0.61 — the top 4 % of columns.
+ * Measured on the baked field at covers 0.30-0.50: 78-81 % of all cloud mass sat
+ * below h = 0.4 and 2.2-3.3 % above h = 0.6, cloud tops had a standard deviation
+ * of 544 m about a median 1560 m over a 3300 m slab, and mean column thickness
+ * was 671 m. That is a 600 m pancake, and it is what read as a grey slab with a
+ * razor edge.
+ *
+ * The taper deliberately ENDS ABOVE h = 1 (1.80 at full convection), so a strong
+ * column stays optically real right up to its own top and is stopped by 'depth',
+ * not by fading out mid-column. That is what produces a silhouette: the height a
+ * column pinches out at now follows its local coverage continuously instead of
+ * every column pinching out at the one h where the old profile crossed the
+ * threshold. The blunt top it leaves is correct — a cumulus congestus has a hard
+ * cauliflower crown — and the crown erosion below is what carves it into lobes.
+ *
+ * Measured after, same field, same textures, ablated in one page: mass above
+ * h = 0.6 goes 2.2 % -> 14.7 % at cover 0.40, top standard deviation 544 -> 799 m,
+ * p90 top 2550 -> 3210 m, mean thickness 671 -> 873 m, cross-section at
+ * 2700-3400 m 0.70 % -> 1.80 % of the field. Total mass x1.15, and the numbers
+ * the coverage calibration actually cares about barely move: the fraction of the
+ * field whose vertical optical depth exceeds 1 goes x0.987 and the visible column
+ * fraction x0.988 — DOWN, which is the safe direction.
  */
 float heightGradient(float h, float type){
-  float stratus = linstep(0.0, 0.07, h) * (1.0 - linstep(0.14, 0.30, h));
-  float stratocu = linstep(0.0, 0.10, h) * (1.0 - linstep(0.30, 0.68, h));
-  float cumulus  = linstep(0.0, 0.13, h) * (1.0 - linstep(0.70, 1.0, h));
-  float a = 1.0 - saturate1(type * 2.0);
-  float b = 1.0 - abs(type - 0.5) * 2.0;
-  float c = saturate1(type * 2.0 - 1.0);
-  return stratus * a + stratocu * b + cumulus * c;
+  float conv = smoothstep(0.0, 1.0, type);
+  float ramp = mix(0.07, 0.18, conv);
+  float top  = mix(0.16, 0.34, conv);
+  float end  = mix(0.34, 1.80, conv);
+  return smoothstep(0.0, ramp, h) * (1.0 - linstep(top, end, h));
 }
 
 /**
@@ -168,7 +197,17 @@ float cloudDensity(vec2 wxz, float alt, bool detail, out float hFrac){
    * silhouette instead of a uniform slab with a noisy edge.
    */
   float baseAlt = uLayerBottom + (wm.g - 0.5) * slab * 0.19;
-  float depth = slab * mix(0.30, 1.08, cf * cf);
+  /*
+   * 'cf * cf * sqrt(cf)' is cf^2.5, not a stylistic flourish: sqrt is one
+   * instruction where 'pow' is two transcendentals, and this runs once per march
+   * sample and five more per sun step. The exponent rose from 2 with the profile
+   * change so that weak columns stay the shallow puffs they were while the strong
+   * ones get the extra reach — 1.10 slabs, up from 1.08. Both bounds are chosen
+   * against cloudShells(): worst case top is 0.095 + 1.10 = 1.195 slabs and worst
+   * case bottom -0.095, inside the marched -0.2 .. 1.25, so the shell still does
+   * not slice a tower's crown off.
+   */
+  float depth = slab * mix(0.26, 1.10, cf * cf * sqrt(cf));
   float h = (alt - baseAlt) / depth;
   if (h < 0.0 || h > 1.0) return 0.0;
   hFrac = h;

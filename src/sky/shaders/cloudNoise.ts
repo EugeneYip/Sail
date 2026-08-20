@@ -154,7 +154,25 @@ void main(){
   float cells = tilePerlin2(p * 7.0, 7.0, 4) * 0.5 + 0.5;
   float coverage = gaussCdf(mix(front, cells, 0.55) - 0.5, COVERAGE_SIGMA);
 
-  float type = clamp(tilePerlin2(p * 3.0 + vec2(11.3, 4.7), 3.0, 3) * 0.5 + 0.5, 0.0, 1.0);
+  /*
+   * G carries BOTH the cloud-family bias and the per-column base altitude, and a
+   * lone period-3 Perlin decorrelates in about 16 km — wider than a frame. So
+   * every cloud in view shared one base altitude and one family, and the base
+   * drew a dead-straight line across the sky. Measured on the baked field at
+   * cover 0.40, the visible cloud base moved only 26 m across a 938 m step and
+   * 55 m across 3 km.
+   *
+   * Adding a period-18 term (2.7 km cells over the 48 km extent) at equal power
+   * moves half the variance to a scale you can see across. The 0.71 weights are
+   * 1/sqrt(2): summing two independent fields in quadrature keeps the channel's
+   * standard deviation, so the TOTAL base-altitude spread and the type spread are
+   * unchanged and only their spatial scale moves. Nothing is added to the
+   * amplitude, because 'baseAlt' is budgeted against cloudShells() and a bigger
+   * swing would hang the lowest bases below the marched shell.
+   */
+  float typeLo = tilePerlin2(p * 3.0 + vec2(11.3, 4.7), 3.0, 3);
+  float typeHi = tilePerlin2(p * 18.0 + vec2(3.9, 21.1), 18.0, 2);
+  float type = clamp((typeLo + typeHi) * 0.71 * 0.5 + 0.5, 0.0, 1.0);
   float precip = clamp(tilePerlin2(p * 5.0 + vec2(2.1, 8.9), 5.0, 3) * 0.5 + 0.5, 0.0, 1.0);
 
   // Cirrus wants long streaks, so sample an anisotropically stretched field.
