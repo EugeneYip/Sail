@@ -12,6 +12,16 @@ const PAD_ACROSS = 15;
 const SKIRT_STATIONS = 40;
 const SKIRT_ROWS = 6;
 
+/**
+ * The skirt band is anchored to the LOCAL water surface at every station rather
+ * than to a fixed ship-local band, so these are a depth below that water plus
+ * two absolute limits — not the band itself.
+ */
+const SKIRT_DROP = 2.4;
+const SKIRT_FLOOR = -2.9;
+/** Water cannot cling above the rail; HULL.railHeight is 7.6 m. */
+const SKIRT_CEIL = 6.4;
+
 const _p = new THREE.Vector3();
 const _invShip = new THREE.Matrix4();
 
@@ -72,8 +82,9 @@ export class HullWater {
         uSlam: { value: 0 },
         uChop: { value: 0.5 },
         uOpacity: { value: 1 },
-        uSkirtLow: { value: -1.7 },
-        uSkirtHigh: { value: 3.4 },
+        uSkirtDrop: { value: SKIRT_DROP },
+        uSkirtFloor: { value: SKIRT_FLOOR },
+        uSkirtCeil: { value: SKIRT_CEIL },
         uWaterPort: { value: this.waterPort },
         uWaterStbd: { value: this.waterStbd },
       },
@@ -226,7 +237,6 @@ export class HullWater {
       u.uChop.value = world.env.choppiness;
       u.uBeam.value = beam;
     }
-    this.skirtMat.uniforms.uSkirtHigh.value = 2.6 + ctx.speedN * 2.2;
   }
 
   applySettings(): void {}

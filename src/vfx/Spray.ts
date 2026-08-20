@@ -83,8 +83,13 @@ export class Spray {
     const chop = ctx.world.env.choppiness;
     const seaway = clamp01(ctx.world.env.waveHeight / 4.5);
     // Wave-making rises steeply with Froude number; a short steep sea and a
-    // falling bow both multiply it.
-    const drive = Math.pow(sN, 2.2) * (0.55 + 1.5 * seaway + 0.5 * chop);
+    // falling bow both multiply it. `ctx.slam` is the low-passed vertical
+    // acceleration at the stem, so this is the CONTINUOUS response to a working
+    // bow — the discrete burst in `slam()` only fires above 3.4 m/s^2, and
+    // without this term a bow pitching hard in a seaway threw exactly as much
+    // water as one running flat.
+    const slamN = clamp01(ctx.slam / 9.81);
+    const drive = Math.pow(sN, 2.2) * (0.55 + 1.5 * seaway + 0.5 * chop + 0.9 * slamN);
     // RATES. Measured against the `waterline` capture: at 2600 + 380 per second
     // the pool held ~4000 sprites in a 40 m envelope around the bow and rendered
     // as one opaque white mass that hid the entire forward half of the hull. A
@@ -121,18 +126,35 @@ export class Spray {
       const lee = Math.sign(heel) === side ? 1 : 0;
       const gain = 1 + lee * Math.min(Math.abs(heel) * 4.0, 1.0);
 
-      // Along the forward third of the waterline, bunched at the shoulder.
-      const t = 0.012 + Math.pow(Math.random(), 1.7) * 0.30;
+      // TWO POPULATIONS ALONG THE WATERLINE, not one cluster at the stem.
+      //
+      // The shoulder throws the fan, but a hull at speed also peels water off
+      // its whole wetted length — thinner, lower, and blown straight aft — and
+      // that is what the owner was looking at when the SIDE read as painted on.
+      // Emitting only over the forward third left nothing at all in the air
+      // abreast of the waist, so the skirt's shading had to carry the entire
+      // side by itself. This is a redistribution of the SAME count, not an
+      // addition: the frame's particle budget is unchanged.
+      const alongSide = Math.random() < 0.24;
+      const t = alongSide
+        ? 0.28 + Math.pow(Math.random(), 0.8) * 0.62
+        : 0.012 + Math.pow(Math.random(), 1.7) * 0.28;
+      // Water shed along the side is torn off the surface rather than thrown up
+      // a stagnation rise: it starts low and stays near the plating.
+      const shed = alongSide ? 0.34 : 1;
       this.hullPoint(ctx, t, side, _a);
-      _a.y = probe.heightAt(_a.x, _a.z) + (0.25 + Math.random() * 1.4) * gain;
+      _a.y = probe.heightAt(_a.x, _a.z) + (0.25 + Math.random() * 1.4) * gain * shed;
 
       // Outboard from the hull, up on the stagnation rise, and carried aft in
       // the ship's own frame by the apparent wind.
-      const out = 1.2 + Math.random() * 2.6 + sN * 2.4;
-      const up = (1.4 + Math.random() * 2.2 + stag * 0.42) * gain;
+      const out = (1.2 + Math.random() * 2.6 + sN * 2.4) * (alongSide ? 0.45 : 1);
+      const up = (1.4 + Math.random() * 2.2 + stag * 0.42) * gain * shed;
       _b.copy(ctx.right).multiplyScalar(side * out * gain);
       _b.y += up;
-      _b.addScaledVector(ctx.fwd, 1.0 + Math.random() * 3.0 + ctx.speed * 0.22);
+      _b.addScaledVector(
+        ctx.fwd,
+        alongSide ? -(0.5 + Math.random() * 2.0) : 1.0 + Math.random() * 3.0 + ctx.speed * 0.22,
+      );
       // Sheets keep more of the hull's own momentum; droplets are torn free.
       _b.addScaledVector(ctx.world.ship.velocity, sheet ? 0.42 : 0.2);
 
@@ -140,15 +162,15 @@ export class Spray {
         p.spawn(
           _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
           0.6 + Math.random() * 0.7,
-          0.45 + Math.random() * 0.75,
+          (0.45 + Math.random() * 0.75) * (alongSide ? 0.55 : 1),
           KIND.SHEET, 0.9 + Math.random(),
         );
       } else {
         const fine = Math.random();
         p.spawn(
           _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
-          0.85 + Math.random() * 1.4,
-          0.045 + fine * fine * 0.30,
+          (0.85 + Math.random() * 1.4) * (alongSide ? 0.55 : 1),
+          (0.045 + fine * fine * 0.30) * (alongSide ? 0.7 : 1),
           KIND.DROPLET, 0.45 + fine * 2.6,
         );
       }
@@ -164,7 +186,12 @@ export class Spray {
     const g = 9.81;
     const mag = ctx.slam;
     const now = ctx.world.time.elapsed;
-    if (mag < g * 0.55) {
+    // 0.55 g put the trigger at 5.4 m/s^2, which is the TOP of the range the
+    // physics actually writes even in a storm sea (measured 5-8 there, and under
+    // 1.5 in every other scene), so the burst almost never fired and every
+    // capture was judged without it. 0.35 g fires on a working bow, and `power`
+    // still reserves the full curtain for a real slam.
+    if (mag < g * 0.35) {
       this.slamArmed = true;
       return;
     }
@@ -172,7 +199,7 @@ export class Spray {
     this.slamArmed = false;
     this.lastSlamT = now;
 
-    const power = clamp01((mag - g * 0.55) / (g * 2.2));
+    const power = clamp01((mag - g * 0.35) / (g * 1.9));
     const sN = Math.max(ctx.speedN, 0.12);
     const n = Math.min(Math.floor((55 + 230 * power) * (0.4 + sN) * d), p.room);
     const stag = (ctx.speed * ctx.speed) / 19.62;
@@ -223,20 +250,42 @@ export class Spray {
     this.accStern -= n;
     n = Math.min(n, p.room);
 
+    // Transom half-beam from the real waterline curve, so the corners sit where
+    // the hull's quarters actually are and not at a guessed fraction of beam.
+    const hbT = ctx.halfBeam(0.985);
     for (let i = 0; i < n; i++) {
-      const across = (Math.random() * 2 - 1) * ctx.world.ship.beam * 0.42 - ctx.rudder * 3.0;
-      _local.set(across, 0, HULL.lwl * 0.5 + Math.random() * 5.5);
+      // WHERE A TRANSOM WASH ACTUALLY COMES FROM. Uniform noise over a rectangle
+      // 11 m wide and 5.5 m long — which is what was here — is a tidily filled
+      // box, and a filled box is what it looked like. Water leaves the hull along
+      // two shear layers, one off each quarter, plus the rudder's own wake on the
+      // centreline; density falls off exponentially astern and the layers diverge.
+      const aft = Math.min(-Math.log(1 - Math.random() * 0.94) * 2.1, 7.5);
+      const spread = 1.0 + aft * 0.34;
+      let across: number;
+      if (Math.random() < 0.66) {
+        const corner = Math.random() < 0.5 ? -1 : 1;
+        across = corner * (hbT * 0.82 + spread * (0.15 + Math.random() * 0.75));
+      } else {
+        across = (Math.random() * 2 - 1) * hbT * 0.55 - ctx.rudder * 2.6;
+      }
+      _local.set(across, 0, HULL.lwl * 0.5 + aft);
       ctx.toWorld(_local, _a);
       _a.y = probe.heightAt(_a.x, _a.z) + Math.random() * 0.7;
 
-      _b.copy(ctx.fwd).multiplyScalar(-(1.5 + Math.random() * 3.5));
-      _b.y += 1.2 + Math.random() * 3.6 * sN;
-      _b.addScaledVector(ctx.right, (Math.random() * 2 - 1) * 1.8 - ctx.rudder * 2.5);
+      // The shear layers throw water outboard as well as up, and the closer to
+      // the transom the more of the hull's own momentum it still carries.
+      const fresh = Math.exp(-aft * 0.32);
+      _b.copy(ctx.fwd).multiplyScalar(-(1.5 + Math.random() * 3.5) * fresh);
+      _b.y += (1.2 + Math.random() * 3.6 * sN) * (0.4 + 0.8 * fresh);
+      _b.addScaledVector(
+        ctx.right,
+        Math.sign(across) * (0.4 + Math.random() * 1.6) * fresh - ctx.rudder * 2.5,
+      );
       _b.addScaledVector(ctx.world.ship.velocity, 0.55);
 
       p.spawn(
         _a.x, _a.y, _a.z, _b.x, _b.y, _b.z,
-        0.8 + Math.random() * 1.2,
+        (0.8 + Math.random() * 1.2) * (0.55 + 0.75 * fresh),
         0.07 + Math.random() * 0.32,
         Math.random() < 0.18 ? KIND.SHEET : KIND.DROPLET,
         0.6 + Math.random() * 2.0,
@@ -255,9 +304,20 @@ export class Spray {
 
     const beam = ctx.world.ship.beam;
     for (let i = 0; i < n; i++) {
-      const xi = Math.pow(Math.random(), 1.6) * 130;
-      const spread = beam * 0.45 + xi * 0.10;
-      const across = (Math.random() * 2 - 1) * spread;
+      // 130 m of uniformly seeded triangle read as one broad even wedge of froth
+      // much wider than the ship. A real wake is STRUCTURED: a narrow turbulent
+      // core right astern and two diverging shear lines on the Kelvin arms
+      // (tan 19.47 deg = 0.354). Same count, two thirds of it now on the arms,
+      // so the eye is given a pattern instead of an even scatter.
+      const xi = Math.pow(Math.random(), 1.6) * 105;
+      let across: number;
+      if (Math.random() < 0.62) {
+        const arm = Math.random() < 0.5 ? -1 : 1;
+        const jitter = 1.2 + xi * 0.055;
+        across = arm * (beam * 0.4 + xi * 0.354) + (Math.random() * 2 - 1) * jitter;
+      } else {
+        across = (Math.random() * 2 - 1) * (beam * 0.45 + xi * 0.055);
+      }
       _local.set(across, 0, HULL.lwl * 0.5 + xi);
       ctx.toWorld(_local, _a);
       // Flecks are pinned to the surface by the sim; only XZ drift matters.

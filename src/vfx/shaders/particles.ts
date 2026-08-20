@@ -250,16 +250,35 @@ void main(){
   float dl = length(d);
   vec2 axis = dl > 1e-4 ? d / dl : vec2(0.0, 1.0);
   bool drift = kind > 2.5 && kind < 3.5;
+  bool sheet = kind > 0.5 && kind < 1.5;
+  // A TORN SHEET IS NOT A BALL. Sheets took uStretch against a base size of
+  // ~1 m, so 'dl * 0.028 / 1.0' gave about 1.3x elongation and every one of them
+  // drew as a near-circular puff of the mist sprite — a metre-wide ball of
+  // cotton wool, and there are hundreds of them at the bow. Their stretch is now
+  // divided by a nominal 0.25 m instead of their own inflated radius, which is
+  // what actually makes them ribbons.
   float stretchAmt = drift ? uStretch * 2.2 : (kind < 1.5 ? uStretch : uStretch * 0.25);
-  // Spindrift is a ribbon, not a blob: let it draw out much further than spray.
-  float stretch = 1.0 + min(dl * stretchAmt / max(size, 0.02), drift ? 14.0 : 6.0);
+  float stretchRef = sheet ? 0.25 : max(size, 0.02);
+  float stretch = 1.0 + min(dl * stretchAmt / stretchRef, drift ? 14.0 : (sheet ? 7.0 : 6.0));
 
   vec2 off = vec2(position.x * size, position.y * size * stretch);
   vec2 o = vec2(off.x * axis.y + off.y * axis.x, -off.x * axis.x + off.y * axis.y);
   mv.xy += o;
   gl_Position = projectionMatrix * mv;
 
-  vUv = position.xy * 0.5 + 0.5;
+  // PER-PARTICLE SPRITE VARIATION. The quad is oriented along the screen-space
+  // velocity, and every particle from one emitter shares nearly that velocity —
+  // so without this every sprite in the fan showed the SAME texture at the SAME
+  // orientation, which is what turns an anisotropic torn rag into a field of
+  // identical ovals. A rotation of up to +-0.35 rad plus a mirror in u gives
+  // four visually distinct draws of the same texture and costs two multiplies.
+  // The 0.80 inset keeps the rotated corners inside the sprite, where the
+  // texture's alpha is ~0 anyway.
+  float rot = (vSeed - 0.5) * 0.70;
+  float cr = cos(rot), sr = sin(rot);
+  vec2 q = mat2(cr, -sr, sr, cr) * position.xy * 0.80;
+  if (fract(A.z * 7.31) > 0.5) q.x = -q.x;
+  vUv = q * 0.5 + 0.5;
 
   // How much of the sun is coming at us through the drop.
   vec3 view = normalize(uCameraPos - wpos);

@@ -47,6 +47,47 @@ float ruffle(float a, float b, float t){
   return sin(a * 6.13 + t * 3.7) * 0.5 + sin(a * 17.7 - t * 5.1 + b * 3.0) * 0.3
        + sin(a * 41.0 + t * 8.3) * 0.2;
 }
+
+/**
+ * Metres above the LOCAL water surface that broken water reaches on the hull
+ * side at station t. THIS IS THE FIX FOR THE 'SQUARE, TIDY HORIZONTAL
+ * WATERFALL'.
+ *
+ * A moving hull does not carry a level band of foam. The bow wave breaks against
+ * the forward shoulder and runs several metres UP the side; the midbody is
+ * nearly dry above the boot top; the after shoulder lifts again as the buttocks
+ * close in; the transom drags its own wash. The old skirt gated its foam with a
+ * single 'smoothstep' on height-above-water, i.e. a cut at a CONSTANT height for
+ * the whole length of the ship on both sides — a dead-level top edge with an
+ * airbrushed gradient under it, which is exactly a weir lip. Nothing else in the
+ * shader could recover from that, because the silhouette was decided by a
+ * quantity that did not vary along the hull at all.
+ *
+ * At 13 kn with 10 deg of heel this returns ~3.2 m at the lee bow shoulder,
+ * ~0.6 m amidships and ~1.5 m at the quarter. That variation along the length IS
+ * the effect.
+ */
+float frothReach(float t, float side){
+  float shoulder = exp(-sq((t - 0.11) / 0.115));
+  float quarter  = exp(-sq((t - 0.78) / 0.155));
+  float transom  = smoothstep(0.90, 1.0, t);
+  // A heeled ship buries its lee bow and throws far more water that side. Held
+  // to +-0.55 rather than +-0.85: at 0.85 the weather side of a hull heeled 20
+  // deg went completely dry, and a weather bow at 15 kn is not dry.
+  float lee = sign(uHeel) * side;
+  float heelGain = 1.0 + lee * min(abs(uHeel) * 2.2, 0.55);
+  // A slam is a bow event: it lifts the shoulder, not the midbody.
+  float slamGain = 1.0 + min(uSlam * 0.035, 0.9) * shoulder;
+  float drive = smoothstep(0.035, 0.40, uSpeedN) * (0.50 + 0.62 * uSpeedN);
+  // The 0.30 base left the midbody essentially dry, so a frigate at 16 kn met
+  // the sea on a bare contour with no white in it. 0.55 is about a half metre of
+  // froth amidships, which is what a hull at speed actually carries, and because
+  // the reach is now per-station and the edge is a texture threshold, raising it
+  // cannot bring the level band back.
+  float reach = 0.55 + 2.35 * shoulder + 0.80 * quarter + 0.50 * transom
+              + 0.30 * uChop;
+  return reach * drive * heelGain * slamGain;
+}
 `;
 
 export const hullWaterVert = /* glsl */ `
@@ -105,10 +146,16 @@ void main(){
     // crest = 14 m — and because the sheet's WIDTH is derived from the crest
     // (below), a plate 48 m across and 14 m tall. That is the flat white slab
     // off the bow, and it is the "wake footprint far larger than the ship".
-    // Saturating exponentially keeps the low-speed response linear and exact
-    // while capping the extent at something a 13 m beam can actually throw.
+    // Capping keeps the low-speed response linear and exact while bounding the
+    // extent at something a 13 m beam can actually throw. A HYPERBOLA, not
+    // '1 - exp()': the exponential is within 5% of its asymptote once the drive
+    // reaches 3x the cap, so at 16 kn with heel the crest PLATEAUED at exactly
+    // the cap across the whole forward tenth of the hull — a 10 m long
+    // flat-topped ridge of constant height, which is half of why the bow still
+    // read as a slab. The hyperbola compresses by the same factor at the peak
+    // but keeps ~2.5x more contrast along t, so the crest still has a shape.
     float crestCap = uBeam * 0.17;
-    float crest = crestCap * (1.0 - exp(-crestRaw / crestCap));
+    float crest = crestCap * max(crestRaw, 0.0) / (crestCap + max(crestRaw, 0.0));
 
     float ruf = ruffle(t * 9.0 + side * 3.0, side, uTime) * (0.10 + 0.16 * uChop);
     // j = 0 at the hull/water root, 1 at the tip of the overturning lip. The lip
@@ -143,10 +190,10 @@ void main(){
     float ruf = ruffle(aft * 7.0 + across * 5.0, across, uTime * 1.6) * 0.2;
     float yRaw = stag * (0.5 * pad + 0.85 * plume) * (1.0 + ruf)
               * smoothstep(0.04, 0.34, uSpeedN);
-    // Capped for the same reason as the bow crest: a rooster tail scales with
-    // the stagnation rise until it breaks, and an uncapped one reached 4.8 m.
+    // Capped the same way as the bow crest, and for the same reasons.
     float padCap = uBeam * 0.20;
-    float y = padCap * (1.0 - exp(-max(yRaw, 0.0) / padCap));
+    float yr = max(yRaw, 0.0);
+    float y = padCap * yr / (padCap + yr);
     // 0.34 * Lwl put the transom pad 21 m astern, which is a third of the ship
     // again on the end of it. A frigate's transom wash is spent inside 12 m.
     p = vec3(across * w, wl + y * 0.9, uLwl * 0.5 + aft * uLwl * 0.20);
@@ -285,7 +332,17 @@ void main(){
   lit += sun * PI * pow(saturate1(half3.y), 46.0) * gloss * 0.5;
 
   float edge = smoothstep(0.0, 0.06, vJ) * (1.0 - smoothstep(0.86, 1.0, vJ));
-  if (vPart > 0.5) edge = 1.0 - smoothstep(0.55, 1.0, vT);
+  if (vPart > 0.5) {
+    // The pad's 'edge' only ever faded ALONG the wash, so both of its lateral
+    // boundaries were hard cuts at |across| = 1 — a flat plate with two ruled
+    // sides, which is what the transom photographed as from beam-on. A transom
+    // wash is a wedge that frays outward: fade across as well, and narrow that
+    // fade with distance astern so the wedge closes instead of running straight.
+    float across = abs(vJ);
+    float taper = 1.0 - 0.38 * vT;
+    edge = (1.0 - smoothstep(0.45, 1.0, vT))
+         * (1.0 - smoothstep(0.42 * taper, 1.0 * taper, across));
+  }
   // ALPHA IS CARRIED BY THE TEXTURE, NOT BY THE INTERPOLATED THICKNESS.
   //
   // 'vThick * cover' with cover pinned at 1 made vThick the sole author of the
@@ -319,27 +376,38 @@ attribute vec3 position;   // x = t along hull, y = v vertical 0..1, z = side
 uniform mat4 modelMatrix;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
-uniform float uSkirtLow;
-uniform float uSkirtHigh;
+uniform float uSkirtDrop;   // metres the band reaches BELOW the local water
+uniform float uSkirtFloor;  // ship-local Y the band may never go under
+uniform float uSkirtCeil;   // ship-local Y of the rail; water cannot cling higher
 
 varying vec3  vWorld;
 varying float vT;
 varying float vD;       // metres above the local water surface
 varying float vSide;
 varying float vStream;
+varying float vEnv;     // metres of froth reach at this station
 
 void main(){
   float t = position.x;
   float v = position.y;
   float side = position.z;
   float hb = halfBeamAt(t);
-  float y = mix(uSkirtLow, uSkirtHigh, v);
+  float wl = waterYAt(t, side);
+  float env = frothReach(t, side);
+  vEnv = env;
+
+  // The rows straddle the REAL water surface at every station instead of a fixed
+  // ship-local band, so (a) the band can never be clipped by a straight edge in
+  // ship-local Y when a crest lifts the water, and (b) every row is spent inside
+  // the strip that is actually shaded rather than most of them sitting in dry
+  // air amidships.
+  float y = clamp(wl + mix(-uSkirtDrop, env * 1.35 + 0.45, v), uSkirtFloor, uSkirtCeil);
   // Flare the section slightly above the waterline, like real topsides.
   float flare = 1.0 + max(y, 0.0) * 0.035;
   vec3 p = vec3(side * (hb * flare + 0.09), y, t * uLwl - uLwl * 0.5);
 
   vT = t; vSide = side;
-  vD = y - waterYAt(t, side);
+  vD = y - wl;
   vStream = t * uLwl;
   vec4 wp = modelMatrix * vec4(p, 1.0);
   vWorld = wp.xyz;
@@ -362,6 +430,7 @@ varying float vT;
 varying float vD;
 varying float vSide;
 varying float vStream;
+varying float vEnv;
 
 void main(){
   float flow = uTime * (1.5 + uSpeedN * 11.0);
@@ -390,26 +459,55 @@ void main(){
   // finer one unconditional, because at +-14 cm of wobble on a soft ramp the
   // edge was still smooth at the rail.
   float wetEdge = (grain - 0.5) * (0.16 + 0.26 * uChop) + (fd.b - 0.5) * 0.09;
+  // The lower limit used to be 'step(-1.6, vD)' — a hard discontinuity at a
+  // CONSTANT 1.6 m below the water, i.e. one more dead-level horizontal line,
+  // visible through the sea whenever a trough opened beside the hull. Feathered
+  // against the band's own floor instead.
   float wetBand = (1.0 - smoothstep(0.0, 0.13 + uChop * 0.22, vD + wetEdge))
-                  * step(-1.6, vD);
+                  * smoothstep(-2.05, -1.25, vD);
   float submerged = 1.0 - smoothstep(-0.9, 0.05, vD);
 
-  // Foam streaks: born at the bow shoulder, dragged aft, strongest at the
-  // waterline and climbing higher the faster we go.
+  // FOAM STREAKS, AND AN EDGE THAT IS NOT A LINE.
   //
-  // THRESHOLD, THEN MODULATE — DO NOT RESCALE. 'streak * 1.5' into a saturate()
-  // pinned every filament at exactly 1.0 and merged them into one another: the
-  // flat painted band along the topsides the owner reported, with a soft
-  // airbrushed edge and not one visible filament in it. The peak is now held
-  // below 1 and the bubble raft varies the interior, so the hull's own colour
-  // still reads through the froth and the streaks stay separate.
-  float bowGain = 0.35 + 1.5 * exp(-vT * 4.5);
-  float climb = 1.0 - smoothstep(0.15 + uSpeedN * 1.5, 0.9 + uSpeedN * 2.6, vD);
+  // 'vEnv' is the froth reach at this station (see frothReach) — several metres
+  // at the bow shoulder, half a metre amidships. One extra tap, whose v depends
+  // only on the side, undulates that reach ALONG the hull as it scrolls aft, so
+  // the boundary is a moving irregular contour rather than a ruled line. The
+  // height is then normalised by it and used to drive the THRESHOLD on the
+  // filament field, not to multiply the result: near the water the threshold is
+  // low and the froth is near-solid; approaching the reach only the strongest
+  // filaments survive, so the top of the band tears into streaks carrying the
+  // texture's own gradient at every edge. A multiplied 'climb' ramp — which is
+  // what was here — can only ever produce a fade, and a fade at a constant
+  // height is the tidy waterfall lip the owner reported.
+  float undulate = texture2D(tFoam, vec2(vStream * 0.034 - flow * 0.048,
+                                         vSide * 0.37 + 0.11)).a;
+  float reach = max(vEnv * (0.45 + 1.05 * undulate), 0.05);
+  float above = saturate1(vD / reach);
   float streakField = s1 * 0.36 + s2 * 0.26 + s3 * 0.20 + s4 * 0.24;
-  float streak = smoothstep(0.34, 0.52, streakField) * (0.42 + 0.78 * bub)
-                 * climb * min(bowGain, 1.45);
+  float thr = mix(0.20, 0.94, pow(above, 0.68));
+  // Intensity follows the reach too: bright where the water is being torn at the
+  // shoulders, thin along the midbody. The old 'bowGain' floored at 0.35 for
+  // everything aft of t = 0.25, which is what made the band uniform end to end.
+  float gain = 0.36 + 0.95 * saturate1(vEnv * 0.55);
+  float streak = smoothstep(thr - 0.075, thr + 0.075, streakField)
+                 * (0.42 + 0.78 * bub) * gain;
+  // A real hull carries a near-continuous white lip exactly at the wetted line
+  // whatever else is happening further up. At 0.18 there was none, so the water
+  // met the plating on a bare contour with no froth in it at all.
   float foamA = min(streak * smoothstep(0.05, 0.32, uSpeedN)
-                    + wetBand * bub * 0.18 * uSpeedN, 0.90);
+                    + wetBand * (0.30 + 0.62 * bub) * 0.42 * uSpeedN, 0.90);
+  // The transom is a flat face with its own wash behind it; ending the side band
+  // on a vertical cut there reads as a seam.
+  foamA *= 1.0 - 0.55 * smoothstep(0.945, 1.0, vT);
+  // THE BREAKING EDGE. Water at the point of breaking is brightest in a thin
+  // line along the film edge, not uniformly over the froth, and that line is
+  // what the eye uses to tell breaking water from a painted highlight. Picked
+  // out as the coverage CONTOUR (wherever the threshold happens to cut the
+  // field) and confined to the upper half of the band, which is where the sheet
+  // is actually tearing rather than merely wet.
+  float lip = exp(-sq((streakField - thr) / 0.055))
+            * smoothstep(0.22, 0.72, above) * smoothstep(0.05, 0.35, uSpeedN);
 
   vec3 view = normalize(uCameraPos - vWorld);
   float wrap = 0.5 + 0.5 * saturate1(uSunDirection.y * 1.5);
@@ -418,6 +516,7 @@ void main(){
   // The bubble raft modulates it: a raft is not one flat tone.
   vec3 foamCol = vec3(0.44, 0.47, 0.49) * (0.82 + 0.30 * bub)
                  * (sun * wrap + uSkyColor * 0.9);
+  foamCol += sun * wrap * lip * 0.55;
   // FOAM KILLS GLOSS. Aerated water scatters; it does not reflect. So foam has to
   // take the specular AWAY, not merely add white over the top of it — and where
   // the foam is only partial it roughens what is left, so the lobe widens as it
@@ -433,13 +532,17 @@ void main(){
   wetA = saturate1(wetA * uOpacity);
   foamA = saturate1(foamA * uOpacity);
 
-  vec3 rgb = foamCol * foamA + wetCol * wetA * (1.0 - foamA);
   float a = foamA + wetA * (1.0 - foamA);
   if (a < 0.004) discard;
+  // Aerial perspective must be applied to the UN-premultiplied colour: the
+  // inscatter inside applyAerial adds a sun glow that is NOT scaled by alpha, so
+  // pre-scaling only the fog colour by 'a' (which is what was here) left that
+  // glow at full strength on a nearly transparent band.
+  vec3 rgb = (foamCol * foamA + wetCol * wetA * (1.0 - foamA)) / a;
 
   float dist = length(uCameraPos - vWorld);
-  rgb = applyAerial(rgb, dist, -view, uSunDirection, uFogColor * a, uSunColor,
+  rgb = applyAerial(rgb, dist, -view, uSunDirection, uFogColor, uSunColor,
                     uFogDensity, uCameraPos.y, vWorld.y);
-  gl_FragColor = vec4(rgb, a);
+  gl_FragColor = vec4(rgb * a, a);
 }
 `;
