@@ -462,8 +462,17 @@ function buildPortLiner(
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const ang = p.open ? 1.32 : 0.03;
-  // Hinge axis is horizontal, along the hull.
-  q.setFromAxisAngle(new THREE.Vector3(0, 0, side), -ang);
+  /**
+   * Hinge axis is horizontal, along the hull, and the SIGN matters.
+   *
+   * The lid hangs from the hinge along local -Y when shut. Rotating by -ang about
+   * (0, 0, side) carries that -Y toward the ship's INSIDE on both sides, so every
+   * open lid swung in through the bulwark instead of up and out: the aperture was
+   * left completely unobstructed (part of section 37's see-through hull) and on
+   * the spar deck the lid ended up lying flat on the inboard planking as a black
+   * plate. +ang carries it outboard, which is where a triced-up port lid goes.
+   */
+  q.setFromAxisAngle(new THREE.Vector3(0, 0, side), ang);
   m.compose(new THREE.Vector3(hingeX, hingeY, st.z), q, new THREE.Vector3(1, 1, 1));
   lid.pushTransform(m);
   // Local frame: the lid hangs down from the hinge, faces outward along +nx.
@@ -565,9 +574,12 @@ function buildPortBacking(
   ir.setColorHexLinear(0xffffff, p.gunDeck ? 0.62 : 0.66);
   const out = depth + (p.gunDeck ? 0.4 : 0.32);
   const r = p.gunDeck ? 1 : 1.24; // a carronade is a short, fat gun
+  // The breech stops just inboard of the backing panel. A longer stub reached
+  // through it into the deck space, and with no carriage under it that read from
+  // the helm as a black blob stuck to the inside of the bulwark.
   const prof: readonly [number, number][] = [
-    [0.02 * r, -0.5], [0.235 * r, -0.44], [0.228 * r, -0.1],
-    [0.2 * r, out * 0.45], [0.174 * r, out - 0.19],
+    [0.02 * r, -0.07], [0.235 * r, -0.05], [0.228 * r, out * 0.18],
+    [0.2 * r, out * 0.55], [0.174 * r, out - 0.19],
     [0.196 * r, out - 0.06], [0.166 * r, out], [0.118 * r, out],
   ];
   _bQ.setFromUnitVectors(_UP, _bN);

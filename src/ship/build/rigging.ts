@@ -629,8 +629,35 @@ function running(
  */
 const BRACE_BELAY_ABAFT_M = 2.6;
 
+/**
+ * Metres abaft its own mast that a course's braces come down to the rail.
+ *
+ * A COURSE's braces do not lead to the next mast at all — they lead aft and down
+ * to the ship's side, and that is what keeps them clear of canvas. Leading them
+ * to the next mast made them cross the whole width of the intervening sail
+ * diagonally, and it is the one rope run on the ship whose whole length lies in
+ * front of cloth, so it is the one the eye finds first.
+ *
+ * Measured with `.tmp/ropesail.mjs`, live trim: the brace family pierced 15
+ * sails before this and 12 after. What is left is the UPPER tiers, which really
+ * do lead to the next mast and cannot clear that mast's narrow topgallant and
+ * royal canvas on a straight chord — see DIAGNOSIS. Raising
+ * `BRACE_BELAY_ABAFT_M` to 4.8 was tried and measured no better (13), so it was
+ * put back.
+ */
+const COURSE_BRACE_ABAFT_M = 9.2;
+
 function braceAnchor(frame: RigFrame, mast: number, tier: number): THREE.Vector3 {
   const out = new THREE.Vector3();
+  if (tier === 0 && mast < 2) {
+    const z = MASTS[mast].z + COURSE_BRACE_ABAFT_M;
+    const t = tAtZ(z);
+    const st = new Station(t);
+    const y = sheerY(t) - 0.9;
+    // Just inboard of the rail, where the pin rail actually is.
+    out.set(st.widthAt(y) - 0.45, y, z);
+    return out;
+  }
   if (mast === 0) {
     // Fore braces lead aft to the mainmast.
     const m = frame.masts[1];
