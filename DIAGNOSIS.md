@@ -1666,3 +1666,104 @@ and direction 4 makes small viewports a real target.
 diagonals and curves that never reach full pixel coverage. The fix is 10 px caps,
 which changes a look the owner has already approved — so it is a question, not a
 change.
+
+## 43. Three of my own visual reads failed measurement in one sitting
+
+Direction 3's first capture (`wildlife` scene, 81 draw calls, p25 21.1 ms, quiet box)
+looked wrong to me in three ways. I measured all three before briefing anyone, and
+**all three were wrong.** Recording them because the pattern matters more than the
+individual mistakes.
+
+| what I saw | what I measured | verdict |
+|---|---|---|
+| "foam far too much and too white, reads as ice floes" | over the sea band: **5.3%** above 170 sRGB, **0.3%** near-blown | normal whitecap coverage for 14 kn / sea state 3 |
+| "sea has periodic strip-line banding" | column-mean sd 13.6 over mean 95.4; **60 sign changes in 119 gradient steps** | no clean periodicity — that is noise, not banding |
+| "the envelope work flattened the sails into cardboard" | flat-plate share **fell** 22.0% → 18.8%; p10..p90 spread 28 → 27 | no flattening; the two frames differed by +15 sRGB of lighting |
+
+The mechanism in every case: **high-contrast features read as larger and more
+uniform than they are**, and two frames captured minutes apart have different sun,
+different cloud field and different wave phase, so any A/B by eye silently compares
+three variables at once. The wake is genuinely bright, so "too much foam"; the sails
+were genuinely brighter in the second frame, so "flatter".
+
+The one thing that survived: **hard rectangular shadow blocks on the sails**, at 5.2%
+and 5.6% of sail pixels in the two frames respectively — present, roughly unchanged,
+and therefore *not* a regression from the rig-envelope work. Three independent
+observers had flagged it. That is the difference between a real defect and a story:
+it reproduces across frames and it survives a number.
+
+**Standing caution for me, not for an agent:** I generate fluent defect narratives
+from crops, and they are wrong about half the time. Measure before briefing. A brief
+built on a wrong premise costs an agent its whole session — one agent spent a session
+on a cloud hypothesis that rested on my false claim that the orbit camera rotates
+continuously during capture.
+
+## 44. Two reports about my own instruments: one right, one wrong
+
+The world agent reported two defects outside its directory. Both were worth checking
+and they came out opposite ways.
+
+### Right: `check-glsl` missed the one bug it exists to catch
+It hit a backtick pair in a GLSL comment in `ocean/shaders/surface.ts`, got
+`check-glsl: clean`, `tsc --noEmit` green, and a **failed `vite build`**.
+
+Reproduced. The lexer has no recovery: the first stray backtick pops it out of
+template state, so every later line in that file is misclassified as code and
+silently skipped. Minimal case — line 3 is reported, **line 4 is not**:
+
+```
+const F = `
+  // an odd backtick like `this flips the lexer
+  // and then `this real pair` is silently missed
+`;
+```
+
+The design was the mistake. The net that localises the error was the same net the
+error destroys. Two independent checks now run: a **parse** through esbuild (the
+parser Vite uses, so "will not build" is a fact and cannot be desynchronised by the
+bug it hunts), and the **lexer** for the plain-language "backtick in a GLSL comment,
+use single quotes" — now asserting its own end state, so when it loses sync it says
+so instead of printing `clean`.
+
+### Wrong: `capture.mjs` does *not* shoot through the title card
+`UiLayer.enterCaptureMode()` already calls `title.dismiss(true)`, `firstRun.hide()`
+and `panel.close()` when it sees `capture:scene`, which the harness emits per scene.
+Measured before believing it: centre luminance differs **0.7%** between a
+clicked-through run and a normal one, and the centre crop shows open sea where the
+display type would be. The agent had generalised from its own probe, which serves
+`dist/` from a route handler and never emits the hook.
+
+I kept a **tripwire** anyway, because the failure it imagined would have been
+expensive and invisible: `.intro` lays a radial scrim at `rgba(shade, 0.5)` over the
+**centre** of frame, falling to 0.04 at the edges. Every tonal, contrast and exposure
+judgment ever taken from these PNGs would have been made through a half-strength dark
+vignette that also *inverts* the natural one. One check per scene beats trusting a
+hook in another module to keep working.
+
+## 45. `npm run check-shaders`: the gap in §27 is closed for pass shaders
+
+42 programs across `src/sky` and `src/post`, compiled **and linked** against real
+ANGLE-on-Metal in 1.5 s, no dev server and no engine boot. Discovered from the
+exports, so a new pass is covered the moment it is written.
+
+Its green is only worth what its controls prove, so both are recorded in the file: a
+bad swizzle (`tsc` 0 errors, `check-glsl` clean, **this fails**) and a read-but-
+unwritten varying (`tsc` 0 errors, **this fails on link**) — the `vAback` class.
+
+Its own first two runs were both wrong, and both are now documented traps: compiling
+the post chain as literal ES 1.00 invented 27 `'varying' : Illegal use of reserved
+word` errors, and the next run rejected a working `sampler3D`. three compiles every
+non-raw `ShaderMaterial` as `#version 300 es` on WebGL2 and hands GLSL1 sources
+compatibility defines, so the prefix is now three's own, copied from
+`WebGLProgram.js:800-828`. **If a whole directory fails identically, the version
+table is the suspect, not the shader.**
+
+One more thing worth keeping: the first varying control **passed when it should have
+failed**. An unused mismatched `in` is legal GLSL — the spec only requires a match
+for statically-used varyings — so declaring one and stopping there tests nothing.
+That was a bad control, not a gap in the checker.
+
+**Not covered: material shaders.** `ocean/shaders/surface`,
+`ship/shaders/{parts,sail,line}`, `vfx`, `world` go through three's chunks via
+`onBeforeCompile`, so only a real engine boot assembles them. `capture.mjs`'s zero-
+`ERROR:` console check remains their instrument, and a green here does not cover them.
