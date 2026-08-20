@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import {
   anchorRelative,
+  fitDistance,
   orbitAxisTilt,
   orbitElevation,
+  tanHalfFovX,
   type CameraContext,
   type CameraMode,
   type CameraSolve,
@@ -161,6 +163,62 @@ const FRAMING_FADE_FULL = 1.6;
  *  keeps the subject off the centreline instead of dead-centre and symmetrical. */
 const FRAMING_AT_HALF_TURN = 0.35;
 
+/**
+ * What actually limits this shot on a narrow frame — and it is not the ship's
+ * length.
+ *
+ * Dead astern the 62 m hull is foreshortened to almost nothing while the main
+ * yards, 29 m tip to tip, lie square across the lens. So the ship's width in
+ * frame is set by the YARD SPAN, and the NDC-specified lateral offset makes the
+ * phone shot more nearly dead astern than the 16:9 one (the offset is metres =
+ * `ndc * d * tanHalfX`, so it shrinks with the horizontal field), which means
+ * the phone gets the widest presentation of the yards and the smallest field to
+ * put it in. Measured at 390x844, distance 74: 32.5 deg of horizontal field
+ * against yards subtending 22.3 deg, hull silhouette 43 px from the left edge
+ * and **9 px from the right** — `RUBRIC.md`'s "awkwardly clipped at the frame
+ * edge" by the same eight-pixel coincidence `LOOK_HEIGHT_PER_M` describes, only
+ * sideways.
+ *
+ * `anatomy.mainYardHalfSpan` is published by the ship (14.6 m), so only the
+ * cloth pad lives here: a course's clews sheet out TO the yardarms, so the
+ * widest cloth is the span plus a little belly and the braces.
+ */
+const RIG_CLOTH_PAD_M = 1.5;
+/**
+ * Where the outboard yardarm may reach, as NDC x. 0.86 keeps 7% of the frame
+ * width clear outboard of the rig, which is enough to absorb the residual
+ * heading and heave filtering without anything touching an edge — the same
+ * argument `orbit`'s `FIT_FRACTION` makes, and a much smaller margin than the
+ * lateral offset itself, because this is a limit and not a target.
+ *
+ * PROVABLY INACTIVE AT 16:9. The distance this demands is
+ * `(14.6 + 1.5) / ((0.86 - |shipNdc|) * tanHalfX)`, and at 16:9 the worst case
+ * over every state (`FOV_BASE`, `MAX_SHIP_NDC`) is 26.9 m — below
+ * `CHASE_MIN_DISTANCE`, so `Math.max` can never pick it. It first binds at the
+ * default 74 m near aspect 0.54, i.e. only on portrait phones and narrower.
+ */
+const MAX_RIG_EDGE_NDC = 0.86;
+/**
+ * Where the aspect floor is allowed to leave the follow distance, metres.
+ *
+ * The mode crops the royals off the top deliberately, and the crop must be
+ * DECISIVE — see `LOOK_HEIGHT_PER_M`, which warns that crop depth falls as the
+ * camera pulls back and therefore passes through zero somewhere near 88 m, "so
+ * it is placed where nobody sits rather than at the default". An aspect-driven
+ * floor is a machine that parks the player at a computed distance, so it must
+ * not park them in that band. Measured at `FOV_BASE` the truck reaches the top
+ * edge at 103 m and at `FOV_AT_TOP_SPEED` at 94 m, so the band the floor may
+ * not land in is [90, 108] with margin; below it the rig is cropped, above it
+ * the whole rig fits.
+ *
+ * At aspect 0.462 the yard span asks for 82-87 m depending on speed, which is
+ * below the band, so the phone keeps the cropped rig and the ship stays large.
+ * Aspects near 0.39 would land inside the band and are pushed clear of the top
+ * of it, where the whole 67 m rig fits instead — which is the right answer for
+ * a frame that tall anyway.
+ */
+const CROP_BAND_M = [90, 108] as const;
+
 const FOV_BASE = 58;
 const FOV_AT_TOP_SPEED = 64.5;
 const BANK_PER_TURN = 0.038; // 2.2 deg at full rudder
@@ -220,7 +278,6 @@ export class ChaseMode implements CameraMode {
   private eye = new THREE.Vector3();
 
   enter(ctx: CameraContext): void {
-    this.dist = clampDistance(ctx.world.cam.distance);
     this.vDist.v = 0;
     this.fov = FOV_BASE + (FOV_AT_TOP_SPEED - FOV_BASE) * ctx.frame.speedNorm;
     // Seed the quarter from the state she is actually in, so entering the mode
@@ -232,20 +289,23 @@ export class ChaseMode implements CameraMode {
     this.shipNdc = shipNdcTarget(this, ctx);
     this.lead = LEAD_BASE_M + LEAD_PER_SPEED_M * ctx.frame.speedNorm;
     this.roll = rollTarget(ctx);
+    // After the framing quantities, because the floor is derived from them.
+    this.dist = this.targetDistance(ctx);
   }
 
   solve(ctx: CameraContext, out: CameraSolve): void {
     const { frame, dt } = ctx;
 
-    this.dist = springDamp(this.dist, clampDistance(ctx.world.cam.distance), this.vDist, 0.45, dt);
-    const d = this.dist;
-
     // Every framing quantity is smoothed independently and slowly. A single
     // spring on the final position would couple speed changes into the height.
+    // These lead the distance because the aspect floor below reads two of them.
     this.fov = damp(this.fov, FOV_BASE + (FOV_AT_TOP_SPEED - FOV_BASE) * frame.speedNorm, 1.2, dt);
     this.shipNdc = damp(this.shipNdc, shipNdcTarget(this, ctx), 1.5, dt);
     this.lead = damp(this.lead, LEAD_BASE_M + LEAD_PER_SPEED_M * frame.speedNorm, 1.1, dt);
     this.roll = damp(this.roll, rollTarget(ctx), 2.0, dt);
+
+    this.dist = springDamp(this.dist, this.targetDistance(ctx), this.vDist, 0.45, dt);
+    const d = this.dist;
 
     const eyeY = EYE_HEIGHT_PER_M * d + EYE_HEIGHT_BASE;
     const lookY = LOOK_HEIGHT_PER_M * d + LOOK_HEIGHT_BASE;
@@ -258,9 +318,7 @@ export class ChaseMode implements CameraMode {
     // statement about the default shot, and feeding the yawed distance back in
     // made the offset breathe as the player looked around.
     const converge = 1 - (1 - TARGET_SIDE_FOLLOW) * (d / (d + this.lead));
-    const tanHalfX =
-      Math.tan(THREE.MathUtils.degToRad(this.fov) * 0.5) *
-      (ctx.world.size.width / Math.max(1, ctx.world.size.height));
+    const tanHalfX = tanHalfFovX(this.fov, ctx.world);
     const sideM = (-this.shipNdc * d * tanHalfX) / converge;
 
     // --- free look. Elevation first: the eye rides the sphere through the
@@ -336,6 +394,36 @@ export class ChaseMode implements CameraMode {
     out.posSmoothTime = 0.34;
     out.targetSmoothTime = 0.62;
     out.shot = '';
+  }
+
+  /**
+   * The follow distance to spring toward: the player's zoom, but never closer
+   * than the frame can hold the yardarms.
+   *
+   * A FLOOR and not an override. `world.cam.distance` stays exactly what the
+   * player set — zooming out is untouched and zooming in simply saturates
+   * earlier on a narrow frame, which is the honest consequence of a 32 deg
+   * horizontal field: there is no distance at which a 29 m yard span fits
+   * inside 24 m of frame, so something has to give and it should be the zoom
+   * rather than the composition.
+   *
+   * This is the one place the mode changes distance for a framing reason, and
+   * the header warns that moving distance re-frames the shot. That is deliberate
+   * here and it is why the speed cue uses FOV instead: a speed cue must not
+   * re-frame the shot, whereas a viewport three times narrower must.
+   */
+  private targetDistance(ctx: CameraContext): number {
+    const want = ctx.world.cam.distance;
+    const floor = fitDistance(
+      ctx.anatomy.mainYardHalfSpan + RIG_CLOTH_PAD_M,
+      this.shipNdc,
+      MAX_RIG_EDGE_NDC,
+      tanHalfFovX(this.fov, ctx.world),
+    );
+    // Never park the player in the band where the top crop passes through zero
+    // and the mainmast truck grazes the frame edge — see CROP_BAND_M.
+    const clear = floor > CROP_BAND_M[0] && floor < CROP_BAND_M[1] ? CROP_BAND_M[1] : floor;
+    return clampDistance(Math.max(want, clear));
   }
 }
 

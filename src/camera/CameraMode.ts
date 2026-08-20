@@ -274,6 +274,54 @@ export function orbitAxisTilt(
   return THREE.MathUtils.clamp(elevation - want, -maxTilt, maxTilt);
 }
 
+/**
+ * Horizontal half-tangent of the frame: `tan(fovY/2) * aspect`.
+ *
+ * Every camera here carries a VERTICAL field of view, so the vertical framing
+ * is the same on every screen and the horizontal framing is not. That asymmetry
+ * is the whole of the small-viewport problem: on a 390x844 phone the aspect is
+ * 0.46, and a 64.5 deg vertical lens leaves only 32.5 deg of horizontal field —
+ * a third of the 96.6 deg the same lens gives at 16:9. Any composition rule
+ * written in metres across the frame is therefore wrong on a phone by a factor
+ * of three, and any rule written through this function is right on both.
+ *
+ * Read from `world.size` rather than `camera.aspect` on purpose: `size` is the
+ * canvas backing store, which is what the frame actually is, and `renderScale`
+ * cancels out of the ratio.
+ */
+export function tanHalfFovX(fovDeg: number, world: World): number {
+  return (
+    Math.tan(THREE.MathUtils.degToRad(fovDeg) * 0.5) *
+    (world.size.width / Math.max(1, world.size.height))
+  );
+}
+
+/**
+ * How far back a subject of half-width `halfWidthM` has to sit for its outboard
+ * edge to land inside `maxEdgeNdc`, when the subject's centre is already offset
+ * to `offsetNdc`.
+ *
+ * The one composition quantity that cannot be a constant. `orbit` had a private
+ * version of this from the start, because a full-profile shot fails obviously
+ * when it does not fit; the modes that follow the ship from astern had none,
+ * because at 16:9 they happen not to need one — and that is exactly why nobody
+ * noticed the phone.
+ *
+ * Both bounds are in NDC because that is where the framing is OBSERVED (see
+ * `MIN_SHIP_NDC` in `modes/Chase.ts` for the same argument made about the
+ * lateral offset). The floor on `room` keeps a subject whose own offset already
+ * reaches the frame edge from demanding an infinite distance.
+ */
+export function fitDistance(
+  halfWidthM: number,
+  offsetNdc: number,
+  maxEdgeNdc: number,
+  tanHalfX: number,
+): number {
+  const room = Math.max(0.05, maxEdgeNdc - Math.abs(offsetNdc));
+  return halfWidthM / (room * Math.max(1e-4, tanHalfX));
+}
+
 /** Unit direction from a bearing (0 = north = -Z) and an elevation. */
 export function directionFrom(
   bearing: number,

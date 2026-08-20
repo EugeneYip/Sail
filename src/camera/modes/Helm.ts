@@ -14,13 +14,15 @@ import { springDamp } from '../../util/math';
  *
  * Composition rules
  * -----------------
- * - The eye stands abaft the wheel, on the centreline, 1.8 m above the spar
- *   deck. The default axis is 2 deg BELOW horizontal with a 71 deg lens: that
- *   puts the wheel rim at ~20% of frame height (bottom fifth, where a real
- *   helmsman's hands are), the deck running away to the bow through the middle
- *   of the frame, the horizon a little above centre, and the main course and
- *   lower topsails filling the top third. Everything the brief asks for is in
- *   frame at once, and nothing is centred.
+ * - A helmsman steers by the HORIZON and the BOW, at a wheel. All three have to
+ *   be in the frame, and the eye height is what decides whether any of them are
+ *   — see `EYE_ABOVE_RAIL_M`. Everything else here is secondary to that.
+ * - The eye stands abaft the wheel, on the centreline, at the height the two
+ *   clearances below demand rather than at a standing height. The axis is 2 deg
+ *   BELOW horizontal with a 71 deg lens: the horizon lands a little above centre,
+ *   the deck runs away to the bow through the middle of the frame, the wheel's
+ *   upper rim crosses the lower third, and the main course and lower topsails
+ *   fill the top. Nothing is centred.
  * - The player can look ANYWHERE: a full turn on the spot, and up to the trucks
  *   or down to the binnacle. A helmsman is a person standing on a deck, not a
  *   head in a vice, and the 150 deg yaw stop this mode used to carry meant you
@@ -43,6 +45,46 @@ import { springDamp } from '../../util/math';
 /** Base axis, radians. Slightly down so the wheel and deck stay in frame. */
 const BASE_PITCH = -0.035;
 const FOV = 71;
+
+/**
+ * Metres of clear sea the eye holds above the bulwark cap.
+ *
+ * This is the whole defect, and it was eight centimetres. The ship publishes
+ * `helmY = 7.35` (a 1.68 m eye on a quarterdeck at 5.67) and `bulwarkY = 7.436`
+ * — so the helmsman's eye sits 8.6 cm BELOW the top of his own bulwark, and
+ * measured on a 1600x900 frame the sea line was behind timber across **100% of
+ * the frame width**: longest clear run 0 px. A helm view with no horizon in it
+ * is not a helm view, whatever else is in frame.
+ *
+ * The real ship does not have this problem because its quarterdeck is a whole
+ * deck above the waist; this model's quarterdeck is 0.18 m above it, so the
+ * waist bulwark is at the helmsman's eye. That is not something `src/camera` can
+ * fix, so the camera solves the constraint instead of the anatomy.
+ */
+const EYE_ABOVE_RAIL_M = 0.5;
+/**
+ * Metres the eye holds above the wheel's UPPER RIM, so the rim has a horizon
+ * behind it instead of running along it.
+ *
+ * Measured before: the rim projected 79 px ABOVE the sea line, against the main
+ * course — pale timber on pale canvas, which is what "no silhouette" means. The
+ * fix is not to hide the wheel but to get the sea behind its top edge.
+ *
+ * Both margins are deliberately small, and TOGETHER they lift the eye about
+ * 0.67 m above `helmY`: this eye is a CAMERA at 2.35 m above the deck, not a
+ * person. That is stated rather than hidden because the honest fix lives in
+ * `src/ship` — a quarterdeck that steps up over the waist, and a wheel whose
+ * disc is not lying flat — and once either lands, `Math.max` below hands the
+ * height straight back to the published anatomy with no change here.
+ */
+const EYE_ABOVE_WHEEL_RIM_M = 0.16;
+/**
+ * Wheel outer radius at the spoke handles, metres. The anatomy publishes the
+ * wheel's CENTRE and not its size, so this is the one dimension here that is
+ * assumed rather than read; 1.24 m is measured off the built geometry
+ * (`aPart == PART.WHEEL`, ship-local X span 2.48 m).
+ */
+const WHEEL_RADIUS_M = 1.24;
 /** How much of the hull's roll the head keeps. A real neck cancels most of it. */
 const ROLL_RETAINED = 0.55;
 const PITCH_RETAINED = 0.5;
@@ -89,7 +131,16 @@ export class HelmMode implements CameraMode {
     this.sway = springDamp(this.sway, swayWant, this.vSway, 0.42, dt);
     this.bob = springDamp(this.bob, -frame.heaveResidual * KNEE_FLEX, this.vBob, 0.3, dt);
 
-    localToWorld(frame, anatomy.helmX + this.sway, anatomy.helmY, anatomy.helmZ, this.eye);
+    // The eye height is a solved constraint, not a constant: high enough to see
+    // the sea over the bulwark cap and to keep the wheel's upper rim against
+    // that sea. Re-derived every frame because the ship may republish either
+    // number, and the moment it publishes better ones `helmY` wins on its own.
+    const eyeY = Math.max(
+      anatomy.helmY,
+      anatomy.bulwarkY + EYE_ABOVE_RAIL_M,
+      anatomy.wheelY + WHEEL_RADIUS_M + EYE_ABOVE_WHEEL_RIM_M,
+    );
+    localToWorld(frame, anatomy.helmX + this.sway, eyeY, anatomy.helmZ, this.eye);
     this.eye.y += this.bob;
     out.position.copy(this.eye);
 
