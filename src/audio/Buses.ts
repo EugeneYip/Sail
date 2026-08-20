@@ -104,7 +104,8 @@ export class Mixer {
   private readonly musicSend: GainNode;
   private readonly timeBuf: Float32Array<ArrayBuffer>;
   private readonly freqBuf: Float32Array<ArrayBuffer>;
-  /** Extra ducking applied by thunder / big slams. */
+  /** Extra ducking applied by thunder / big slams — the window [from, until). */
+  private duckFrom = Infinity;
   private duckUntil = 0;
   /** 0 while the tab is hidden, so a backgrounded game fades instead of cutting. */
   private hushed = 0;

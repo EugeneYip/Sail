@@ -238,6 +238,42 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
 }
 
 /**
+ * Everything `SAIL_VERT_BODY` writes on its way out, in ONE place.
+ *
+ * There are two programs that run that body — the cloth material and its
+ * `MeshDepthMaterial` — and they need these names with different qualifiers: the
+ * cloth material passes them to its fragment shader as `varying`, while the
+ * depth material has no fragment consumer and declares them as plain
+ * file-scope locals.
+ *
+ * They used to be written out by hand in both places, and adding 'vAback' to one
+ * of them shipped a `MeshDepthMaterial` that wrote an undeclared identifier:
+ * every sail shadow silently stopped compiling, and `npm run typecheck` cannot
+ * see it, because `check-glsl.mjs` only looks for backticks in template text and
+ * has no idea an alternate material path exists. The only thing that catches it
+ * is a real compile — `node scripts/capture.mjs --console` and grep for
+ * 'ERROR:'. So the list is generated from one array now, and the next varying
+ * added here reaches both programs whether or not anyone remembers to.
+ */
+const SAIL_VERT_OUT_DECLS: readonly [string, string][] = [
+  ['vec4', 'vSail'],
+  ['vec4', 'vCloth'],
+  ['vec2', 'vSailUv'],
+  ['vec3', 'vSailWP'],
+  ['vec3', 'vSailTan'],
+  ['float', 'vAback'],
+];
+
+/**
+ * Declarations for the values `SAIL_VERT_BODY` writes.
+ * @param varying `true` for the cloth material, `false` for its depth material.
+ */
+export function sailVertOuts(varying: boolean): string {
+  const q = varying ? 'varying ' : '';
+  return SAIL_VERT_OUT_DECLS.map(([t, n]) => `${q}${t} ${n};`).join('\n');
+}
+
+/**
  * Vertex body. Evaluates the sail three times for an exact normal, then pushes
  * position and normal through the animated-part transform so a braced yard
  * carries its sail round and a sheeted jib swings about its own stay.
