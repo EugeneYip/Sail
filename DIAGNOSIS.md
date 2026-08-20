@@ -1238,3 +1238,43 @@ kind of soft mass. But the two-layer system (cumulus deck plus high cirrus) coul
 equally be rendering the cirrus as an opaque sheet, and the water discontinuity
 points at `cloudShadowMap` extent. **Bisect by disabling reprojection, then each
 layer, then the shadow slice** — three cheap ablations that separate all three.
+
+## 37. Owner's live gameplay screenshots, 2026-08-20 — seven defects, all confirmed
+
+Three real in-game screenshots (12.5–13.0 kn, minimal UI, `MINIMAL | PRO` visible).
+More reliable evidence than a headless capture because it is what the player sees.
+All seven of the owner's observations are confirmed from the images.
+
+### 1. THE ENSIGN IS A MODERN 50-STAR FLAG — wrong by ~200 years
+Clearly legible in the third screenshot: a dense field of small stars in the canton
+and 13 stripes. **This vessel is the 1797 frigate; her ensign is 15 stars and 15
+stripes** (1795–1818, stars in five rows of three). The *position* looks right — flying
+at the spanker gaff aft — but the design is the modern flag.
+The previous ship agent was interrupted **precisely while dumping the flag texture to
+verify stars and stripes**, so it never checked. Dump the texture to a PNG and count
+the stars and stripes before claiming it is correct; do not trust the generator.
+
+### 2. Ropes pass visibly THROUGH the sails
+Unambiguous in the first screenshot: rigging lines cross over and through the sail
+faces at close range. Still open from §30 B.
+
+### 3–4. Bow, side and stern water still reads as big white masses with straight edges
+The owner reports straight-line artefacts still present at bow and stern despite the
+hull-skirt fix (§35). Consistent with §35's own closing note: **the near-field foam
+plate in `WakeField` plus the ocean's consumption of `wakeTexture.R` is now the
+dominant fake element**, and the field spans 1024 m over its texture so it cannot
+carry near-hull detail. This needs the ocean and vfx owners together.
+
+### 5–6. Bow and stern read as hollow / see-through structures
+New, and distinct from the water defects. The gun-port rows read as an openwork
+lattice — you appear to see *through* the hull at the bow and at the stern gallery.
+Most likely the ports are modelled as apertures with no interior backing and no
+closed lids, so the camera sees sky or the far side through them. A hull with visible
+holes reads as unfinished more than any texture flaw.
+
+### 7. The "foreign object" extending from the starboard bow is STILL THERE
+The owner has now reported this four times. It has been attributed to the ship, the
+ocean clipmap, the Kelvin wake arms and a hull skirt, and a background session is
+fixing an ocean clipmap per-level snap gap. **It is still visible.** Whoever next
+touches this: bisect by hiding every mesh in the scene one at a time and name the
+one that removes it — that is the only method that has ever worked here.
