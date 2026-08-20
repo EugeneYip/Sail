@@ -122,9 +122,9 @@ export class Birds {
     b.mode = MODE_WHEEL;
     b.modeTimer = 4 + r() * 12;
     b.theta = r() * Math.PI * 2;
-    b.radius = 22 + r() * 74;
-    b.omega = (0.10 + r() * 0.16) * (r() < 0.5 ? -1 : 1) * (46 / b.radius);
-    b.height = -9 + r() * 30;
+    b.radius = 26 + r() * 96;
+    b.omega = (0.10 + r() * 0.16) * (r() < 0.5 ? -1 : 1) * (52 / b.radius);
+    b.height = -16 + r() * 34;
     b.bob = r() * Math.PI * 2;
     b.flapPhase = r() * Math.PI * 2;
     b.flapAmp = 0.45;
@@ -148,11 +148,13 @@ export class Birds {
     const h = ship.heading;
     const fx = Math.sin(h);
     const fz = -Math.cos(h);
-    // The flock hangs over the wake, well astern so the wheel clears the rig.
+    // The wheel is centred just abaft the ship, not out over the wake. Astern is
+    // where the chase camera sits, and a flock centred there puts every bird
+    // behind the lens: measured, 22 gulls aloft and exactly one in frame.
     this.centre.set(
-      ship.position.x - fx * 46,
-      ship.position.y + 19,
-      ship.position.z - fz * 46,
+      ship.position.x - fx * 8,
+      ship.position.y + 27,
+      ship.position.z - fz * 8,
     );
 
     this.tickLifecycle(world, dt);
@@ -264,13 +266,13 @@ export class Birds {
     if (u < 0.60) {
       b.mode = MODE_WHEEL;
       b.modeTimer = 8 + r() * 20;
-      b.radius = 22 + r() * 74;
-      b.omega = (0.10 + r() * 0.16) * (r() < 0.5 ? -1 : 1) * (46 / b.radius);
-      b.height = -9 + r() * 30;
+      b.radius = 26 + r() * 96;
+      b.omega = (0.10 + r() * 0.16) * (r() < 0.5 ? -1 : 1) * (52 / b.radius);
+      b.height = -16 + r() * 34;
     } else if (u < 0.88 || !calm) {
       b.mode = MODE_SKIM;
       b.modeTimer = 4 + r() * 7;
-      b.radius = 30 + r() * 60;
+      b.radius = 34 + r() * 78;
     } else {
       b.mode = MODE_SIT;
       b.modeTimer = 9 + r() * 18;

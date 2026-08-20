@@ -242,61 +242,112 @@ export function makeDropletTexture(size = 64): THREE.DataTexture {
 }
 
 /**
- * Torn sheet of aerated water, for mist, spindrift and spray sheets.
- *   R = coarse density detail
+ * Rewrite `f` in place so its values are UNIFORM on 0..1 (rank / last rank).
+ *
+ * A silhouette is a threshold on a field, and a threshold is only as predictable
+ * as the field's distribution. Measured, the raw lane fBm below spans 0.12..0.87
+ * with an sd of 0.136 and 30% of its area inside one decile — so ANY threshold
+ * either passes nearly all of it or nearly none, and the sprite comes out as a
+ * solid slab with a frayed rim. After flattening, `linstep(1 - c - w, 1 - c + w, f)`
+ * covers exactly the fraction `c`, so "72% covered with real gaps between the
+ * filaments" is a number rather than a hope.
+ */
+function flattenField(f: Float32Array): void {
+  const n = f.length;
+  const order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  order.sort((a, bb) => f[a] - f[bb]);
+  const inv = 1 / (n - 1);
+  for (let r = 0; r < n; r++) f[order[r]] = r * inv;
+}
+
+/**
+ * Torn SHEET of aerated water, for mist, spindrift and bow spray sheets.
+ *   R = filament density
  *   G = fine erosion detail
  *   B = light-through thickness
  *   A = coverage
  *
- * THIS SPRITE IS THE COTTON WOOL. What was here was a radial falloff
- * ('pow(1 - r, 2.1)') multiplied by a smooth 4-period fBm: a soft round blob
- * with a gradient edge. Several hundred of them overlapping at the waterline is
- * a bank of cotton balls, and that is precisely what the owner saw and what the
- * ocean agent's crops called "whitecaps like torn tissue". No amount of shading
- * rescues a round silhouette with a soft edge.
+ * THE SPRITE HAS TO BE ANISOTROPIC ON ITS OWN. IT CANNOT BORROW IT.
  *
- * Three changes, in order of how much they matter:
+ * What was here was a radially-enveloped mask on a 7 x 2 lattice, and measured
+ * ('.tmp/texdump.mjs') it came out as a BALL: 44% of the sprite at alpha 1.0,
+ * 38% at 0.0, and the boundary between them a circle with a frayed rim. The
+ * anisotropic lattice was there; the radial envelope swamped it. Several hundred
+ * of those overlapping at the bow is a bank of cotton wool, which is what the
+ * owner has reported three times.
  *
- *  1. The silhouette is now a THRESHOLD on a warped, eroded mask, so its edge is
- *     as steep as the texture allows instead of fading out over the sprite's
- *     whole radius. A hard edge is what makes water read as water.
- *  2. The lattice is 7 x 2 — anisotropic, long axis on v. v is the sprite's
- *     motion-stretch axis (see 'off.y' in the draw vertex shader), so a
- *     stretched sprite now draws out into filaments aligned with its own
- *     velocity rather than into an oval.
- *  3. 128 instead of 64. These sprites grow to ~2 m and sit a few metres from
- *     the camera, where a 64-texel sprite has nothing left to show.
+ * The draw shader cannot rescue it and neither can motion stretch. The stretch
+ * axis is the particle's SCREEN-space velocity, and the chase camera travels
+ * with the ship, so a bow sheet's velocity relative to the eye is nearly the
+ * ship's own: every sprite in the fan stretches by the same modest factor along
+ * the same axis, and not one of them stops being round. A square quad has to
+ * read as a torn sheet by itself.
+ *
+ * So the silhouette is now a fanned COMB, and there is no radial term in it:
+ *
+ *  1. Lanes. An 11 x 3 lattice — narrow across u, long along v — FLATTENED and
+ *     then thresholded, so the 28% of clear water between the filaments is a
+ *     measured quantity instead of whatever the fBm happened to leave. v is also
+ *     the draw shader's stretch axis, so what stretch there is elongates
+ *     filaments rather than an oval.
+ *  2. A fan. The lanes shear with v and meander with a low-frequency warp, so
+ *     they splay instead of reading as parallel bars — and the draw shader's
+ *     per-particle rotation and u-mirror then give four visibly different draws
+ *     of it.
+ *  3. Ragged ends, per lane. Each lane starts and stops at its own v, so the
+ *     sheet has no shared top or bottom edge to read as a cut line.
  */
 export function makeMistTexture(size = 128): THREE.DataTexture {
   const d = new Uint8Array(size * size * 4);
-  const c = (size - 1) * 0.5;
-  const fil = fbmStack(7, 2, 3, 5501);
+  const lanes = fbmStack(11, 3, 3, 5501);
   const warp = fbmStack(3, 3, 2, 733);
-  const fine = fbmStack(9, 9, 3, 1279);
+  const fine = fbmStack(13, 5, 3, 1279);
+  const ends = fbmStack(2, 4, 2, 91);
+  const n = size * size;
+  const lane = new Float32Array(n);
+  const torn = new Float32Array(n);
+  const env = new Float32Array(n);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = (x + 0.5) / size;
       const v = (y + 0.5) / size;
       const w = fbmS(u * 3, v * 3, warp) - 0.5;
-      const f = fbmS(u * 7, v * 2, fil);
-      const g = fbmS(u * 9, v * 9, fine);
-      // Warp the radius so the outline is a torn rag rather than an ellipse,
-      // and squash it on v so the untorn shape is already elongated.
-      const nx = ((x - c) / c) * (1 + 0.55 * w);
-      const ny = ((y - c) / c) * 0.80;
-      const r = Math.hypot(nx, ny);
-      const radial = sat(1 - r);
-      // '1 - |2n - 1|' creases along every zero crossing of the fine octave.
-      // Those creases are where the edge tears.
-      const torn = 1 - Math.abs(g * 2 - 1);
-      const mask = radial * (0.30 + 1.15 * f) * (0.66 + 0.62 * torn);
-      const alpha = sstep(0.17, 0.35, mask);
-      const i = (y * size + x) * 4;
-      d[i] = b(f);
-      d[i + 1] = b(g);
-      d[i + 2] = b(Math.pow(radial, 1.3) * (0.55 + 0.45 * f));
-      d[i + 3] = b(alpha);
+      // Shear with v and meander with the warp: the comb fans out.
+      const uf = u + (v - 0.5) * 0.30 + w * 0.26;
+      const i = y * size + x;
+      lane[i] = fbmS(uf * 11, v * 3, lanes);
+      const g = fbmS(uf * 13, v * 5, fine);
+      // '1 - |2n - 1|' creases along every zero crossing of the fine octave, and
+      // those creases are where the edge tears.
+      torn[i] = 1 - Math.abs(g * 2 - 1);
+      // Ragged ends per lane, not per sprite.
+      const e = fbmS(uf * 2, v * 4, ends);
+      const alongV = sstep(0.0, 0.05 + 0.26 * e, v) * sstep(1.0, 0.76 - 0.20 * e, v);
+      // Across u the sheet stays full width until the last sixth, so it is a
+      // sheet and not a lens. This is the term that used to be a radial falloff.
+      const acrossU = sat(1 - Math.pow(Math.abs(2 * u - 1), 3.4));
+      env[i] = acrossU * alongV;
+      // G is written now; it is not part of the silhouette decision.
+      d[i * 4 + 1] = b(g);
     }
+  }
+  flattenField(lane);
+  for (let i = 0; i < n; i++) {
+    // Peak coverage inside the sheet. 0.72 leaves 28% clear water between the
+    // filaments; the envelope carries it to zero at the sprite's edges, so the
+    // outermost lanes thin out into separate strands on their own.
+    const cov = env[i] * 0.72;
+    // Same construction as the ocean surface's foam coverage: perturb the
+    // threshold with a zero-mean field, scaled so it vanishes at both ends of
+    // the coverage range and cannot leak alpha where there should be none.
+    const bite = Math.min(cov, 1 - cov) * 2;
+    const thr = 1 - cov + bite * (torn[i] - 0.5) * 0.62;
+    const alpha = sat((lane[i] - thr + 0.065) / 0.13);
+    const o = i * 4;
+    d[o] = b(lane[i]);
+    d[o + 2] = b(Math.pow(lane[i], 1.2) * (0.45 + 0.55 * torn[i]) * env[i]);
+    d[o + 3] = b(alpha);
   }
   return tex(d, size, size, false);
 }

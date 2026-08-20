@@ -418,9 +418,16 @@ void main(){
     col += sky * 0.46;
     col += moon * 0.25;
     // Torn sheets and mist are the biggest sprites in the pool, so they are what
-    // actually fills the frame. 0.5 let a few hundred of them stack into an opaque
-    // curtain that swallowed the whole bow.
-    a *= 0.30;
+    // actually fills the frame. 0.5 let a few hundred of them stack into an
+    // opaque curtain that swallowed the whole bow.
+    //
+    // 0.30 -> 0.42 because the sprite itself changed: 'makeMistTexture' used to
+    // cover 53% of its quad (measured — it was a ball) and now covers 26% as a
+    // fanned comb of filaments, so the same number of sprites lays down half the
+    // optical depth it used to. Restoring all of it would be 0.61; 0.42 puts
+    // back about 70%, which keeps a wide margin against the curtain this
+    // coefficient exists to prevent while the mass regains its density.
+    a *= 0.42;
   }
 
   // Soft against the water: fade as the sprite approaches the real surface, so

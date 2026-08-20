@@ -122,7 +122,9 @@ export class Whales {
     // Sixty per cent of encounters are a spout on the horizon; the rest are
     // close aboard, which is what makes the horizon ones worth watching for.
     const range = forcedRange > 0 ? forcedRange : r() < 0.6 ? 1200 + r() * 2000 : 160 + r() * 420;
-    const bearing = world.ship.heading + (r() - 0.5) * 1.5;
+    // A forced encounter goes on the bow so a capture can see it; a natural one
+    // can be anywhere.
+    const bearing = world.ship.heading + (r() - 0.5) * (forcedRange > 0 ? 0.5 : 1.5);
     const bx = world.ship.position.x + Math.sin(bearing) * range;
     const bz = world.ship.position.z - Math.cos(bearing) * range;
     const course = r() * Math.PI * 2;

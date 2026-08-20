@@ -5,8 +5,14 @@
   --sans: 'Inter', system-ui, sans-serif;
   --serif: 'Cormorant Garamond', Georgia, serif;
 
-  /* One ink, eight weights of presence. Hierarchy comes from opacity. */
-  --ink: rgba(255, 255, 255, 0.93);
+  /* One ink, eight weights of presence. Hierarchy comes from opacity.
+     The top rung is FULL white. 0.93 was a 7 % tax that bought no visible
+     hierarchy — nobody reads a 40 px numeral as subordinate because it is
+     237/255 — and it cost real contrast where there is none to spare: measured
+     on a real noon frame, the speed numeral's ink sat at sRGB 237 against a
+     ground of 131, which is 3.15:1 where full white on the same ground is
+     3.69:1. Hierarchy on this screen is 40 px against 9 px. */
+  --ink: rgba(255, 255, 255, 1);
   --ink-1: rgba(255, 255, 255, 0.78);
   --ink-2: rgba(255, 255, 255, 0.62);
   --ink-3: rgba(255, 255, 255, 0.46);
@@ -23,11 +29,31 @@
      they lost at both ends at once — 2.1:1 against mid water, 4.3:1 against a
      night sea, and 1.0:1 against foam. A mark has to span its ground, not share
      it. 0.7 puts the caps at 179 with the contour holding the dark end, which is
-     a 4-stop span either way and reads on all three. */
-  --ink-l: rgba(255, 255, 255, 0.7);
+     a 4-stop span either way and reads on all three.
 
-  /* Warm accent, used only for wind and for trouble. Never saturated. */
-  --warm: rgba(233, 180, 119, 0.9);
+     0.7 was still not enough, and this time the evidence comes from the running
+     game rather than a plate. `.tmp/uiink.mjs` freezes the engine, shoots the
+     frame twice — once as it renders, once with the mark set to
+     `visibility: hidden`, which removes the glyph and its shadow but not its
+     box — and differences the two, so the ground is the exact pixels the glyph
+     covers. Every 9 px cap came back at sRGB 176-204 while the sea under it ran
+     174-230: on foam the ink was DARKER than its own ground, so it contributed
+     nothing and the mark hung entirely on the contour. And 178 is the ceiling of
+     the ALPHA, not of the glyph — peak coverage was already 1.0, so there was
+     nothing to buy anywhere else. Full white puts the same cap at 255: 4.6:1 on
+     a mid-tone sea where 0.7 measured 2.0:1, and on pale foam it hands the job
+     back to the contour, which wins there anyway (5.7-9.0:1 measured). Neither
+     end loses.
+
+     Hierarchy is unaffected: 9 px against a 40 px numeral, 500 weight,
+     uppercase, tracked 0.11em. Size and case carry it. */
+  --ink-l: rgba(255, 255, 255, 1);
+
+  /* Warm accent, used only for wind and for trouble. Never saturated.
+     Full alpha for the same reason as --ink: at 0.9 the arrow composited to
+     sRGB 179 against a golden-hour sea of 118, worth 2.1:1, and the 10 % was
+     buying no restraint that the hue was not already buying. */
+  --warm: rgba(233, 180, 119, 1);
   --warm-2: rgba(233, 180, 119, 0.5);
   --warm-3: rgba(233, 180, 119, 0.22);
 
@@ -83,6 +109,8 @@
      Over a night sea near-black on near-black is arithmetically a no-op, so all
      of this costs nothing where nothing is needed. */
   --contour:
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 0.5px rgba(var(--shade), 1),
     0 0 1px rgba(var(--shade), 0.95),
     0 0 1px rgba(var(--shade), 0.95),
     0 0 1px rgba(var(--shade), 0.9),
@@ -97,11 +125,24 @@
      shape of itself. Six layers, none wider than 2 px, and the wide tail cut
      right back. Checked by eye at 3x in `.tmp/uizoom.mjs`, because no contrast
      ratio can tell you that a counter has closed up. */
+     Two more 1 px layers and one more 2 px layer went in after the in-engine
+     measurement: the darkest decile of a cap's own pixels was landing at sRGB
+     26-51 over a sea of 62-130, i.e. only 59 % coverage where the stacking
+     arithmetic allows ~0.9. A 1 px blur puts roughly 0.45 coverage one pixel
+     out from a 1 px stem, so each layer contributes 0.45 x 0.95 and the ring
+     needs more layers, not a wider radius, to close the gap. Radius is
+     unchanged, so no counter closes. */
   --contour-sm:
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 1px rgba(var(--shade), 0.95),
+    0 0 1px rgba(var(--shade), 0.95),
     0 0 1px rgba(var(--shade), 0.95),
     0 0 1px rgba(var(--shade), 0.95),
     0 0 1px rgba(var(--shade), 0.95),
     0 0 2px rgba(var(--shade), 0.9),
+    0 0 2px rgba(var(--shade), 0.85),
     0 0 2px rgba(var(--shade), 0.7),
     0 0 3.5px rgba(var(--shade), 0.4),
     0 1px 1.5px rgba(var(--shade), 0.5);
@@ -110,6 +151,8 @@
      scale with its type or it stops being a contour and becomes a cloud — so the
      tight layers are stacked and the 15 px tail is left exactly where it was. */
   --contour-lg:
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 0.5px rgba(var(--shade), 1),
     0 0 1.5px rgba(var(--shade), 0.92),
     0 0 1.5px rgba(var(--shade), 0.9),
     0 0 3px rgba(var(--shade), 0.85),
@@ -122,10 +165,16 @@
      Blur only, never spread: a spread on a 1 px rule draws a little outlined box
      around it, which is a lozenge again at 3 px across. */
   --contour-rule:
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 0.5px rgba(var(--shade), 1),
+    0 0 0.5px rgba(var(--shade), 1),
     0 0 1.5px rgba(var(--shade), 0.98),
+    0 0 1.5px rgba(var(--shade), 0.98),
+    0 0 1.5px rgba(var(--shade), 0.95),
     0 0 1.5px rgba(var(--shade), 0.95),
     0 0 1.5px rgba(var(--shade), 0.9),
     0 0 3px rgba(var(--shade), 0.8),
+    0 0 3px rgba(var(--shade), 0.7),
     0 0 3px rgba(var(--shade), 0.6),
     0 0 7px rgba(var(--shade), 0.35);
 
@@ -633,16 +682,20 @@ body {
 }
 
 /* The dark understroke. Wide enough to leave a hairline of shade all round the
-   warm arrow, so it reads over white water as well as over a night sea. */
+   warm arrow, so it reads over white water as well as over a night sea.
+   0.92, not 0.8: a mid-value warm arrow can never out-brighten a mid-value sea,
+   so the understroke is the only mark here that can span the ground, and at 0.8
+   it was sitting at sRGB 31 where near-black is worth another two thirds of a
+   stop. Geometry unchanged — width would make it a blob, alpha does not. */
 .mw-stem-u {
-  stroke: rgba(var(--shade), 0.8);
+  stroke: rgba(var(--shade), 0.92);
   stroke-width: 4.4;
   stroke-linecap: round;
 }
 
 .mw-head-u {
-  fill: rgba(var(--shade), 0.8);
-  stroke: rgba(var(--shade), 0.8);
+  fill: rgba(var(--shade), 0.92);
+  stroke: rgba(var(--shade), 0.92);
   stroke-width: 3;
   stroke-linejoin: round;
 }
@@ -1255,7 +1308,10 @@ body {
   right: 0;
   bottom: 0;
   height: 1px;
-  background: var(--ink-3);
+  /* Full ink. This rule is now the ONLY thing marking which mode is live, so it
+     cannot be the faintest mark on screen — and a 1 px hairline has no interior
+     to protect, so brightness is the only lever it has. */
+  background: var(--ink);
   box-shadow: var(--contour-rule);
   opacity: 0;
   transition: opacity 0.25s;
@@ -1282,22 +1338,27 @@ body {
   margin: -14px -4px -15px;
 }
 
-.modesw-b:hover {
-  color: var(--ink-1);
+/* Hover shows the rule at part strength instead of changing the word's colour.
+   Both words are full white now — the state lives in the rule — so a hover that
+   moved the colour could only move it DOWN, i.e. make the thing you are pointing
+   at harder to read. */
+.modesw-b:hover::after {
+  opacity: 0.45;
 }
 
-.modesw-b[aria-checked='true'] {
-  color: var(--ink);
+.modesw-b[aria-checked='true']:hover::after {
+  opacity: 1;
 }
 
-/* Was the numerically worst mark in the interface — 2.3:1 over foam, because a
-   1 px hairline at 0.32 alpha with a two-layer ring has almost nothing on either
-   side of the ground. It is only a separator between two words, but a mark that
-   disappears is a mark that should not have been drawn. */
+/* Was the numerically worst mark in the interface — 1.7:1 over storm foam,
+   because a 1 px hairline at 0.46 alpha composites to sRGB 149 and a sea runs
+   right through that. It is only a separator between two words, but a mark that
+   disappears is a mark that should not have been drawn. It stays quiet on area:
+   1x10 px against two tracked words. */
 .modesw-d {
   width: 1px;
   height: 10px;
-  background: var(--ink-3);
+  background: var(--ink-l);
   box-shadow: var(--contour-rule);
 }
 

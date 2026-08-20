@@ -27,6 +27,10 @@ ${CLOUD_LIGHTING_GLSL}
  * The start offset inside the first step is interleaved-gradient noise advanced
  * by the golden ratio per frame, which is what turns the visible slab banding of
  * a 40-step march into high-frequency noise the temporal filter can eat.
+ *
+ * On top of that the buffer carries its own half-texel ray offset per frame, so
+ * the temporal filter also supersamples the SILHOUETTE rather than only the
+ * march. See the long comment in main().
  */
 export const CLOUD_MARCH_FRAG = /* glsl */ `
 ${HEAD}
@@ -42,7 +46,41 @@ uniform float uSteps;
 uniform float uShafts;
 
 void main(){
-  vec2 ndc = vUv * 2.0 - 1.0;
+  /*
+   * SUB-TEXEL RAY JITTER — the fix for the stair-stepped cloud silhouette.
+   *
+   * The march runs at half width and half height and the density field is
+   * thresholded hard ('density > 0.0015', and sigma * dt * 1000 saturates the
+   * step transmittance within a hair of that), so the alpha edge of a cloud is
+   * very nearly binary AT HALF RESOLUTION. Four bilinear taps in the sky shader
+   * soften that staircase but cannot remove it: no reconstruction filter can
+   * recover an edge position the buffer never sampled.
+   *
+   * So sample it. The whole buffer is offset by ONE low-discrepancy 2D sample
+   * per frame — the R2 / Roberts sequence, which covers the unit square evenly
+   * for any prefix, and uFrameIndex cycles 0..63 so the set is fixed and
+   * repeatable. Over the ~20 frames the temporal filter integrates, each edge
+   * texel therefore sees the true edge at ~20 sub-texel positions and converges
+   * to its correct partial coverage. This is ordinary supersampling; it costs
+   * two 'fract' and one madd per ray and no extra fetch.
+   *
+   * It survives the resolve's neighbourhood clamp, which is the part that had to
+   * be checked rather than assumed. That clamp measures how far it had to move
+   * the history ('moved'), not how far history is from the current frame — and a
+   * history sample displaced by under one texel is still inside the min/max of
+   * the current 3x3, so the clamp does not bite, 'moved' stays near zero and the
+   * accumulation is allowed to do the averaging.
+   *
+   * This offset is NOT the same thing as TAA's jitter and is deliberately not
+   * undone. Clouds.render still hands us the UNJITTERED projection in
+   * uRayMatrix, precisely so that TAA's offset cannot enter the reprojection;
+   * this offset is our own, is bounded by half a half-res texel (one full-res
+   * pixel), and the resolve reprojects with the unjittered ray on purpose — the
+   * resulting sub-texel mismatch IS the blur that antialiases the edge.
+   */
+  vec2 sub = vec2(fract(uFrameIndex * 0.7548776662),
+                  fract(uFrameIndex * 0.5698402909)) - 0.5;
+  vec2 ndc = (vUv + sub / uResolution) * 2.0 - 1.0;
   vec4 hp = uRayMatrix * vec4(ndc, 1.0, 1.0);
   vec3 dir = normalize(hp.xyz / hp.w - uCameraPosW);
 

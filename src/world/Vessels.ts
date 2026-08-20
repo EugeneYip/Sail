@@ -205,6 +205,38 @@ export class Vessels {
     this.nextEvent = MEAN_GAP_S * 4;
   }
 
+  /**
+   * Put one of each hull close aboard, on the beam, so a reviewer can actually
+   * look at the construction instead of a three-pixel silhouette.
+   */
+  showcaseNear(world: World): void {
+    const ship = world.ship;
+    // On the bow, not abeam: a chase camera sees about 55 degrees and anything
+    // truly on the beam is off the edge of the frame.
+    const ranges = [230, 380, 640];
+    for (let t = 0; t < VESSEL_SPECS.length; t++) {
+      const slot = this.vessels.find((v) => !v.active);
+      if (!slot) break;
+      const bearing = ship.heading + (t % 2 === 0 ? 1 : -1) * (0.30 + t * 0.09);
+      slot.type = t;
+      slot.flavour = 'crossing';
+      slot.x = ship.position.x + Math.sin(bearing) * ranges[t];
+      slot.z = ship.position.z - Math.cos(bearing) * ranges[t];
+      slot.course = ship.heading + Math.PI * 0.55;
+      slot.heading = slot.course;
+      slot.tack = 1;
+      slot.tackTimer = 400;
+      slot.speed = 2;
+      slot.heel = 0;
+      slot.pitch = 0;
+      slot.scale = 1;
+      slot.tint = 1;
+      slot.active = true;
+      if (!this.batches[t]) this.pendingBuild = t;
+    }
+    this.nextEvent = MEAN_GAP_S * 8;
+  }
+
   private ensureBatch(type: number): boolean {
     if (this.batches[type]) return true;
     // One hull built per frame at most: the whole geometry is well under a

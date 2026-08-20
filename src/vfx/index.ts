@@ -44,10 +44,19 @@ import { VfxWeather } from './VfxWeather';
  *
  *    Foam (R) is persistent: decayed each frame with a tau of 9 s in calm air
  *    down to 4 s in a gale, and topped up with a MAX blend so it saturates
- *    rather than running away. It is deliberately CAPPED at 0.78, never 1.0 —
- *    consumers amplify it (the ocean surface does
- *    `saturate((foam * 1.35 - breakup * 0.55) * 2.0)`) and a channel that
- *    reaches 1.0 leaves no ragged edge left to erode. Elevation and slope (GBA)
+ *    rather than running away.
+ *
+ *    R IS A COVERAGE FRACTION, NOT AN ALPHA, and that is a contract change worth
+ *    reading. It is capped at 0.92, never 1.0. A consumer must treat the value as
+ *    the fraction of a pixel that aerated water covers and threshold its OWN
+ *    high-frequency field against it — the ocean surface does
+ *    `linstep(1 - c - w, 1 - c + w, flattenedNoise)` — because this field spans
+ *    1024 m over its texture and therefore carries nothing finer than a metre.
+ *    It physically cannot supply near-hull detail; the consumer has to add it.
+ *    Amplifying the value and clamping it, which is what the ocean used to do,
+ *    turns a coverage of 0.18 into a mean alpha of 0.31 spread over the whole
+ *    footprint, and a uniform partial wash bounded by a smooth contour is a flat
+ *    pale plate. Elevation and slope (GBA)
  *    are zeroed and fully re-rendered each frame from the ship's track, because
  *    the Kelvin pattern is stationary in the ship's frame — that is what keeps
  *    it crisp and lets it curve correctly through a turn.

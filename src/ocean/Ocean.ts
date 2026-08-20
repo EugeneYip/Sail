@@ -219,6 +219,7 @@ export class Ocean implements Module, IOcean {
       uFoamAmount: { value: 1 },
       uFoamThreshold: { value: 0.79 },
       uFoamSoftness: { value: 0.08 },
+      uFoamCover: { value: 0 },
       uWake: { value: this.stub },
       uWakeMatrix: { value: new THREE.Matrix3() },
       uWakeStrength: { value: 0 },
@@ -311,11 +312,20 @@ export class Ocean implements Module, IOcean {
     // 0.1 and the breakup field then subtracted more than that, leaving a full
     // gale with no whitecaps at all.
     this.material.uniforms.uFoamSoftness.value = 0.055 + 0.06 * cover;
-    // OPACITY, not gain. The threshold above is what carries the coverage now, so
-    // scaling the mask as well double-counts the wind: at 1.9 this saturated a
-    // gale to 100% foam and turned the whole sea into a white sheet with the
-    // detail texture's tiling showing through it as diagonal streaks.
-    this.material.uniforms.uFoamAmount.value = 0.5 + 0.5 * cover;
+    // COVERAGE INSIDE THE SELECTED AREA, not gain and no longer an opacity. The
+    // fold threshold above picks WHICH surface is breaking; this says what
+    // fraction of that surface the froth actually covers, and the shader now
+    // renders it as area rather than as alpha (see the coverage note in
+    // shaders/surface.ts). A breaking crest is 70-100% white, so 0.5 was simply
+    // wrong once the number meant what it says — and under the old
+    // amplify-and-clamp form it could not be raised, because 0.5 * 1.7 already
+    // saturated. This is the headroom the waterline froth was reported to need.
+    this.material.uniforms.uFoamAmount.value = 0.72 + 0.28 * cover;
+    // Published for the far-field whitecap substitute: past the distance where
+    // mipping drives the Jacobian to 1 the fold mask cannot locate a whitecap,
+    // so the shader falls back to this statistic and lets its own breakup field
+    // place them. Without it a gale's horizon has no white on it at all.
+    this.material.uniforms.uFoamCover.value = cover;
   }
 
   /* ------------------------------------------------------------------ *

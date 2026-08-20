@@ -329,17 +329,29 @@ void main(){
   float rudFoam = rud * min(abs(vRudder) * 3.0, 1.0) * (0.4 + 0.9 * detail);
 
   float gate = smoothstep(0.05, 0.30, uSpeedN);
-  float foam = hullFoam * 0.72 + coreFoam * 0.62 + armFoam * 1.00 +
+  // hullFoam 0.72 -> 0.95. This is the band clinging to the topsides — the froth
+  // the owner is closest to and the one reported as too sparse. It could not be
+  // raised while the consumer amplified this channel and clamped it, because the
+  // band was already the first thing to saturate; the ocean surface now reads the
+  // channel as COVERAGE and tears it with its own octaves, so more here buys a
+  // denser torn band instead of a wider white slab.
+  float foam = hullFoam * 0.95 + coreFoam * 0.62 + armFoam * 1.00 +
                crestFoam * 0.34 + rudFoam * 0.55;
   foam *= gate * vFade;
   // Chop tears the wake apart faster.
   foam *= mix(1.0, 0.72, uChop);
-  // CEILING, not saturate. Downstream this channel is amplified (the ocean
-  // surface currently does 'saturate((foam * 1.35 - breakup * 0.55) * 2.0)'), so
-  // anything reaching 1.0 here becomes a flat, pure-white, texture-free slab with
-  // no ragged edge left to erode. Holding the peak at 0.78 keeps the brightest
-  // froth just below that and lets the breakup noise still bite.
-  foam = min(foam * (0.66 + 0.5 * bubble), 0.78);
+  // CEILING, not saturate — but the reason has changed and so has the number.
+  //
+  // It used to be 0.78 because the consumer amplified this channel and clamped
+  // it ('saturate((foam - (breakup - 0.5) * 0.42) * 1.7)'), so anything near 1.0
+  // here became a flat, pure-white, texture-free slab with no ragged edge left
+  // to erode. The ocean surface now treats the channel as a COVERAGE FRACTION
+  // and thresholds a flattened noise field against it, which cannot saturate an
+  // area it was not given: 0.92 here reaches 0.81 coverage in the froth band,
+  // i.e. four fifths solid with a fifth of clear water torn through it, and the
+  // edge is decided by the ocean's own 5 cm octave rather than by this value.
+  // A ceiling is still wanted so the band is never a perfect occluder.
+  foam = min(foam * (0.66 + 0.5 * bubble), 0.92);
 
   gl_FragColor = vec4(foam, 0.0, 0.0, 0.0);
 #else

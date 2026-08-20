@@ -26,7 +26,7 @@
  */
 
 import * as THREE from 'three';
-import type { World } from '../../types';
+import type { SailState, World } from '../../types';
 import { GLSL, lwFloat } from '../../util/glsl';
 import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
 import { JIB_CUT, JIB_IDS, MASTS, PART, SAIL_YARDS, SPANKER_CLEW, squareCut } from '../dims';
@@ -133,73 +133,7 @@ export function buildSails(
     u.uSailInfo.value.push(new THREE.Vector4(0, 0, 0, 0));
   }
 
-  /** Sail index -> 1 for fore-and-aft, 0 for square. Drives the luff-side flip. */
-  const isFA = new Uint8Array(n);
-  const drawn: number[] = [];
-  let area = 0;
-
-  for (let i = 0; i < n; i++) {
-    const s = sails[i];
-    const A = u.uSailA.value[i];
-    const B = u.uSailB.value[i];
-    const C = u.uSailC.value[i];
-    const D = u.uSailD.value[i];
-    const info = u.uSailInfo.value[i];
-    // Decorrelate the shiver of neighbouring sails.
-    const seed = (i * 0.6180339887498949) % 1;
-
-    const yard = SAIL_YARDS.find((y) => y.id === s.id);
-    const jib = JIB_IDS.indexOf(s.id as (typeof JIB_IDS)[number]);
-
-    if (yard) {
-      const yf = frame.yards.find((v) => v.spec.id === yard.id);
-      if (!yf) continue;
-      const cut = squareCut(yard);
-      // The head is bent to a jackstay on the FORE side of the yard, and the
-      // foot carries the mast's own rake so the cloth hangs parallel to the
-      // spar instead of crossing it. Both matter: the mast moves ~0.43 m forward
-      // over the drop of a course while the sail used to hang plumb, so the
-      // lower third of every square sail had the mast straight through it.
-      const rake = yard.mast < MASTS.length ? Math.tan(MASTS[yard.mast].rake) : 0;
-      const hy = yf.centre.y;
-      // The jackstay is an iron rod along the yard's FORWARD face, so the head
-      // is bent a whole radius forward of the spar's axis, not a third of one.
-      // At 0.35 the cloth started inside the yard, and with any camber at all
-      // it started inside the forward-most lower shrouds too.
-      const hz = yf.centre.z - (yard.radius + JACKSTAY_STANDOFF_M);
-      const fy = hy - cut.drop;
-      const fz = hz - cut.drop * rake;
-      A.set(-cut.headHalf, hy, hz);
-      B.set(cut.headHalf, hy, hz);
-      C.set(cut.footHalf, fy, fz);
-      D.set(-cut.footHalf, fy, fz);
-      info.set(yard.part, 0, cut.roach, seed);
-      area += quadArea(A, B, C, D);
-    } else if (jib >= 0) {
-      const stay = frame.headStays[jib];
-      const cut = JIB_CUT[jib];
-      const run = 1 / Math.hypot(1, cut.rise);
-      A.copy(stay.head);
-      B.copy(stay.head);
-      D.copy(stay.tack);
-      C.set(stay.tack.x, stay.tack.y + cut.foot * cut.rise * run, stay.tack.z + cut.foot * run);
-      info.set(PART.JIB0 + jib, 1, 0, seed);
-      isFA[i] = 1;
-      area += quadArea(A, B, C, D);
-    } else if (s.id === 'spanker') {
-      const sp = frame.spanker;
-      A.copy(sp.gaffPivot);
-      B.copy(sp.gaffEnd);
-      D.copy(sp.boomPivot);
-      C.copy(sp.boomPivot).lerp(sp.boomEnd, SPANKER_CLEW);
-      info.set(PART.BOOM, 1, 0, seed);
-      isFA[i] = 1;
-      area += quadArea(A, B, C, D);
-    } else {
-      continue;
-    }
-    drawn.push(i);
-  }
+  const { isFA, drawn, area } = writeSailCuts(u, sails, frame);
 
   let res = GRID[Math.max(0, Math.min(3, quality))];
   let geo = makeSailGrid(res[0], res[1], drawn);
@@ -288,6 +222,90 @@ export function buildSails(
       depth.dispose();
     },
   };
+}
+
+/**
+ * The flat cut of every sail: four corners and an info vector each.
+ *
+ * Split out of `buildSails` so it can be run with no renderer at all —
+ * `.tmp/ropecpu.mjs` calls this and `buildLines` to measure rope-through-canvas
+ * in plain node. A probe that reimplemented the cut would drift from it, and
+ * has: a sheet started a metre from the clew it is bent to because two places
+ * built the same corner.
+ */
+export function writeSailCuts(
+  u: SailUniforms, sails: readonly SailState[], frame: RigFrame,
+): { isFA: Uint8Array; drawn: number[]; area: number } {
+  const n = sails.length;
+  /** Sail index -> 1 for fore-and-aft, 0 for square. Drives the luff-side flip. */
+  const isFA = new Uint8Array(n);
+  const drawn: number[] = [];
+  let area = 0;
+
+  for (let i = 0; i < n; i++) {
+    const s = sails[i];
+    const A = u.uSailA.value[i];
+    const B = u.uSailB.value[i];
+    const C = u.uSailC.value[i];
+    const D = u.uSailD.value[i];
+    const info = u.uSailInfo.value[i];
+    // Decorrelate the shiver of neighbouring sails.
+    const seed = (i * 0.6180339887498949) % 1;
+
+    const yard = SAIL_YARDS.find((y) => y.id === s.id);
+    const jib = JIB_IDS.indexOf(s.id as (typeof JIB_IDS)[number]);
+
+    if (yard) {
+      const yf = frame.yards.find((v) => v.spec.id === yard.id);
+      if (!yf) continue;
+      const cut = squareCut(yard);
+      // The head is bent to a jackstay on the FORE side of the yard, and the
+      // foot carries the mast's own rake so the cloth hangs parallel to the
+      // spar instead of crossing it. Both matter: the mast moves ~0.43 m forward
+      // over the drop of a course while the sail used to hang plumb, so the
+      // lower third of every square sail had the mast straight through it.
+      const rake = yard.mast < MASTS.length ? Math.tan(MASTS[yard.mast].rake) : 0;
+      const hy = yf.centre.y;
+      // The jackstay is an iron rod along the yard's FORWARD face, so the head
+      // is bent a whole radius forward of the spar's axis, not a third of one.
+      // At 0.35 the cloth started inside the yard, and with any camber at all
+      // it started inside the forward-most lower shrouds too.
+      const hz = yf.centre.z - (yard.radius + JACKSTAY_STANDOFF_M);
+      const fy = hy - cut.drop;
+      const fz = hz - cut.drop * rake;
+      A.set(-cut.headHalf, hy, hz);
+      B.set(cut.headHalf, hy, hz);
+      C.set(cut.footHalf, fy, fz);
+      D.set(-cut.footHalf, fy, fz);
+      info.set(yard.part, 0, cut.roach, seed);
+      area += quadArea(A, B, C, D);
+    } else if (jib >= 0) {
+      const stay = frame.headStays[jib];
+      const cut = JIB_CUT[jib];
+      const run = 1 / Math.hypot(1, cut.rise);
+      A.copy(stay.head);
+      B.copy(stay.head);
+      D.copy(stay.tack);
+      C.set(stay.tack.x, stay.tack.y + cut.foot * cut.rise * run, stay.tack.z + cut.foot * run);
+      info.set(PART.JIB0 + jib, 1, 0, seed);
+      isFA[i] = 1;
+      area += quadArea(A, B, C, D);
+    } else if (s.id === 'spanker') {
+      const sp = frame.spanker;
+      A.copy(sp.gaffPivot);
+      B.copy(sp.gaffEnd);
+      D.copy(sp.boomPivot);
+      C.copy(sp.boomPivot).lerp(sp.boomEnd, SPANKER_CLEW);
+      info.set(PART.BOOM, 1, 0, seed);
+      isFA[i] = 1;
+      area += quadArea(A, B, C, D);
+    } else {
+      continue;
+    }
+    drawn.push(i);
+  }
+
+  return { isFA, drawn, area };
 }
 
 /** Area of the flat cut, for the build-time sanity number in world.stats. */

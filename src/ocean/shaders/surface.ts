@@ -216,6 +216,7 @@ uniform float uHasReflection;
 uniform float uFoamAmount;
 uniform float uFoamThreshold;   // fold below which a crest is breaking
 uniform float uFoamSoftness;    // width of the fold ramp, in units of fold
+uniform float uFoamCover;       // Monahan whitecap coverage for this wind, 0..1
 
 varying vec4 vWorldDist;
 varying vec4 vAbsMisc;
@@ -382,6 +383,38 @@ void main(){
   // resolution would have rendered, so it is roughness at every distance.
   lostVar += uSlopeVarTail;
 
+  // CAPILLARY RIPPLE. The line above is right for anything the pixel cannot
+  // resolve — but within a few tens of metres the pixel CAN resolve part of that
+  // tail, and rolling ALL of it into roughness is why the near field rendered as
+  // smooth glass between the cascade's waves. Cox & Munk's total mean-square
+  // slope is dominated by the centimetre ripple no FFT grid carries, so
+  // 'uSlopeVarTail' is large (0.045 at a fresh breeze, i.e. 0.21 rms of slope
+  // going begging).
+  //
+  // Only the part of the tail that is actually resolvable comes back. The tail
+  // spans the finest cascade's 25 cm down to 1.7 mm capillaries — 7.2 octaves —
+  // and a slope spectrum is roughly flat per octave, so the 2.6 octaves between
+  // 25 cm and 4 cm are RIP_BAND of it. Whatever is restored here is subtracted
+  // from 'lostVar' below, or the same water is counted twice: once as visible
+  // slope and once as the roughness that exists precisely because it is not.
+  float ripRes = 1.0 - smoothstep(0.020, 0.130, pxWorld);
+  if (ripRes > 0.004) {
+    const float RIP_BAND = 0.35;
+    // Measured rms of |d noise2 / d p| per axis, for the exact noise2 in
+    // src/util/glsl.ts: 0.8828 (200k samples, central differences). Written as a
+    // measurement so the amplitude below is a conversion and not a taste knob.
+    const float RIP_GRAD = 0.8828;
+    float restore = uSlopeVarTail * RIP_BAND * ripRes;
+    // Two octaves sharing the slope variance equally, so each carries
+    // restore/2 of the total and restore/4 per axis.
+    float amp = sqrt(restore * 0.5) / (RIP_GRAD * 1.41421356);
+    // Drift with the wind-driven surface layer rather than sitting still in
+    // world space: ~3% of wind speed is the classic surface drift.
+    vec2 rp = vAbs + uWind.xz * (uTime * 0.03);
+    slope += (noise2d_d(rp * 2.2).yz + noise2d_d(rp * 5.7 + 17.3).yz) * amp;
+    lostVar = max(lostVar - restore, 0.0);
+  }
+
   if (uWetness > 0.01) slope += rainRipple(vAbs, uWetness).xz;
 
   // Normal of the *displaced* surface: with horizontal displacement the height
@@ -427,25 +460,110 @@ void main(){
   // got, across the one boundary where that is most visible — and at a fresh
   // breeze the buffer was empty every time, because Foam.ts was thresholding
   // below the whole fold distribution.
-  float foam = max(instant, persistent * inWindow);
-  // The wake channel is capped at 0.78 by contract and consumers are expected to
-  // amplify it — but taking it at face value here and then applying the 1.7 gain
-  // below drove the whole wake footprint to a saturated 1.0, which is why it read
-  // as flat white paint rather than foam. Leave headroom for the breakup field to
-  // carve it up.
-  foam = max(foam, wakeFoam * 0.62);
+  float cover = max(instant, persistent * inWindow);
+  // The wake channel is capped at 0.78 by contract and consumers amplify it.
+  // 0.88 puts the froth band hugging the topsides at 0.69 COVERAGE — a band that
+  // is two-thirds solid and torn at its edges, which is what a hull at speed
+  // carries. Under the old amplify-and-clamp form the same 0.78 saturated to a
+  // flat 1.0 across the whole footprint, so the number could not be raised.
+  cover = max(cover, wakeFoam * 0.88);
 
-  vec3 fd = texture2D(uFoamDetail, vAbs * 0.16).rgb;
-  vec3 fd2 = texture2D(uFoamDetail, vAbs * 0.041 + 0.37).rgb;
-  float breakup = mix(fd.r, fd2.r, 0.5);
-  // Ragged edges, WITHOUT eating the light stuff. Subtracting the breakup field
-  // outright meant a patch only survived if it was already stronger than the
-  // noise floor (~0.2), so every whitecap below that simply vanished and a Force
-  // 6 sea rendered with no whitecaps at all. Centring the field on zero makes it
-  // redistribute coverage into ragged islands instead of removing it.
-  foam = saturate1((foam - (breakup - 0.5) * 0.42) * 1.7);
+  // FAR-FIELD WHITECAPS. The Jacobian says WHERE the surface is breaking, and it
+  // can only say it while the displacement is still resolved: the explicit LOD
+  // above mips the cascades by pixel footprint, which drives 'fold' to exactly
+  // 1.0 and 'instant' to 0. Past a few hundred metres a full gale therefore
+  // rendered with no whitecaps at all while the near field had 18% — and the
+  // horizon of a storm with no white on it is the single loudest tell in the
+  // frame. The whitecap STATISTIC does not change with distance, only our
+  // ability to say where, so wherever the fold has gone sub-texel the coverage
+  // is handed to Monahan's law and the breakup field below decides placement.
+  float slopeVarTotal = max(uSlopeRms * uSlopeRms, 1e-6);
+  float carried = max(slopeVarTotal - lostVar, 1e-6);
+  float foldLive = saturate1(carried / slopeVarTotal * 3.3);
+  cover = max(cover, uFoamCover * (1.0 - foldLive));
+
+  /* COVERAGE IS A THRESHOLD ON NOISE, NOT A TINT.
+   *
+   * This is the fix for the near-field foam plate, and it is one mechanism for
+   * three separate reported defects.
+   *
+   * What was here subtracted a zero-mean noise field from the coverage and
+   * multiplied by 1.7. That form cannot produce foam. Integrate it over a
+   * uniform breakup field and a coverage of 0.18 renders a MEAN ALPHA OF 0.31
+   * spread across the whole footprint: 100% of the area goes a third white
+   * instead of 18% of it going white. A uniform partial wash bounded by a smooth
+   * contour is a pale plate — and the wake field spans 1024 m over its texture,
+   * so its own envelope carries nothing finer than a metre and there was nothing
+   * else in the pixel to break it up. The same integral at coverage ZERO returns
+   * 0.089, so the form also laid a 9% white haze over the entire open sea.
+   *
+   * The replacement thresholds a histogram-FLATTENED field (see
+   * 'textures.ts::flatten'). For a field uniform on 0..1,
+   * E[linstep(t - w, t + w, d)] = 1 - t at ANY ramp width, and any zero-mean
+   * perturbation of t leaves that expectation untouched. So the boundary can be
+   * torn with as much high-frequency detail as the pixel can resolve while the
+   * AREA stays exactly the coverage the physics asked for: 0.18 renders as 18%
+   * of the area at full brightness, which is foam, and 0 renders as nothing.
+   *
+   * Four octaves, 24 m down to 43 cm — feature size is an eighth of the tile, so
+   * 3.0 m, 0.81 m, 0.21 m and 5.3 cm. Each is rotated and drifts at its own
+   * rate, so the visible repeat is the beat of four periods rather than the
+   * shortest of them (water tiling is an automatic rubric failure) and the froth
+   * churns instead of sliding under the hull as wallpaper.
+   */
+  vec2 dr = uWind.xz * (uTime * 0.03);
+  vec2 uv0 = (vAbs + dr) * 0.041 + vec2(0.37, 0.11);
+  vec2 uv1 = rot2(0.91) * ((vAbs + dr * 1.06) * 0.154);
+  vec2 uv2 = rot2(2.13) * ((vAbs + dr * 1.14) * 0.60) + vec2(0.62, 0.29);
+  vec4 f0 = texture2D(uFoamDetail, uv0);
+  vec4 f1 = texture2D(uFoamDetail, uv1);
+  vec4 f2 = texture2D(uFoamDetail, uv2);
+  // An octave is worth READING while the pixel footprint is smaller than its
+  // features. Note that the perturbations are self-nullifying and therefore
+  // cannot be got wrong: a flattened channel mips toward its mean of 0.5, so
+  // '(tap - 0.5)' fades to zero on its own as the octave goes sub-pixel. r2 and
+  // r3 are purely there to skip the tap, and being generous with them is safe.
+  float r2 = 1.0 - smoothstep(0.070, 0.320, pxWorld);
+  float r3 = 1.0 - smoothstep(0.016, 0.080, pxWorld);
+  // r1 IS NOT in that category and its schedule is load bearing. Both decision
+  // taps are flattened, so a crossfade between them is uniform at either end —
+  // but if the fine one is still weighted after it has mipped to a constant 0.5
+  // then 'decide' becomes a constant too, and a threshold against a constant is
+  // a BINARY decision that paints or clears whole regions at once. So r1 has to
+  // reach zero while f1's 0.81 m features are still a couple of pixels across
+  // (0.42 is ~210 m at a 900-line viewport), handing the decision to f0's 3 m
+  // features, which stay resolved to about a kilometre.
+  float r1 = 1.0 - smoothstep(0.13, 0.42, pxWorld);
+  float decide = mix(f0.a, f1.a, r1);
+  // THE PERTURBATION MUST VANISH AT BOTH ENDS OF THE COVERAGE RANGE. At coverage
+  // 0 a negative excursion still opens the threshold and paints foam on clear
+  // water; at coverage 1 a positive one punches holes in solid froth. Scaling by
+  // 2*min(c, 1-c) kills both and leaves the expectation exactly c, because the
+  // scale factor depends only on the coverage and not on the noise.
+  float bite = min(cover, 1.0 - cover) * 2.0;
+  float thr = 1.0 - cover
+            + bite * ((f0.r - 0.5) * 0.60
+                    + (f2.a - 0.5) * 0.84 * r2);
+  vec2 bump = vec2(f1.g - 0.5, f1.b - 0.5) + vec2(f2.g - 0.5, f2.b - 0.5) * r2 * 1.3;
+  if (r3 > 0.004) {
+    // The only tap with a gradient steep enough to tear the boundary at the
+    // PIXEL scale with the camera at the rail, which is the range this is judged
+    // at. Branch is coherent — it is a function of distance alone.
+    vec2 uv3 = rot2(3.71) * ((vAbs + dr * 1.24) * 2.34) + vec2(0.19, 0.83);
+    vec4 f3 = texture2D(uFoamDetail, uv3);
+    thr += bite * (f3.a - 0.5) * 0.72 * r3;
+    bump += vec2(f3.g - 0.5, f3.b - 0.5) * r3 * 1.5;
+  }
+  // The ramp has to widen as the decision field's own contrast mips away, or a
+  // flattened field at a kilometre turns the coverage decision into a binary one
+  // about 0.5 and the whole far sea goes white. At w = 0.5 the linstep IS the
+  // coverage, which is the correct answer for a whitecap that is sub-pixel.
+  float wThr = mix(0.05, 0.5, smoothstep(1.2, 3.5, pxWorld));
+  float foam = linstep(thr - wThr, thr + wThr, decide);
   foam *= 1.0 - smoothstep(4000.0, 14000.0, dist) * 0.6;
-  N = normalize(N + vec3(fd.g - 0.5, 0.0, fd.b - 0.5) * foam * 1.1);
+  // Bubble relief, at the two or three scales the pixel can carry. Only where
+  // there is foam: this is the raft's own surface, not the water's.
+  N = normalize(N + vec3(bump.x, 0.0, bump.y) * foam * 1.5);
 
   /* ---- specular ---------------------------------------------------- */
   // Two regimes in one lobe: near the camera the normal map really does carry
@@ -530,7 +648,6 @@ void main(){
   // cascades' pixel fades there is a stretch where no further variance is
   // dropped, and 130-250 m is exactly where the owner sees the bands. Combining
   // the two measured identical to this one alone, so this is the whole story.
-  float carried = max(uSlopeRms * uSlopeRms - lostVar, 1e-6);
   // The 0.25 offset is what keeps the near field untouched: at 40 m the carried
   // rms is 13% of the grazing sine and cannot rectify anything.
   float macro = saturate1(sqrt(carried) / max(abs(V.y), 1e-3) - 0.25);
@@ -614,13 +731,31 @@ void main(){
   vec3 foamCol = vec3(FOAM_ALBEDO) * (skyIrr
                  + sunIrr * INV_PI * saturate1(dot(N, uSunDirection) * 0.6 + 0.4));
 
+  // FOAM MUST TAKE THE GLOSS AWAY, NOT JUST ADD WHITE, AND IT MUST TAKE EXACTLY
+  // ITS OWN COVERAGE OF IT.
+  //
+  // 'foam' is now the fraction of the pixel that aerated water covers, so the
+  // water terms are weighted by what is left uncovered. Foam is a scattering
+  // medium with no coherent reflection direction; the 10% residual is the wet
+  // film between the bubbles, which is why a whitecap still has a sheen and does
+  // not read as matte paint.
+  //
+  // The previous pair (0.72 on the reflection, 0.55 on the sun lobe) removed
+  // LESS than the coverage, and that asymmetry is not free. At golden hour the
+  // reflected horizon carries several hundred times the body radiance, so
+  // d(radiance)/d(coverage) at low coverage was dominated by the reflection it
+  // failed to remove: faint foam brightened nothing and dimmed nothing enough,
+  // and what it left behind was a broad, evenly grey wash. Coverage-proportional
+  // is both the physical answer and the one where a faint wake simply has a few
+  // white flecks in it instead of a lane of dirty ice.
+  float clear = 1.0 - 0.90 * foam;
   vec3 col = mix(body + sss, foamCol, foam);
   // The reflected sky is occluded by the neighbouring crests too, and under a
   // flat sky this is the only thing that puts any shape into the term that
   // carries most of the energy. Half strength, because a reflection gathers over
   // the whole lobe rather than from one direction.
-  col = mix(col, reflection * (0.5 + 0.5 * trough), fres * (1.0 - foam * 0.72));
-  col += sunSpec * (1.0 - foam * 0.55);
+  col = mix(col, reflection * (0.5 + 0.5 * trough), fres * clear);
+  col += sunSpec * clear;
 
   /* ---- backface: we are under the surface --------------------------- */
   if (!gl_FrontFacing) {

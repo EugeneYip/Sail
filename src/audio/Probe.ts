@@ -97,6 +97,20 @@ export interface ProbeResult {
   worstJumpDb: number;
   /** Largest jump / local jump RMS. Under `CLICK_RATIO` by construction. */
   worstRatio: number;
+  /**
+   * Coefficient of variation of the 250 ms block RMS — how much the bed MOVES.
+   *
+   * Directive 5 asks for a sea that is "never static and never busy", which is
+   * not a level, it is a shape. Near 0 is a dead drone; above ~0.5 it is pumping.
+   * Measured on the envelope rather than the spectrum because that is the axis
+   * the complaint is about.
+   */
+  envelopeCv: number;
+  /**
+   * Dominant modulation rate of that envelope, Hz. A swell breathes at a fifth
+   * of a Hz or slower; anything approaching 1 Hz reads as a tremolo.
+   */
+  envelopeRateHz: number;
   liveNodes: number;
   createdNodes: number;
   usesWorklet: boolean;
@@ -449,7 +463,7 @@ export async function probeCensus(
  *  Driving
  * ------------------------------------------------------------------ */
 
-function resolveMute(opts: ProbeOptions): BusName[] | undefined {
+export function resolveMute(opts: ProbeOptions): BusName[] | undefined {
   if (!opts.only) return opts.mute;
   const keep = new Set(opts.only);
   const out = ALL_BUSES.filter((b) => !keep.has(b));
@@ -490,7 +504,7 @@ function drive1(rig: Rig, opts: ProbeOptions, seconds: number, fps: number, spy?
   return served > 0 ? (now() - t0) / served : 0;
 }
 
-function makeSim(opts: ProbeOptions): SimView {
+export function makeSim(opts: ProbeOptions): SimView {
   const sim = createSimView();
   sim.dt = 1 / (opts.fps ?? DEFAULTS.fps);
   const s = opts.sails;
@@ -516,7 +530,7 @@ function makeSim(opts: ProbeOptions): SimView {
 }
 
 /** Apply the scene for time `t`. Never allocates. */
-function step(sim: SimView, opts: ProbeOptions, t: number, seconds: number): void {
+export function step(sim: SimView, opts: ProbeOptions, t: number, seconds: number): void {
   sim.dt = 1 / (opts.fps ?? DEFAULTS.fps);
   sim.elapsed = t;
 
@@ -721,7 +735,85 @@ function analyse(
     clickRate: clicks / measured,
     worstJumpDb: db(worstJump),
     worstRatio,
+    ...envelope(chans, start, buf.sampleRate),
   };
+}
+
+/** Block length for the envelope measure. Short enough to see a swell, long
+ * enough that broadband noise averages out instead of contributing its own
+ * variance. */
+const ENVELOPE_BLOCK_S = 0.25;
+/** Modulation rates scanned, Hz. The slowest sea LFO in Sea.ts is 1/41 s. */
+const ENVELOPE_MIN_HZ = 0.02;
+const ENVELOPE_MAX_HZ = 1.2;
+
+/**
+ * How the bed moves, as opposed to how loud it is.
+ *
+ * `cv` is the coefficient of variation of the block RMS. `rateHz` is the
+ * strongest periodicity in that series, found by a brute-force DFT over
+ * candidate rates — the series is only a few hundred points, so scanning is
+ * cheaper and clearer than padding to a power of two, and it lets the scan be
+ * bounded to rates a sea can plausibly have.
+ */
+function envelope(
+  chans: Float32Array[],
+  start: number,
+  sampleRate: number,
+): { envelopeCv: number; envelopeRateHz: number } {
+  const blockLen = Math.max(1, Math.round(ENVELOPE_BLOCK_S * sampleRate));
+  const n = Math.floor((chans[0].length - start) / blockLen);
+  if (n < 8) return { envelopeCv: 0, envelopeRateHz: 0 };
+
+  const env = new Float64Array(n);
+  for (let b = 0; b < n; b++) {
+    let sum = 0;
+    let count = 0;
+    for (const d of chans) {
+      const o = start + b * blockLen;
+      for (let i = 0; i < blockLen; i++) {
+        const v = d[o + i];
+        if (!Number.isFinite(v)) continue;
+        sum += v * v;
+        count++;
+      }
+    }
+    env[b] = count > 0 ? Math.sqrt(sum / count) : 0;
+  }
+
+  let mean = 0;
+  for (let b = 0; b < n; b++) mean += env[b];
+  mean /= n;
+  if (!(mean > 1e-12)) return { envelopeCv: 0, envelopeRateHz: 0 };
+  let varSum = 0;
+  for (let b = 0; b < n; b++) {
+    const d = env[b] - mean;
+    varSum += d * d;
+  }
+  const cv = Math.sqrt(varSum / n) / mean;
+
+  // Strongest rate in the de-meaned envelope.
+  const dt = ENVELOPE_BLOCK_S;
+  const span = n * dt;
+  let bestPow = 0;
+  let bestHz = 0;
+  const stepHz = 1 / (4 * span);
+  for (let f = ENVELOPE_MIN_HZ; f <= ENVELOPE_MAX_HZ; f += stepHz) {
+    let re = 0;
+    let im = 0;
+    for (let b = 0; b < n; b++) {
+      const ang = 2 * Math.PI * f * b * dt;
+      const v = env[b] - mean;
+      re += v * Math.cos(ang);
+      im -= v * Math.sin(ang);
+    }
+    const pow = re * re + im * im;
+    if (pow > bestPow) {
+      bestPow = pow;
+      bestHz = f;
+    }
+  }
+  return { envelopeCv: cv, envelopeRateHz: bestHz };
 }
 
 /**

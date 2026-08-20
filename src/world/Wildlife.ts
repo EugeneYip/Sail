@@ -28,7 +28,9 @@ import { Whales } from './Whales';
  *   http://127.0.0.1:5178/?showcase=all
  *   world.bus.emit('world:showcase', 'dolphins')
  *
- * Accepted names: birds, dolphins, whales, whaleclose, vessels, boston, all.
+ * Accepted names: birds, dolphins, whales, whaleclose, vessels, boston, all,
+ * and `near` — which is `all` with the whale and every hull type brought inside
+ * 500 m, so a reviewer can judge the construction rather than a silhouette.
  * The URL form is what `scripts/capture.mjs --url` needs, since the harness
  * loads the page once and never reloads it.
  */
@@ -88,12 +90,14 @@ export class Wildlife implements Module {
   }
 
   private runShowcase(world: World, which: string): void {
-    const all = which === 'all' || which === '1' || which === 'true';
+    const near = which === 'near';
+    const all = near || which === 'all' || which === '1' || which === 'true';
     if (all || which === 'birds') this.birds.showcase(world);
     if (all || which === 'dolphins') this.dolphins.showcase();
-    if (all || which === 'whales') this.whales.showcase(world, false);
-    if (which === 'whaleclose') this.whales.showcase(world, true);
-    if (all || which === 'vessels') this.vessels.showcase(world);
+    if (which === 'whales' || (all && !near)) this.whales.showcase(world, false);
+    if (near || which === 'whaleclose') this.whales.showcase(world, true);
+    if (near) this.vessels.showcaseNear(world);
+    else if (all || which === 'vessels') this.vessels.showcase(world);
   }
 
   dispose(): void {

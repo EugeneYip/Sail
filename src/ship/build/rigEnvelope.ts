@@ -33,8 +33,17 @@ import { CHANNELS } from './hull';
 import { MASTS, Station, sheerY, tAtZ, type MastSpec } from '../dims';
 import type { MastFrame, RigFrame } from './masts';
 
-/** Slots per mast: lower gang, topmast gang, topgallant gang, backstays, mast. */
-export const RIG_SLOTS = 5;
+/**
+ * Slots per mast: lower gang, topmast gang, topgallant gang, backstay fan, and
+ * the mast itself in two pieces.
+ *
+ * The mast wants two because the upper sections step FORWARD at each doubling —
+ * the topgallant of the main is 0.98 m ahead of the lower mast's axis line — and
+ * one plane biased to clear all three ended up a third of a metre ahead of the
+ * lower mast, halving the belly a course is allowed to carry at its centre for
+ * no physical reason.
+ */
+export const RIG_SLOTS = 6;
 export const RIG_N = RIG_SLOTS * 3;
 
 /**
@@ -56,6 +65,12 @@ export const RIG_KNEE_M = 0.34;
 const RIG_MARGIN_M = 0.10;
 /** Extra footprint half-width beyond the members' own spread, metres. */
 const BAND_PAD_M = 0.28;
+/**
+ * How far across a gang the cloth feels as one obstacle, metres. Canvas draping
+ * over a fan of shrouds bears on whichever is furthest forward within about
+ * half a feather of it, not on the one directly behind it.
+ */
+const FACE_REACH_M = 0.6;
 
 export interface RigEnvUniforms {
   uRigPlane: { value: THREE.Vector4[] };
@@ -196,17 +211,54 @@ interface Sample {
   z: number;
 }
 
-/** Members sampled along their length, folded to |x|. */
-function sampleMembers(ms: Member[], n = 6): Sample[] {
+/**
+ * The gang's LEADING FACE, sampled.
+ *
+ * A gang is a ruled panel: the ratlines are seized straight across from the
+ * first shroud to the last, so the surface the cloth meets is the ruling between
+ * them, and what constrains the cloth is that surface's most FORWARD z at each
+ * (x, y). Sampling the panel and keeping the minimum z per x-bin per height row
+ * gets that, and it is the whole difference between a useful limit and a useless
+ * one: fitting a plane through every member instead put the main's lower gang
+ * 1.8 m forward of itself at the masthead, because the aft shrouds' z falls away
+ * with height and a plane in (|x|, y) cannot see a spread that lies along the
+ * very axis it is constraining. It would have flattened the head of every course
+ * for no reason at all.
+ */
+function panelFace(ms: Member[], rows = 10, across = 8): Sample[] {
+  if (ms.length === 0) return [];
   const out: Sample[] = [];
-  for (const mem of ms) {
-    for (let i = 0; i <= n; i++) {
-      const t = i / n;
-      out.push({
-        x: Math.abs(THREE.MathUtils.lerp(mem.bot.x, mem.top.x, t)),
-        y: THREE.MathUtils.lerp(mem.bot.y, mem.top.y, t),
-        z: THREE.MathUtils.lerp(mem.bot.z, mem.top.z, t),
+  const a = ms[0];
+  const b = ms[ms.length - 1];
+  const row: Sample[] = [];
+  for (let j = 0; j <= rows; j++) {
+    const t = j / rows;
+    row.length = 0;
+    for (let i = 0; i <= across; i++) {
+      const g = ms.length > 1 ? i / across : 0;
+      // The ruling between the first and last member IS the ratline.
+      row.push({
+        x: Math.abs(THREE.MathUtils.lerp(
+          THREE.MathUtils.lerp(a.bot.x, a.top.x, t),
+          THREE.MathUtils.lerp(b.bot.x, b.top.x, t), g,
+        )),
+        y: THREE.MathUtils.lerp(
+          THREE.MathUtils.lerp(a.bot.y, a.top.y, t),
+          THREE.MathUtils.lerp(b.bot.y, b.top.y, t), g,
+        ),
+        z: THREE.MathUtils.lerp(
+          THREE.MathUtils.lerp(a.bot.z, a.top.z, t),
+          THREE.MathUtils.lerp(b.bot.z, b.top.z, t), g,
+        ),
       });
+      if (ms.length < 2) break;
+    }
+    // Sliding minimum across the row: cloth at one x has to clear every part of
+    // the panel it drapes over, which is everything within about half a feather.
+    for (const c of row) {
+      let z = c.z;
+      for (const o of row) if (Math.abs(o.x - c.x) <= FACE_REACH_M) z = Math.min(z, o.z);
+      out.push({ x: c.x, y: c.y, z });
     }
   }
   return out;
@@ -225,16 +277,16 @@ function fitLine(pts: Sample[], v: (s: Sample) => number): [number, number] {
 }
 
 /**
- * One envelope slot from a set of members.
+ * One envelope slot from a sampled leading face.
  *
  * `dx` — the deviation of |x| from the fitted band centre — is orthogonal to
  * {1, y} by construction, so the plane's three coefficients come out of two
  * independent fits instead of a 3x3 solve that is singular whenever the members
- * happen to run diagonally (which the lower gang does: its x is a linear
- * function of its height, so {1, |x|, y} is rank two).
+ * run diagonally (which the lower gang does: its x is a linear function of its
+ * height, so {1, |x|, y} is rank two).
  *
- * The plane is then biased forward until no member is in front of it, so the
- * limit is the whole gang's leading surface however badly the fit went.
+ * The plane is then biased forward until no sample is in front of it, so the
+ * limit is the leading face's own surface however badly the fit went.
  */
 function fitSlot(pts: Sample[]): { plane: THREE.Vector4; band: THREE.Vector4 } | null {
   if (pts.length < 2) return null;
@@ -245,8 +297,8 @@ function fitSlot(pts: Sample[]): { plane: THREE.Vector4; band: THREE.Vector4 } |
     sdd += d * d;
     sdz += d * s.z;
   }
-  // A gang whose members all lie at one |x| for a given height carries no
-  // information about how z varies across it, so do not invent a gradient.
+  // A face that lies at one |x| for a given height carries no information about
+  // how z varies across it, so do not invent a gradient.
   const b = sdd > 0.35 ? sdz / sdd : 0;
   const [a0, c0] = fitLine(pts, (s) => s.z - b * (s.x - (p + q * s.y)));
 
@@ -281,19 +333,21 @@ function fitSlot(pts: Sample[]): { plane: THREE.Vector4; band: THREE.Vector4 } |
  * sheeted course is the mast printing through, which is what a photograph of a
  * close-hauled square rigger shows.
  */
-function mastSamples(m: MastFrame): { pts: Sample[]; halfW: number } {
+function mastSamples(m: MastFrame, upper: boolean): { pts: Sample[]; halfW: number } {
   const s = m.spec;
   const pts: Sample[] = [];
   let halfW = 0;
-  const sect: [(y: number, o?: THREE.Vector3) => THREE.Vector3, number, number, number, number][] = [
-    [m.lower, s.deckY, s.lowerTop, s.lowerRadius * 1.06, s.topRadius * 1.15],
-    [m.top, s.topmastFoot, s.topmastTop, s.topRadius * 1.05, s.tgRadius * 1.25],
-    [m.tg, s.tgFoot, s.tgTop, s.tgRadius * 1.05, s.tgRadius * 0.62],
-  ];
+  const sect: [(y: number, o?: THREE.Vector3) => THREE.Vector3, number, number, number, number][] =
+    upper
+      ? [
+        [m.top, s.topmastFoot, s.topmastTop, s.topRadius * 1.05, s.tgRadius * 1.25],
+        [m.tg, s.tgFoot, s.tgTop, s.tgRadius * 1.05, s.tgRadius * 0.62],
+      ]
+      : [[m.lower, s.deckY, s.lowerTop, s.lowerRadius * 1.06, s.topRadius * 1.15]];
   const a = new THREE.Vector3();
   for (const [axis, ya, yb, r0, r1] of sect) {
-    for (let i = 0; i <= 4; i++) {
-      const t = i / 4;
+    for (let i = 0; i <= 5; i++) {
+      const t = i / 5;
       const y = THREE.MathUtils.lerp(ya, yb, t);
       const r = THREE.MathUtils.lerp(r0, r1, t);
       axis(y, a);
@@ -318,17 +372,18 @@ export function buildRigEnvelope(frame: RigFrame): RigEnvUniforms {
     const g = mastGangs(m, channelPoints(mi));
     const sets = [g.lower, g.topmast, g.tg, g.backstay];
     for (let k = 0; k < sets.length; k++) {
-      const fit = fitSlot(sampleMembers(sets[k]));
+      const fit = fitSlot(panelFace(sets[k]));
       if (!fit) continue;
       plane[mi * RIG_SLOTS + k].copy(fit.plane);
       band[mi * RIG_SLOTS + k].copy(fit.band);
     }
-    const ms = mastSamples(m);
-    const fit = fitSlot(ms.pts);
-    if (fit) {
+    for (let u = 0; u < 2; u++) {
+      const ms = mastSamples(m, u === 1);
+      const fit = fitSlot(ms.pts);
+      if (!fit) continue;
       fit.plane.w = ms.halfW + BAND_PAD_M;
-      plane[mi * RIG_SLOTS + 4].copy(fit.plane);
-      band[mi * RIG_SLOTS + 4].copy(fit.band);
+      plane[mi * RIG_SLOTS + 4 + u].copy(fit.plane);
+      band[mi * RIG_SLOTS + 4 + u].copy(fit.band);
     }
   }
 

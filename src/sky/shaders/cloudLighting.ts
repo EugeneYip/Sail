@@ -68,13 +68,15 @@ const float CLOUD_SUN_REACH_W = 1.6;
  * This march used to sample the FAR END of every step at a fixed offset —
  * 0.090, 0.239, 0.484, 0.888, 1.555 and 4.500 km — so 'tauLight' was a function
  * of the density field read on six fixed shells of a cone whose apex is the
- * sample. Fixed sample distances paint iso-distance terraces, and here they are
- * terraces in BRIGHTNESS rather than in opacity: measured in the 'golden' crop
- * as vertical striations down the sunward face of every tower, because a 19 deg
- * sun makes those shells near-vertical. Sampling a uniform random point inside
- * each step removes the shells and is also the unbiased estimator for the step,
- * which sampling its end is not — the end-sample underestimates tau wherever
- * density falls off toward the light, i.e. on exactly the sunlit faces.
+ * sample. Fixed sample distances paint iso-distance terraces, and here they
+ * would be terraces in BRIGHTNESS rather than in opacity — consistent with the
+ * vertical striations down the sunward face of the tower in the 'golden'
+ * baseline crop, since a 19 deg sun makes those shells near-vertical, though
+ * that attribution is inferred and was NOT isolated by ablation. Sampling a
+ * uniform random point inside each step removes the shells either way, and is
+ * also the unbiased estimator for the step, which sampling its end is not — the
+ * end-sample underestimates tau wherever density falls off toward the light,
+ * i.e. on exactly the sunlit faces.
  *
  * The steps are decorrelated from each other, and from the view march's own
  * offset, by a golden-ratio rotation: with one shared uniform all six samples

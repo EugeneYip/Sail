@@ -58,7 +58,7 @@ export interface RiggingResult {
 const TAR = 0;
 const MANILA = 1;
 
-class LineSet {
+export class LineSet {
   readonly a: number[] = [];
   readonly b: number[] = [];
   readonly p: number[] = [];
@@ -124,6 +124,34 @@ const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();
 const _d = new THREE.Vector3();
 
+/**
+ * Every rope, as data, with no GPU anywhere near it.
+ *
+ * Separated from the mesh so the whole rig can be built and MEASURED in plain
+ * node: `.tmp/ropecpu.mjs` calls this and `writeSailCuts` and does exact
+ * segment-vs-triangle tests against the animated cloth, which is how the
+ * rope-through-canvas counts in DIAGNOSIS are obtained. Rope routing is pure
+ * geometry — it never needed a browser, and the instrument that needed one
+ * could not be run while the GPU was busy.
+ */
+export function buildLines(sailIds: readonly string[], frame: RigFrame, quality: number): LineSet {
+  const L = new LineSet();
+  // Sail id -> slot in the cloth's uniform arrays, so a bound line can name
+  // the sail it lies against.
+  const sailSlot = new Map<string, number>();
+  sailIds.forEach((id, i) => sailSlot.set(id, i));
+
+  for (let mi = 0; mi < frame.masts.length; mi++) {
+    shrouds(L, frame.masts[mi], channelPoints(mi), quality);
+  }
+  stays(L, frame);
+  headRigging(L, frame);
+  running(L, frame, sailSlot, quality);
+  spankerRigging(L, frame);
+  flagHalyards(L, frame);
+  return L;
+}
+
 export function buildRigging(
   world: World,
   parts: PartUniforms,
@@ -133,21 +161,8 @@ export function buildRigging(
   sailU: SailUniforms,
   quality: number,
 ): RiggingResult {
-  const L = new LineSet();
-  // Sail id -> slot in the cloth's uniform arrays, so a bound line can name
-  // the sail it lies against.
-  const sailSlot = new Map<string, number>();
-  world.ship.sails.forEach((sa, i) => sailSlot.set(sa.id, i));
-
   void hull;
-  for (let mi = 0; mi < frame.masts.length; mi++) {
-    shrouds(L, frame.masts[mi], channelPoints(mi), quality);
-  }
-  stays(L, frame);
-  headRigging(L, frame);
-  running(L, frame, sailSlot, quality);
-  spankerRigging(L, frame);
-  flagHalyards(L, frame);
+  const L = buildLines(world.ship.sails.map((sa) => sa.id), frame, quality);
 
   const seg = quality >= 3 ? 12 : quality >= 2 ? 9 : 6;
   const g = makeRibbonGeometry(seg);

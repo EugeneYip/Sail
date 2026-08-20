@@ -190,7 +190,40 @@ float cloudDensity(vec2 wxz, float alt, bool detail, out float hFrac){
     float hf = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
     // Billows curl inward at the base and shred into wisps at the top.
     float mod2 = mix(hf, 1.0 - hf, saturate1(h * 5.0));
-    density = saturate1(remap(density, mod2 * uErosion, 1.0, 0.0, 1.0));
+    /*
+     * CAULIFLOWER, not cotton wool. Two separate things kept the erosion from
+     * reading as cumuliform, and neither of them was the amount.
+     *
+     * FREQUENCY. The detail volume wraps at CLOUD_DETAIL_TILE_M = 750 m and its
+     * dominant octave is Worley at 6 cells, i.e. 125 m features. The deck is
+     * actually seen from 15-40 km, and the view march's step grows to
+     * DT_MAX = 1.2 km, so a 125 m feature sits far under one sample and the
+     * temporal filter averages it to a smooth wash — which is why uErosion at
+     * 0.376 "barely registers". The lobes a cumulus is READ by are 200-600 m
+     * across, and the base volume already carries exactly that band in .b and .a
+     * (inverted Worley at 16 and 32 cells over a 6 km tile = 375 m and 187 m
+     * cells). That texel is already fetched for 'lowFbm', so moving most of the
+     * carving onto it costs no bandwidth and no extra fetch. Some weight stays
+     * on 'mod2' deliberately: the detail volume is the only field that creeps
+     * relative to the base (uDetailOffset in CloudField.update), so it is what
+     * makes a cumulus boil instead of advecting as a rigid stamp.
+     *
+     * HEIGHT. Erosion was constant through the slab. A cumulus is the opposite
+     * of constant: a soft, almost flat base at the condensation level and hard,
+     * high-contrast lobes on the crown. Ramping the erosion with height is what
+     * turns a puff into a tower.
+     *
+     * The ramp is deliberately built to average just UNDER 1 over the slab
+     * (0.30 + 1.35 * 0.5 = 0.975), so the net erosion this applies is no
+     * stronger than the flat 1.0 it replaces. Erosion removes density, and
+     * density is what CLOUD_COLUMNS_PER_RAY's coverage calibration is tuned
+     * against, so a redistribution that cannot increase the mean cannot walk the
+     * coverage fix backwards. Keep that property if these numbers are retuned.
+     */
+    float lobes = saturate1(base.b * 0.62 + base.a * 0.38);
+    float carve = mix(lobes, mod2, 0.42);
+    float crown = 0.30 + 1.35 * smoothstep(0.15, 0.85, h);
+    density = saturate1(remap(density, carve * uErosion * crown, 1.0, 0.0, 1.0));
   }
 
   return density * uDensityScale * mix(0.72, 1.35, wm.b);

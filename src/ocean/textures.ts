@@ -147,8 +147,9 @@ function flatten(f: Float32Array): void {
 
 /**
  * Foam breakup, a bubble normal, and the coverage decision field.
- *   r  bubble raft plus large-scale patchiness — the shader's coarse clumping
- *      term and the far-field wind streak
+ *   r  bubble raft over large-scale patchiness, histogram-flattened — the
+ *      shader's coarse clumping term. Flattened because it is used as a
+ *      ZERO-MEAN threshold perturbation and a biased one removes coverage.
  *   g  normal.x, b normal.z, both biased to 0.5
  *   a  the coverage DECISION field, histogram-flattened to uniform 0..1
  *
@@ -182,7 +183,7 @@ export function makeFoamDetail(): THREE.DataTexture {
       // Steep: a wide ramp puts a soft gradient back on every cell wall, which
       // is the whole thing this primitive exists to avoid.
       const bubbles = sstep(0.22, 0.62, c1 * 0.44 + c2 * 0.34 + c3 * 0.22);
-      height[j * n + i] = bubbles * 0.72 + clouds * 0.28;
+      height[j * n + i] = clouds * 0.55 + bubbles * 0.45;
 
       const d1 = cellFilm(u * 14, v * 14, 14, dec1, 17.5);
       const d2 = cellFilm(u * 31, v * 31, 31, dec2, 38.8);
@@ -195,15 +196,15 @@ export function makeFoamDetail(): THREE.DataTexture {
     }
   }
 
-  let lo = 1e9;
-  let hi = -1e9;
-  for (let i = 0; i < height.length; i++) {
-    if (height[i] < lo) lo = height[i];
-    if (height[i] > hi) hi = height[i];
-  }
-  const span = Math.max(hi - lo, 1e-5);
-  for (let i = 0; i < height.length; i++) height[i] = (height[i] - lo) / span;
-
+  // BOTH fields are flattened, and R needs it as much as A does. Min-max
+  // normalising R left it at mean 0.882 with an sd of 0.059 and 95% of its area
+  // in the top two deciles — because 'cellFilm' is deliberately flat-topped, so
+  // the sum saturates the ramp everywhere except on the films. As a threshold
+  // perturbation that is not a perturbation at all, it is a constant +0.23 bias
+  // that silently removes coverage; measured before the flatten was added.
+  // Flattening is a monotone remap, so every film edge keeps its gradient (and
+  // so does the normal derived from it) while the distribution becomes usable.
+  flatten(height);
   flatten(decide);
 
   const data = new Uint8Array(n * n * 4);
