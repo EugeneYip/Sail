@@ -1767,3 +1767,76 @@ That was a bad control, not a gap in the checker.
 `ship/shaders/{parts,sail,line}`, `vfx`, `world` go through three's chunks via
 `onBeforeCompile`, so only a real engine boot assembles them. `capture.mjs`'s zero-
 `ERROR:` console check remains their instrument, and a green here does not cover them.
+
+## 46. What the harness can and cannot resolve, measured properly at last
+
+Three agents were killed mid-task by a usage limit. Salvaging their work needed a
+cost A/B, and running it produced the number this project has needed all along.
+
+**Paired 3-vs-3, same scene (`noon`), quiet box, `rivals 0p/0b` on all six runs:**
+
+| | p25 samples | median |
+|---|---|---|
+| with the new cloud profile | 27.6, 22.6, 35.7 | **27.6 ms** |
+| without it (stashed) | 28.1, 19.6, 33.9 | **28.1 ms** |
+
+The medians differ by 0.5 ms. **The within-group spread on byte-identical code is
+13.1 and 14.3 ms.** So this harness cannot resolve a change below roughly 14 ms of
+p25, and any single-run comparison at that scale is noise.
+
+That retroactively explains §31 (the "3× regression" that did not exist) and it is
+now the standing rule in every agent brief: run a paired multi-sample A/B, use
+`ext.post.profile()`, or state that the cost could not be resolved and give an
+analytical bound. It is the same conclusion a sky agent reached about its own offline
+bench by a different route — an A/A control on identical code differing 7.02%.
+
+## 47. The helm view had no horizon, and the defect was eight centimetres
+
+The ship publishes `helmY = 7.35` — a 1.68 m eye on a quarterdeck at 5.67 — and
+`bulwarkY = 7.436`. So the helmsman's eye sat **8.6 cm below the top of his own
+bulwark**, and measured on a 1600×900 frame the sea line was behind timber across
+**100% of the frame width**: longest clear run 0 px. Every other complaint about that
+view followed from this one.
+
+The real ship does not have the problem because its quarterdeck is a whole deck above
+the waist; this model's is 0.18 m above it, so the waist bulwark sits at eye level.
+That is `src/ship` anatomy, not camera, so the camera now solves the constraint
+instead: `Math.max` over the published `helmY`, the bulwark cap plus clearance, and
+the wheel's upper rim plus clearance. The moment `src/ship` publishes a stepped
+quarterdeck, `helmY` wins on its own and the camera change goes inert with no edit.
+
+**Still open in that view:** near geometry is measurably half as sharp as
+mid-distance geometry (mean |grad| 8.90 vs 18.43, strong-edge share 21.8% vs 50.0%),
+which is backwards for a view where the deck is what you are standing on; the canvas
+reads as bumpy stucco rather than woven flax at 1–3 m; and the shrouds are a dense
+aliased net.
+
+## 48. The phone framing limiter is the yard span, not the hull
+
+At 390×844 the ship filled the left half with the bow cut off — 43 px from the left
+edge and **9 px from the right**. The instinct is to blame the 62 m hull, and it is
+wrong: dead astern the hull is foreshortened to almost nothing while the main yards,
+**29 m tip to tip**, lie square across the lens.
+
+Two compounding effects made the phone the worst case rather than merely a smaller
+one. The lateral composition offset is specified in **NDC**, so in metres it is
+`ndc · d · tanHalfX` — it *shrinks* as the horizontal field shrinks, which makes the
+phone shot more nearly dead astern, which is the widest presentation of the yards.
+And a 64.5° **vertical** lens gives 96.6° of horizontal field at 16:9 but only 32.5°
+at 0.46. So the phone gets the widest subject in a third of the field.
+
+The fix is a floor on follow distance derived from the published `mainYardHalfSpan`
+through the frame's horizontal half-tangent, and it is **provably inactive at 16:9**:
+the worst case over every state is 26.9 m, below `CHASE_MIN_DISTANCE`, so `Math.max`
+can never pick it. Verified by projecting the ship's own extremes through the live
+camera — at 390×844 every extreme is now inside the frame, widest yardarm 0.568 NDC;
+at 16:9 the half-width is 0.163 against the 0.176 that distance 74 predicts, i.e.
+unchanged.
+
+**Instrument note.** My first attempt measured framing by thresholding pixels and
+reported the ship as 99.9% of frame at every aspect, because foam is bright and
+neutral and so is canvas — a pixel heuristic cannot separate a hull from a whitecap.
+Projecting the geometry through the camera matrices is exact and took less code.
+`.tmp/framing.mjs` does it; three is not on `window.__leeward`, so it does the
+quaternion and matrix arithmetic by hand rather than importing a second copy of three
+into the page, which would not be the engine's three.
