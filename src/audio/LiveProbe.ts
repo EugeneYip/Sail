@@ -33,6 +33,17 @@ export interface LiveProbeOptions extends ProbeOptions {
   stall?: { ms: number; everyMs: number };
   /** Leads to price against this device, seconds. See `ClickWatcher.inject`. */
   leads?: number[];
+  /**
+   * Step amplitudes to sweep at a guaranteed-late lead, linear.
+   *
+   * This is the per-scene detection floor, and without it a click count is not
+   * interpretable. The detector's threshold is a multiple of the LOCAL
+   * first-difference RMS, so it rises with the programme: a bright broadband
+   * gale masks a step that would be obvious over a calm bed. Reporting "0
+   * clicks" for a gale without also reporting what size of step that gale could
+   * have hidden is exactly the vacuous zero DIAGNOSIS.md §25 keeps warning about.
+   */
+  amps?: number[];
   /** Envelopes injected per lead. */
   injectCount?: number;
 }
@@ -51,6 +62,14 @@ export interface LiveProbeResult {
   wallSeconds: number;
   /** Populated when `leads` was given. */
   leadSweep: LeadSweepRow[];
+  /** Populated when `amps` was given: the detection floor in THIS scene. */
+  ampSweep: LeadSweepRow[];
+  /**
+   * Smallest injected step this scene did not hide, dBFS. `+240` means even a
+   * full-scale step went unseen, so a zero click count in this scene says
+   * nothing at all.
+   */
+  floorDb: number;
   /** `Context.schedule` — events the backstop had to push forward. Must be 0. */
   late: number;
   worstLeadS: number;
@@ -172,6 +191,20 @@ export async function liveProbe(opts: LiveProbeOptions = {}): Promise<LiveProbeR
     }
   }
 
+  // -20 ms is far enough behind the thread that the ramp is guaranteed to have
+  // collapsed, so the only variable left is whether the bed hid the step.
+  const ampSweep: LeadSweepRow[] = [];
+  let floorDb = 240;
+  if (opts.amps && watcher) {
+    for (const amp of opts.amps) {
+      await watcher.stats(true);
+      const row = await watcher.inject({ leadS: -0.02, amp, count: opts.injectCount ?? 6 });
+      ampSweep.push(row);
+      const dbv = 20 * Math.log10(Math.max(1e-12, amp));
+      if (row.clicks >= row.scheduled && dbv < floorDb) floorDb = dbv;
+    }
+  }
+
   const out: LiveProbeResult = {
     watch,
     frames,
@@ -183,6 +216,8 @@ export async function liveProbe(opts: LiveProbeOptions = {}): Promise<LiveProbeR
     blockedMs: blocked,
     wallSeconds: (performance.now() - t0) / 1000,
     leadSweep,
+    ampSweep,
+    floorDb,
     late: schedule.late - late0,
     worstLeadS: schedule.worstLeadS,
     needLeadS: schedule.needLeadS,

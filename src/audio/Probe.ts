@@ -269,7 +269,11 @@ export interface SensitivityResult {
   thresholdDb: number;
 }
 
-const SENSITIVITY_STEPS_DB = [-12, -18, -24, -30, -36, -42, -48, -54, -60, -66, -72];
+// Starts at 0 dBFS deliberately. Under a bright broadband bed the local
+// threshold rises with the programme, so the floor can sit ABOVE -12 dBFS and a
+// sweep that starts there reports "never caught" — which reads as a broken
+// detector when it is really a masked one. The range has to bracket the answer.
+const SENSITIVITY_STEPS_DB = [0, -3, -6, -9, -12, -18, -24, -30, -36, -42, -48, -54, -60, -66, -72];
 
 /** Steps are spaced far wider than the 21 ms analysis window, so each is judged alone. */
 const INJECT_GAP_S = 0.35;

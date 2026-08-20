@@ -205,10 +205,15 @@ export class Sea {
     }
 
     // --- mid rushing water: the body of the bed, and the loudest layer
-    const rushLevel = dB(-20 + 14 * smoothstep(0, 7, seaState));
+    // 17 dB of range, not 14, and the shelf opens less far. Measured at sea
+    // state 7 the 150-800 Hz band had collapsed to 9% of the bed while
+    // everything above 3 kHz held 34% — precisely the "rumble with a hiss on top
+    // and nothing in between" this layer exists to prevent. The body has to grow
+    // with the sea at least as fast as the foam does.
+    const rushLevel = dB(-20 + 17 * smoothstep(0, 7, seaState));
     this.rush.gain.set(rushLevel, now);
     this.rush.freq.set(330 + 300 * smoothstep(1, 7, seaState), now);
-    this.rush.shelf?.set(-11 + 10 * smoothstep(2, 8, seaState), now);
+    this.rush.shelf?.set(-12 + 7 * smoothstep(2, 8, seaState), now);
     // Shallow: the bed must breathe, not pump. Two incommensurate periods means
     // the sum wanders instead of pulsing.
     for (let i = 0; i < this.breathDepth.length; i++) {
@@ -223,7 +228,10 @@ export class Sea {
     // whitecaps at all, so this layer must reach EXACTLY zero rather than sit at
     // a -40 dB hiss floor for ever. That floor was audible under everything and
     // it is the one thing a calm sea must not have.
-    const foamLevel = dB(-32 + 16 * breaking) * breaking;
+    // 12 dB of range from -34, not 16 from -32: at full breaking this layer was
+    // 6 dB louder than it is now and it was taking the gale's spectrum with it.
+    // Breaking water belongs in the bed; it does not belong in front of it.
+    const foamLevel = dB(-34 + 12 * breaking) * breaking;
     this.crest.gain.set(foamLevel, now);
     this.crest.freq.set(2600 - 900 * breaking, now);
     // Deep, slow modulation: foam arrives in sheets, it does not sit there.
@@ -251,7 +259,10 @@ export class Sea {
     // --- wake foam. The bright half of the speed cue, and it has to grow faster
     // than the hull rush does or going faster only makes the sea duller.
     const foam = Math.min(1, Math.pow(v, 0.9) * 1.05) * making;
-    this.wake.gain.set(dB(-38 + 27 * foam) * foam, now);
+    // Still the brightest thing that grows with speed, and still growing faster
+    // than the hull rush — just 5 dB less of it at full speed, where it was
+    // competing with the foam hiss to own the top of the spectrum.
+    this.wake.gain.set(dB(-39 + 22 * foam) * foam, now);
     this.wake.freq.set(2200 + 2100 * v, now);
     this.wakePan.set(anchorWorld(sim, ANCHOR.wake), now);
 
