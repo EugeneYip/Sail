@@ -107,32 +107,68 @@ geometry clipmap. Four-LUT atmosphere with volumetric clouds. 6-DOF physics with
 32 + 45 passing assertions (roll period 9.31 s, hull speed 12.83 kn, 30-vs-144 fps
 agreement within 0.007 kn). Assist mode (turn 4.62 deg/s vs Pro's 0.40, never in
 irons) with Pro provably bit-identical. Minimal UI. Kelvin wake, hull spray. Ensign
-at the spanker gaff, 15 stars and 15 stripes, verified by dumping the texture and
-counting. Clean typecheck; captures exit 0 with zero GLSL errors.
+at the spanker gaff, 15 stars and 15 stripes, verified by dumping the texture.
+
+Direction 3 landed: seabirds, dolphins, humpbacks, three procedural vessel classes
+sailing real polars, Boston harbour, channel buoys. 8 draw calls and 23,954
+triangles for all of it, `upd:wildlife` 0.1–0.2 ms, frame cost within noise. All
+appearances are a true Poisson process, so nothing falls into a rhythm.
+
+Closed since the last handover: the shroud/course piercings (55 → 19 live, 1206 →
+331 across nine trim states, by contact-aware shaping rather than a camber clamp);
+the near-field foam plate (the coverage function literally could not produce foam —
+now a histogram-flattened field thresholded with `linstep`); `cloudLightDepth`
+dither; the bowsprit "overshoot", which was a units confusion in `AGENTS.md` rather
+than a defect; and the audio scheduling-lead claim, which **does not reproduce on
+this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
+
+**Three checkers now exist, and it is worth knowing what each can and cannot see.**
+- `npm run typecheck` — `check-glsl` then `tsc`. Fast, no browser.
+- `npm run check-shaders` — compiles **and links** 42 fullscreen-pass programs in
+  `src/sky` and `src/post` against the real driver in 1.5 s, no dev server. Catches
+  bad swizzles and varying mismatches, which the other two cannot see. **Does not
+  cover material shaders** (`ocean/surface`, `ship/{parts,sail,line}`, `vfx`,
+  `world`) — those need a real engine boot.
+- `node scripts/capture.mjs` — the only instrument for material shaders (zero
+  `ERROR:`/`Material Name:` in console) and the only source of frames.
 
 **Known open, roughly in priority order.**
-1. **Frame pacing.** ~21–35 ms p25 against a 16.6 ms target, but the *minimum* is
-   5.7–7.1 ms with 6–29% of frames inside one vsync — so the engine can render the
+1. **Hard rectangular shadow blocks on the sails.** 5.2–5.6% of sail pixels, stable
+   across two captures 15 hours apart, so **not** a regression. The weakest thing in
+   the frame. Spans `src/sky` (shadow map) and `src/ship` (sail depth material) —
+   the boundary is why it stalled before, so give it one owner.
+2. **Cumulus render as flat-topped mesas, and the cause is diagnosed.** 77–80% of
+   cloud mass sits below `h`=0.6 because at `cloudType` 0.75 the stratocumulus term
+   of `heightGradient` is identically zero above `h`=0.68. Redistributing mass upward
+   must hold **total** mass constant or it walks the `CLOUD_COLUMNS_PER_RAY = 4.1`
+   coverage calibration backwards.
+3. **Framing.** The chase camera does not adapt to a phone aspect ratio — at 390×844
+   the ship fills the left half with the bow cut off, and directive 4 makes that a
+   real target. The `helm` view contains no identifiable ship's wheel and keeps the
+   horizon only in the left third.
+4. **Frame pacing.** ~19–31 ms p25 against a 16.6 ms target, but the *minimum* is
+   5.9–9.6 ms with 14–35% of frames inside one vsync — the engine can render the
    frame and something intermittently prevents it. `dt` values are exact multiples of
-   16.67 ms: vsync beat aliasing. This also causes the reported two-frame sail
-   stutter. **There is no code regression** (`DIAGNOSIS.md` §31 retracts an earlier
-   claim of one).
-2. **Ratlines and lower shrouds pierce the bellying courses** (17–23 and 7–10
-   piercings). It is the *sail* reaching into the shroud gang, so it needs a
-   camber-envelope clamp or contact-aware routing, not a constant.
-3. **The near-field foam plate** in `WakeField` + the ocean's use of `wakeTexture.R`
-   is the most obviously fake thing at the bow. The field spans 1024 m over its
-   texture so it cannot carry near-hull detail — **the ocean must add the breakup**.
-   Needs the ocean and vfx owners together.
-4. `cloudLightDepth` has no dither at all — the same bug class just fixed in the view
-   march, so `tauLight` is quantised on fixed cone shells.
-5. Clouds read as cotton wool rather than cauliflower cumulus.
-6. The bowsprit is too long: ~78 m sparred against the 62 m in `AGENTS.md`.
-7. Audio: a scheduling-lead bug makes ramps execute as steps (an
-   `OfflineAudioContext` **cannot** reproduce it — online, the audio thread has
-   already rendered past `currentTime`). Partially fixed; needs its click detector
-   re-run under simulated main-thread stalls.
-8. Marine life, varied vessels and Boston harbour (direction 3) are not started.
+   16.67 ms: vsync beat aliasing. **There is no code regression** (§31 retracts an
+   earlier claim of one).
+5. **Vessels read thinly inside 200 m** — 12 px of freeboard at working range, so the
+   gunport stripe is invisible and the shrouds are sub-pixel. Fine for the intended
+   range, not for a close pass.
+6. **Boston is a town on a headland, not recognisably Boston** until ~2 km.
+7. The `reefed` trim is the worst state for line piercings (92), dominated by
+   buntlines and leechlines crossing the furled bundle. Pre-existing.
+8. Near geometry is smeared while distant geometry is sharp — a TAA history problem
+   on **near** surfaces. The shrouds moiré.
+9. No gull perches on a yard: `src/ship` would need to publish yard-arm anchors on
+   the blackboard, and guessing coordinates would put a gull inside a sail.
+
+**Open question for the owner.** `KN` and `PRO` are the weakest HUD marks (ink
+221/237 against 255 for `MINIMAL`/`NNE`), because K, N, P, R and O at 9 px are
+diagonals and curves that never reach full pixel coverage. The fix is 10 px caps,
+which changes a look the owner has already approved — so it is a question.
+
+**Licence is still unchosen.** `preflight` warns about it. It is deliberately the
+owner's call.
 
 ## Deployment
 
