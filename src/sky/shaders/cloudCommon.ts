@@ -191,14 +191,14 @@ float cloudDensity(vec2 wxz, float alt, bool detail, out float hFrac){
     // Billows curl inward at the base and shred into wisps at the top.
     float mod2 = mix(hf, 1.0 - hf, saturate1(h * 5.0));
     /*
-     * CAULIFLOWER, not cotton wool. Two separate things kept the erosion from
-     * reading as cumuliform, and neither of them was the amount.
+     * CAULIFLOWER, not cotton wool. Three separate things kept the erosion from
+     * reading as cumuliform, and none of them was the amount.
      *
      * FREQUENCY. The detail volume wraps at CLOUD_DETAIL_TILE_M = 750 m and its
      * dominant octave is Worley at 6 cells, i.e. 125 m features. The deck is
      * actually seen from 15-40 km, and the view march's step grows to
      * DT_MAX = 1.2 km, so a 125 m feature sits far under one sample and the
-     * temporal filter averages it to a smooth wash — which is why uErosion at
+     * temporal filter averages it to a smooth wash -- which is why uErosion at
      * 0.376 "barely registers". The lobes a cumulus is READ by are 200-600 m
      * across, and the base volume already carries exactly that band in .b and .a
      * (inverted Worley at 16 and 32 cells over a 6 km tile = 375 m and 187 m
@@ -210,20 +210,33 @@ float cloudDensity(vec2 wxz, float alt, bool detail, out float hFrac){
      *
      * HEIGHT. Erosion was constant through the slab. A cumulus is the opposite
      * of constant: a soft, almost flat base at the condensation level and hard,
-     * high-contrast lobes on the crown. Ramping the erosion with height is what
-     * turns a puff into a tower.
+     * high-contrast lobes on the crown.
      *
-     * The ramp is deliberately built to average just UNDER 1 over the slab
-     * (0.30 + 1.35 * 0.5 = 0.975), so the net erosion this applies is no
-     * stronger than the flat 1.0 it replaces. Erosion removes density, and
-     * density is what CLOUD_COLUMNS_PER_RAY's coverage calibration is tuned
-     * against, so a redistribution that cannot increase the mean cannot walk the
-     * coverage fix backwards. Keep that property if these numbers are retuned.
+     * CONTRAST, NOT THINNING -- and this is the part that has to be got right.
+     * 'remap(density, thr, 1, 0, 1)' both thresholds and gains, so simply
+     * scaling 'thr' up with height does not sharpen the crown, it DELETES it.
+     * Measured on the baked field at cover 0.40, a plain 'carve * crown'
+     * threshold left 1.29x the density at 0.06 of the slab and 0.33x at 0.66 of
+     * it: bottom-heavy pancakes, which is precisely backwards. So the ramp is
+     * applied to carve's DEVIATION from its own mean instead. The mean threshold
+     * is then 'uErosion * CARVE_MEAN' at every height -- no net thinning
+     * anywhere -- while the crown gets 1.65x the swing and the base 0.30x, which
+     * is hard lobes on top of a soft flat base.
+     *
+     * CARVE_MEAN is MEASURED, not derived: 0.498 is the mean of 'carve' over
+     * 2.1 M samples of the baked volumes (mean lobes 0.482, mean 1-hf 0.521).
+     * Re-measure it with '.tmp/glslprobe/stats.mjs' if the octave weights or the
+     * 0.42 mix change. It sits 4.3 % below the 0.521 mean threshold the previous
+     * code applied, so this can only add density, never remove it -- which is
+     * the safe direction, because CLOUD_COLUMNS_PER_RAY's coverage calibration
+     * is tuned against density and must not drift downward.
      */
+    const float CARVE_MEAN = 0.498;
     float lobes = saturate1(base.b * 0.62 + base.a * 0.38);
     float carve = mix(lobes, mod2, 0.42);
     float crown = 0.30 + 1.35 * smoothstep(0.15, 0.85, h);
-    density = saturate1(remap(density, carve * uErosion * crown, 1.0, 0.0, 1.0));
+    float thr = uErosion * (CARVE_MEAN + crown * (carve - CARVE_MEAN));
+    density = saturate1(remap(density, clamp(thr, 0.0, 0.95), 1.0, 0.0, 1.0));
   }
 
   return density * uDensityScale * mix(0.72, 1.35, wm.b);
