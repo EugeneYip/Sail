@@ -293,7 +293,7 @@ try {
   await page.waitForFunction(() => !!window.__leeward, null, { timeout: args.timeout });
 } catch {
   const shot = stage(`${args.out}-BOOTFAIL.png`);
-  await page.screenshot({ path: shot });
+  await page.screenshot({ path: shot, timeout: 120000 });
   console.error('ENGINE NEVER BOOTED. Console:\n' + logs.slice(-60).join('\n'));
   await browser.close();
   process.exit(1);
@@ -394,7 +394,9 @@ for (const name of sceneNames) {
   });
 
   const file = sceneNames.length > 1 ? `${args.out}-${name}.png` : `${args.out}.png`;
-  await page.screenshot({ path: stage(file), animations: 'allow' });
+  // 30s (playwright's default) aborts outright when other renderers
+  // are competing for the GPU. Wait instead of losing the whole run.
+  await page.screenshot({ path: stage(file), animations: 'allow', timeout: 120000 });
 
   results.push({ name, label: scene.label, file, fps: lastFps ? Math.round(lastFps) : stats.fps, ...stats });
   // Headless Chromium caps rAF at 60 Hz, so 16.6 ms IS the floor here and a

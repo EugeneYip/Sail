@@ -35,7 +35,9 @@ export class SkyPass {
       vertexShader: PASS_VERT,
       fragmentShader,
       uniforms,
-      defines,
+      // three warns on an explicitly-undefined parameter, and most callers here
+      // pass no defines at all, so only forward the key when there is one.
+      ...(defines ? { defines } : {}),
       depthTest: false,
       depthWrite: false,
       blending: THREE.NoBlending,

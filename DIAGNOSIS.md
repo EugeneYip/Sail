@@ -1055,3 +1055,64 @@ AGENTS.md: use a `git worktree` with its own dev server instead.
 Also noted: `src/post/Pipeline.ts` sets `(globalThis).__rcPipe = this` under a
 `TEMP-DEBUG-RC` comment — a shipped debug global, zero per-frame cost, currently
 depended on by probes. Remove before release.
+
+## 35. The hull-side "waterfall" found, and work lost to a shared-tree git operation
+
+**Cause: `vfx-hull-skirt`**, identified by hiding each mesh in turn rather than by
+reasoning. A `40 x 6` grid over a **fixed ship-local band**, whose fragment shader
+cut coverage with
+
+```glsl
+climb = 1.0 - smoothstep(0.15 + uSpeedN*1.5, 0.9 + uSpeedN*2.6, vD);
+```
+
+`vD` is height above local water, so that is a cut at **constant height for the
+whole length of the ship on both sides** — a ruled top edge with an airbrushed
+gradient beneath. `bowGain` floored at 0.35 aft of t≈0.25, so intensity was uniform
+end to end. Nothing downstream could rescue it: the silhouette was decided by a
+quantity that did not vary along the hull. Replaced by `frothReach(t, side)`, and
+height now drives the **threshold** on the filament field rather than multiplying
+it, so the boundary tears instead of fading.
+
+Two real bugs found alongside:
+- **`bowSlam`'s burst gated at 0.55 g = 5.4 m/s², which is the TOP of the range
+  physics writes even in a storm** (under 1.5 in every other scene), so it almost
+  never fired. Now 0.35 g.
+- `hullSkirtFrag` faked premultiplication by passing `uFogColor * a` into
+  `applyAerial`, whose inscatter term `sunColor * mie * 0.55` is **not** scaled — so
+  a nearly transparent band received a full-strength sun glow.
+
+### Two of my briefs were wrong, and one cost real work
+
+- **The 11 `THREE.Material: parameter 'defines' has value of undefined` warnings do
+  NOT come from `Particles.ts`/`WakeField.ts`** as I told two agents. Traced by
+  stack capture to **`src/sky/Pass.ts:38`**, which forwards `defines`
+  unconditionally while `bakeMoonAlbedo`, `AtmosphereLuts` and the LUT passes all
+  omit it. Fixed with `...(defines ? { defines } : {})`.
+- **Uncommitted work was destroyed at ~23:10** by a `git checkout <sha> -- src/`
+  during the perf bisect. The VFX agent's four files reverted mid-session (it had
+  backups and re-applied them), but **a previous VFX agent's uncommitted
+  `textures.ts` / `Particles.ts` work — the fleck sprite and foam-texture
+  improvements — was lost and not recovered.** AGENTS.md now forbids that command
+  here, but the deeper fault is mine: **agents' work sat uncommitted in a shared
+  tree.** Commit each agent's output as soon as it reports, not in batches.
+- `scripts/capture.mjs` used playwright's default 30 s screenshot timeout, which
+  aborts outright under GPU contention — it killed three of one agent's runs and one
+  of mine. Raised to 120 s.
+
+### Still not good enough, and it needs two owners together
+
+**The near-field foam plate is now the dominant fake element.** With all three vfx
+meshes hidden, the sea beside the hull is *still* a flat pale plate with a straight
+upper boundary. It lives in `WakeField` plus the ocean's consumption of
+`wakeTexture.R`, and the field spans **1024 m over its texture**, so it physically
+cannot carry near-hull detail — the **ocean** has to add the breakup. This is the
+next job and it requires the ocean and vfx owners in the loop together.
+
+Also open: Kelvin arms still read as a broad dark lane at golden hour; bow spray is
+still soft because the mist sprite is a torn oval and motion-stretch cannot help
+when the camera moves with the ship (relative screen velocity ≈ 0, so sprites draw
+square by construction) — the fix is a more anisotropic sheet sprite in
+`textures.ts`, which is exactly the file whose work was destroyed; waterline froth
+is now too sparse, the direction the agent deliberately chose to err in given the
+reported defect was excess regularity.

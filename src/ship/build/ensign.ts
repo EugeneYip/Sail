@@ -64,7 +64,9 @@ const STAR_R = 1 / 30;
 const STAR_INNER = Math.cos(Math.PI * 0.4) / Math.cos(Math.PI * 0.2);
 
 /** Size of the ensign itself, metres on the hoist. */
-const HOIST_M = 3.4;
+const HOIST_M = 3.8;
+/** Clearance from the spanker's leech, metres, in the sail's own plane. */
+const LEECH_CLEAR_M = 0.22;
 
 /**
  * Grid per quality tier, (along the fly, along the hoist).
@@ -246,6 +248,15 @@ function makeEnsignTexture(size: number): { map: THREE.Texture; normalMap: THREE
 interface EnsignUniforms {
   /** Gaff-peak anchor of the head of the hoist, ship-local. */
   uEnsAnchor: { value: THREE.Vector3 };
+  /**
+   * Which way the hoist edge runs. NOT straight down: the spanker's boom is
+   * 20.5 m and its gaff only 13.4, so the leech falls away aft at 29 degrees
+   * from the vertical, and a flag hung plumb from the peak has its foot two
+   * metres INSIDE the sail. Hanging it along the leech puts the whole flag
+   * abaft the canvas in every trim, which is where an ensign at the peak
+   * actually flies.
+   */
+  uEnsHoist: { value: THREE.Vector3 };
   /** Where the air GOES, in ship-local space, horizontal and normalised. */
   uEnsWind: { value: THREE.Vector3 };
   /** (hoist m, fly m, part slot, unused). */
@@ -263,6 +274,7 @@ interface EnsignUniforms {
  */
 const ENSIGN_DECL = /* glsl */ `
 uniform vec3 uEnsAnchor;
+uniform vec3 uEnsHoist;
 uniform vec3 uEnsWind;
 uniform vec4 uEnsSize;
 uniform vec4 uEnsWave;
@@ -278,7 +290,7 @@ vec3 lwEnsignPoint(vec2 st){
   float k = uEnsWave.z;
   float w = uEnsWave.w;
 
-  vec3 down = vec3(0.0, -1.0, 0.0);
+  vec3 down = uEnsHoist;
   vec3 wd = uEnsWind;
   vec3 side = normalize(cross(down, wd) + vec3(1e-5, 0.0, 0.0));
 
@@ -287,9 +299,10 @@ vec3 lwEnsignPoint(vec2 st){
   // the halyard, which is what an ensign really does in a calm.
   float reach = fly * mix(0.34, 1.0, out_);
   float sagFly = (1.0 - out_) * fly * 0.72;
-  vec3 P = uEnsAnchor
+  vec3 P = shipPart(uEnsAnchor, uEnsSize.z)
+    + down * (hoist * t)
     + wd * (reach * s)
-    + down * (hoist * t + sagFly * s * s);
+    + vec3(0.0, -1.0, 0.0) * (sagFly * s * s);
 
   // Travelling wave: nothing at the hoist rope, growing toward the free edge,
   // and tilted along the hoist so the crease runs diagonally as it does on a
@@ -318,8 +331,12 @@ const ENSIGN_VERT = /* glsl */ `
   float lwNl = length(lwN);
   lwN = lwNl > 1e-9 ? lwN / lwNl : vec3(0.0, 0.0, 1.0);
 
-  vPosL = shipPart(lwP, uEnsSize.z);
-  vNormalL = shipPartN(lwN, uEnsSize.z);
+  // lwEnsignPoint already transformed its anchor by the gaff. The rest is in
+  // ship space on purpose: a flag streams downwind, and pushing the whole
+  // sheet through the gaff's rotation would swing the wind round with the
+  // boom.
+  vPosL = lwP;
+  vNormalL = lwN;
   vEnsUv = lwSt;
 `;
 
@@ -332,12 +349,20 @@ export function buildEnsign(
   const flyM = HOIST_M * FLY_RATIO;
   // Just under the peak, and a little inboard of it, so the halyard's upper
   // block has somewhere to be.
-  const anchor = frame.spanker.gaffEnd.clone();
-  anchor.y -= 0.42;
-  anchor.z -= 0.34;
+  // Down the leech, from the peak to the clew on the boom.
+  const clew = frame.spanker.boomPivot.clone()
+    .lerp(frame.spanker.boomEnd, 0.97);
+  const leech = clew.clone().sub(frame.spanker.gaffEnd).normalize();
+  // Perpendicular to the leech, in the sail's plane, pointing away from the
+  // luff: the direction to stand the flag off the canvas.
+  const outward = new THREE.Vector3(0, -leech.z, leech.y).normalize();
+  const anchor = frame.spanker.gaffEnd.clone()
+    .addScaledVector(outward, LEECH_CLEAR_M)
+    .addScaledVector(leech, 0.18);
 
   const u: EnsignUniforms = {
     uEnsAnchor: { value: anchor },
+    uEnsHoist: { value: leech },
     uEnsWind: { value: new THREE.Vector3(0, 0, 1) },
     uEnsSize: { value: new THREE.Vector4(HOIST_M, flyM, PART.GAFF, 0) },
     uEnsWave: { value: new THREE.Vector4(0.5, 0.09, 9, 6) },
