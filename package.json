@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "node scripts/check-glsl.mjs && tsc --noEmit",
     "preview": "vite preview",
-    "check-glsl": "node scripts/check-glsl.mjs"
+    "check-glsl": "node scripts/check-glsl.mjs",
+    "preflight": "node scripts/preflight.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

@@ -1,0 +1,15 @@
+{
+  "name": "Leeward — Tall Ship Voyage",
+  "short_name": "Leeward",
+  "description": "An endless procedural tall-ship sailing game. Take the helm of the USS Constitution on an open ocean.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#05090d",
+  "theme_color": "#0a1420",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

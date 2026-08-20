@@ -2,21 +2,103 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#0a1420" />
-    <title>Leeward — Tall Ship Voyage</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Inter:wght@200;300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap"
-      rel="stylesheet"
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <title>Leeward — Tall Ship Voyage | Endless Sailing Game</title>
+    <meta
+      name="description"
+      content="Take the helm of the USS Constitution on an endless procedural ocean. A calm browser sailing game — arrow keys, open water, and somewhere to go."
     />
+    <!-- No canonical: it must be an ABSOLUTE url and the deploy url is not known
+         yet. A wrong canonical is worse than none, and a relative one makes Vite
+         try to resolve "./" as an asset (EISDIR at build). Add
+         <link rel="canonical" href="https://<user>.github.io/<repo>/"> on publish. -->
+
+    <meta name="theme-color" content="#0a1420" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./favicon.svg" />
+    <link rel="manifest" href="./site.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Leeward" />
+
+    <!-- Social. og:image wants an ABSOLUTE url for most crawlers; make these
+         absolute once the deploy URL is known. Relative works on some. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Leeward" />
+    <meta property="og:title" content="Leeward — Tall Ship Voyage" />
+    <meta
+      property="og:description"
+      content="Take the helm of the USS Constitution on an endless procedural ocean. A calm browser sailing game."
+    />
+    <meta property="og:image" content="./social-card.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A square-rigged frigate under full sail on open ocean at golden hour." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Leeward — Tall Ship Voyage" />
+    <meta
+      name="twitter:description"
+      content="Take the helm of the USS Constitution on an endless procedural ocean."
+    />
+    <meta name="twitter:image" content="./social-card.jpg" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "Leeward — Tall Ship Voyage",
+        "description": "An endless procedural tall-ship sailing game. Take the helm of the USS Constitution on an open ocean.",
+        "genre": ["Simulation", "Casual"],
+        "gamePlatform": "Web browser",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires WebGL2",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
+
+    <!--
+      Fonts load NON-BLOCKING and are entirely optional.
+
+      AGENTS.md forbids runtime asset fetches, and a render-blocking stylesheet on
+      a third-party origin is the worst kind: it delays first paint, hands every
+      visitor's IP to that origin, and breaks the game offline. The stylesheet
+      already has full fallbacks (system-ui / Georgia / ui-monospace), so the game
+      renders immediately and upgrades if and when the webfonts arrive.
+
+      Self-hosting would remove the third-party request entirely, at the cost of
+      ~300 KB of woff2 in a bundle that is currently ~400 KB total. That is the
+      owner's call, so it is left as a note rather than decided here.
+    -->
+    <link
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all';this.onload=null"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Inter:wght@200;300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Inter:wght@200;300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap"
+      />
+    </noscript>
   </head>
   <body>
     <div id="app">
       <canvas id="viewport"></canvas>
       <div id="ui-root"></div>
     </div>
+    <!-- Visible only if the module never runs: a WebGL2-less browser, or a bad build. -->
+    <noscript>
+      <p style="color: #cfc8b8; font: 16px/1.6 system-ui, sans-serif; padding: 2rem">
+        Leeward is a 3D sailing game that needs JavaScript and WebGL2. Please enable
+        JavaScript, or try a current version of Chrome, Edge, Firefox or Safari.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
