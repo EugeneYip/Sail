@@ -301,11 +301,26 @@ const page = await browser.newPage({
 
 const errors = [];
 const logs = [];
-page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}\n${e.stack ?? ''}`));
+/**
+ * Errors that are the headless environment's, not the game's. Failing a run on
+ * these makes the exit code meaningless: a real GLSL error and "this box has no
+ * sound card" would be indistinguishable, and the audio one fires intermittently.
+ */
+const ENVIRONMENT_NOISE = [
+  /AudioContext encountered an error from the audio device/i,
+  /The AudioContext was not allowed to start/i,
+];
+const isEnvironmentNoise = (s) => ENVIRONMENT_NOISE.some((re) => re.test(s));
+const noted = [];
+
+page.on('pageerror', (e) => {
+  const s = `pageerror: ${e.message}\n${e.stack ?? ''}`;
+  (isEnvironmentNoise(s) ? noted : errors).push(s);
+});
 page.on('console', (m) => {
   const text = `${m.type()}: ${m.text()}`;
   logs.push(text);
-  if (m.type() === 'error') errors.push(text);
+  if (m.type() === 'error') (isEnvironmentNoise(text) ? noted : errors).push(text);
 });
 page.on('requestfailed', (r) => {
   // Font CDN failures are not fatal for a screenshot.
@@ -615,6 +630,9 @@ if (tainted.length) {
 
 // A page error is the more actionable failure, so it claims the exit code — but
 // only after the contention banner above has had its say.
+if (noted.length) {
+  console.log(`\n${noted.length} environment message(s) ignored (headless audio etc.), not treated as failures.`);
+}
 if (errors.length) {
   console.error(`\n${errors.length} PAGE ERROR(S):`);
   for (const e of errors.slice(0, 25)) console.error('  ' + e);
