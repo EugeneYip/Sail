@@ -33,6 +33,7 @@ import { JIB_CUT, JIB_IDS, MASTS, PART, SAIL_YARDS, SPANKER_CLEW, squareCut } fr
 import { PARTS_DECL } from '../shaders/parts';
 import {
   PANEL_TILE_M, PANEL_WIDTH_M, SAIL_VERT_BODY, SEAM_TILE_M, sailDecl,
+  sailVertOuts,
 } from '../shaders/sail';
 import type { PartUniforms } from '../materials/materials';
 import type { TexSet } from '../materials/textures';
@@ -321,22 +322,12 @@ function makeSailGrid(nu: number, nv: number, drawn: number[]): THREE.InstancedB
   return g;
 }
 
-const VERT_HEAD = /* glsl */ `
-varying vec4 vSail;
-varying vec4 vCloth;
-varying vec2 vSailUv;
-varying vec3 vSailWP;
-varying vec3 vSailTan;
-varying float vAback;
+const VERT_HEAD = `
+${sailVertOuts(true)}
 `;
 
-const FRAG_HEAD = /* glsl */ `
-varying vec4 vSail;
-varying vec4 vCloth;
-varying vec2 vSailUv;
-varying vec3 vSailWP;
-varying vec3 vSailTan;
-varying float vAback;
+const FRAG_HEAD = `
+${sailVertOuts(true)}
 uniform float uClothTrans;
 `;
 
@@ -773,11 +764,7 @@ function makeSailDepth(
       .replace(
         '#include <common>',
         `#include <common>
-        vec2 vSailUv;
-        vec4 vSail;
-        vec4 vCloth;
-        vec3 vSailWP;
-        vec3 vSailTan;
+${sailVertOuts(false)}
         ${PARTS_DECL}${sailDecl(count)}`,
       )
       .replace('void main() {', `vec3 vPosL;\nvec3 vNormalL;\nvoid main() {\n${SAIL_VERT_BODY}`)

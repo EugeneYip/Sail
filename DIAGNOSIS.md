@@ -861,3 +861,52 @@ python3 -c "import re,collections;t=open('shots/x-console.log',errors='replace')
 
 Both relayed to their owners. **Any capture taken while these are live is poisoned**
 — check the console log for `ERROR:` before trusting a frame.
+
+## 28. Both "blocking" shader errors resolved — one was never real
+
+Cleared with a verified capture: **zero GLSL errors, zero failing materials,
+exit 0.** Visual QA is unblocked.
+
+**`uHazeBeta : redefinition` was NOT a live defect.** That block already carried
+its own `SKY_WEATHER_HAZE` guard *in addition to* the chunk's `SKY_ATMOSPHERE`
+guard, and the comment beside it predicts precisely the observed failure: a
+half-applied hot reload pairing a new atmosphere chunk with a cached sky shader
+still carrying its own copy. It was a transient artefact of concurrent editing.
+**I began adding a third, redundant guard before checking whether one already
+existed, and reverted.** Same lesson as §25: read the instrument, and the code,
+before fixing.
+
+**`vAback : undeclared identifier` was real, and the fix was half-landed.** The
+ship agent had written exactly the right structural fix — a single
+`SAIL_VERT_OUT_DECLS` array plus `sailVertOuts(varying: boolean)`, so the cloth
+material and its depth material cannot drift — then was interrupted **before
+calling it anywhere**. `grep` showed zero call sites. The depth material's
+`#include <common>` injection still hand-declared five names and omitted
+`float vAback;`, so `MeshDepthMaterial` wrote an undeclared identifier and **every
+sail shadow silently failed to compile**.
+
+Wired the helper into all three sites (depth material, `VERT_HEAD`, `FRAG_HEAD`),
+so the next varying added cannot repeat this. A half-landed structural fix is
+worse than no fix: the abstraction exists, looks authoritative, and is not in the
+path.
+
+## 29. PERFORMANCE HAS REGRESSED BADLY — top priority
+
+Measured on a quiet machine (load 1.9 at start), both shader errors resolved:
+
+| scene | p25 now | p25 before | delta |
+|---|---|---|---|
+| noon | **48.9–51.4 ms** | 16.7 ms | **~3x worse** |
+| golden | 58.5 ms | 32.3 ms | ~1.8x worse |
+| orbit | 29.2–56.2 ms | 24.9 ms | worse |
+| storm | 65.2 ms | 32.9 ms | ~2x worse |
+
+Draw calls (65–87) and triangles (0.56–0.64 M) are unchanged, so this is **not**
+geometry. Something landed in the last wave — candidates: the sail aback work, the
+ocean clipmap ring rewrite, cloud changes, or the ship's new close-range material
+detail (more texture fetches per pixel).
+
+**Bisect this against `758dde4` (the last known-good measurement point) rather than
+guessing.** Note §16: `gl.finish()` and `EXT_disjoint_timer_query` are unusable on
+ANGLE-on-Metal, and `settings.debug` perturbs what it measures — use the slope
+method and p25/p50 percentiles.
