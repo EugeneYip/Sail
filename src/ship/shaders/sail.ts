@@ -31,6 +31,7 @@
  */
 
 import { lwFloat } from '../../util/glsl';
+import { RIG_FEATHER_M, RIG_KNEE_M, RIG_N, RIG_SLOTS } from '../build/rigEnvelope';
 
 /** Draft position along the chord: sin(PI * c^k) peaks at the k-th root of 1/2. */
 const DRAFT_AT = 0.4;
@@ -122,7 +123,67 @@ uniform float uSailAback[SAIL_N];
 uniform vec2 uSailStep;
 uniform float uSailTime;
 
+/**
+ * The standing rigging, as something the cloth can take up against. Built in
+ * 'build/rigEnvelope.ts' from the very endpoints 'build/rigging.ts' draws.
+ *   uRigPlane = (A, B, C, halfWidth)  limit surface  z <= A + B*|x| + C*y
+ *   uRigBand  = (P, Q, y0, y1)        its footprint: |x| within halfWidth of
+ *                                     P + Q*y, and y in [y0, y1]
+ */
+uniform vec4 uRigPlane[${RIG_N}];
+uniform vec4 uRigBand[${RIG_N}];
+
 ${withInstanceAttr ? 'attribute float iSail;' : ''}
+
+/** Which mast's rigging a sail can reach, or -1 for the head sails and spanker. */
+int lwSailRigBase(float part) {
+  int p = int(part + 0.5);
+  if (p >= 1 && p <= 4) return 0;
+  if (p >= 5 && p <= 8) return ${RIG_SLOTS};
+  if (p >= 9 && p <= 12) return ${2 * RIG_SLOTS};
+  return -1;
+}
+
+/**
+ * CONTACT. A course sheeted home bellies a tenth of its chord, and the shroud
+ * gang it moves into is seized to the channel and cannot get out of the way — so
+ * the cloth stops there, as canvas does, and goes flat where it bears.
+ *
+ * The alternative was a smaller camber constant, which is a lie told everywhere
+ * to fix something that happens in two narrow stripes: the gang crosses a course
+ * on a diagonal from outboard-low to inboard-high, so what this leaves is a fold
+ * running up the sail over the lee rigging and a crease down the middle where the
+ * mast prints through. Both are what a photograph of a close-hauled square
+ * rigger shows, and the belly between them keeps its full depth.
+ *
+ * Done in SHIP space, because that is where the rigging is: the point is pushed
+ * through its yard's brace first, clamped, and the correction carried back — so
+ * bracing round moves the cloth into the gang and the cloth answers.
+ */
+vec3 lwRigContact(vec3 P, float part) {
+  int base = lwSailRigBase(part);
+  if (base < 0) return P;
+  vec3 W = shipPart(P, part);
+  float ax = abs(W.x);
+  float z = W.z;
+  for (int k = 0; k < ${RIG_SLOTS}; k++) {
+    vec4 pl = uRigPlane[base + k];
+    vec4 bd = uRigBand[base + k];
+    float dx = abs(ax - (bd.x + bd.y * W.y));
+    float mask = (1.0 - smoothstep(pl.w, pl.w + ${lwFloat(RIG_FEATHER_M)}, dx))
+      * smoothstep(bd.z - ${lwFloat(RIG_FEATHER_M)}, bd.z, W.y)
+      * (1.0 - smoothstep(bd.w, bd.w + ${lwFloat(RIG_FEATHER_M)}, W.y));
+    if (mask <= 0.0) continue;
+    // Soft min against the limit: the cloth begins to flatten a knee short of
+    // contact, so a sail that merely comes close does not snap to the plane.
+    float lim = pl.x + pl.y * ax + pl.z * W.y;
+    float d = lim - z;
+    const float K = ${lwFloat(RIG_KNEE_M)};
+    float soft = d > K ? d : (d > -K ? (d + K) * (d + K) / (4.0 * K) : 0.0);
+    z = mix(z, lim - soft, mask);
+  }
+  return P - shipPartNInv(vec3(0.0, 0.0, W.z - z), part);
+}
 
 /**
  * One point on a sail.
@@ -251,6 +312,9 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
   float ang = rollT * 6.2831853 * ${lwFloat(BUNDLE_TURNS)};
   vec3 rollP = r0 + qDir * (R - R * rr * cos(ang)) + nrm * (R * rr * sin(ang));
   P = mix(P, rollP, step(q, gath) * step(1e-4, gath));
+
+  // Last, so it constrains whatever shape the four stages above arrived at.
+  P = lwRigContact(P, nf.x);
 
   aux = vec4(cDraw, sDraw, rollT, luffv);
   // In METRES: (span from the head, chord from the luff, distance to the nearer

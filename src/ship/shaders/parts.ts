@@ -32,5 +32,15 @@ vec3 shipPart(vec3 p, float pi){
 vec3 shipPartN(vec3 n, float pi){
   return shipPartRot(n, uPartQ[int(pi + 0.5)]);
 }
+/**
+ * The same rotation undone. A part transform is rigid, so the conjugate
+ * quaternion is its inverse — which is what lets a correction computed in SHIP
+ * space (where the standing rigging lives) be carried back into the frame a
+ * braced yard's sail is evaluated in, without a matrix inverse.
+ */
+vec3 shipPartNInv(vec3 n, float pi){
+  vec4 q = uPartQ[int(pi + 0.5)];
+  return shipPartRot(n, vec4(-q.xyz, q.w));
+}
 #endif
 `;

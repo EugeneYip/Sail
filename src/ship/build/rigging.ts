@@ -23,11 +23,12 @@ import type { PartUniforms } from '../materials/materials';
 import type { TexSet } from '../materials/textures';
 import type { SailUniforms } from './sails';
 import type { HullResult } from './hull';
-import { CHANNELS } from './hull';
+import { backstayTable, channelPoints, mastGangs } from './rigEnvelope';
 import type { MastFrame, RigFrame, YardFrame } from './masts';
 import {
   BOWSPRIT, MASTS, PART, SPANKER, Station, YARDS, deckSideY, sheerY, squareCut, tAtZ, DECK_CAMBER,
 } from '../dims';
+import type { Member } from './rigEnvelope';
 import { JACKSTAY_STANDOFF_M } from './sails';
 
 /** How far abaft the yard's surface the footropes are slung, metres. */
@@ -138,9 +139,9 @@ export function buildRigging(
   const sailSlot = new Map<string, number>();
   world.ship.sails.forEach((sa, i) => sailSlot.set(sa.id, i));
 
-  const chan = channelPoints(hull);
+  void hull;
   for (let mi = 0; mi < frame.masts.length; mi++) {
-    shrouds(L, frame.masts[mi], chan[mi], quality);
+    shrouds(L, frame.masts[mi], channelPoints(mi), quality);
   }
   stays(L, frame);
   headRigging(L, frame);
@@ -199,65 +200,30 @@ export function buildRigging(
  *  Standing rigging
  * ------------------------------------------------------------------ */
 
-interface ChannelPts {
-  /** Deadeye positions on the channel, outboard face, per side. */
-  stbd: THREE.Vector3[];
-  port: THREE.Vector3[];
+/** One gang mirrored onto a side, since `mastGangs` gives starboard only. */
+function sided(ms: Member[], side: 1 | -1): Member[] {
+  return ms.map((m) => ({
+    bot: new THREE.Vector3(m.bot.x * side, m.bot.y, m.bot.z),
+    top: new THREE.Vector3(m.top.x * side, m.top.y, m.top.z),
+  }));
 }
 
-function channelPoints(hull: HullResult): ChannelPts[] {
-  const out: ChannelPts[] = [];
-  for (const ch of CHANNELS) {
-    const stbd: THREE.Vector3[] = [];
-    const port: THREE.Vector3[] = [];
-    const n = MASTS[ch.mast].shrouds[0];
-    for (let i = 0; i < n; i++) {
-      const z = ch.z0 + ((i + 0.5) / n) * (ch.z1 - ch.z0);
-      const t = tAtZ(z);
-      const st = new Station(t);
-      const y = sheerY(t) - 0.85 + 0.34;
-      const w = st.widthAt(sheerY(t) - 0.85) + 0.78;
-      stbd.push(new THREE.Vector3(w, y, z));
-      port.push(new THREE.Vector3(-w, y, z));
-    }
-    out.push({ stbd, port });
-  }
-  void hull;
-  return out;
-}
-
-function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): void {
+/**
+ * WHICH WAY EACH GANG FANS, and how far, is decided in `build/rigEnvelope.ts` —
+ * because the sails are told the same geometry there and flatten against it, and
+ * a gang that moved without the cloth knowing would put the ratlines straight
+ * back through the courses. Nothing here computes a shroud endpoint.
+ */
+function shrouds(L: LineSet, m: MastFrame, chan: THREE.Vector3[], quality: number): void {
   const s = m.spec;
   const headY = s.lowerTop - 1.1;
   const nLower = s.shrouds[0];
-  const gangFwd = s.name === 'mizzen' ? -1 : 1;
+  const gangs = mastGangs(m, chan);
 
   for (const side of [1, -1] as const) {
-    const pts = side > 0 ? ch.stbd : ch.port;
-    // Lower shrouds: the gang leads to the masthead, spread by the top.
-    const top: THREE.Vector3[] = [];
-    for (let i = 0; i < nLower; i++) {
-      const f = (i + 0.5) / nLower;
-      m.lower(headY - i * 0.16, _a);
-      // WHICH WAY THE GANG FANS is decided by what is set on that mast.
-      //
-      // Fore and main carry courses, which belly aft when she is close-hauled;
-      // the gang used to start 0.28 of the top's depth FORWARD of the mast
-      // axis, so the leading shrouds stood ahead of the sail's own head and a
-      // course could not carry any camber without one coming out of its front
-      // face. Those two fan ABAFT the mast.
-      //
-      // The mizzen carries the spanker, whose luff is on the mast and which
-      // sweeps aft and outboard as it is sheeted. A gang fanning aft is
-      // straight through it, at any sheet angle worth having. That one fans
-      // FORWARD, which is also why a ship with a big driver puts her mizzen
-      // channels forward of the mast — see `CHANNELS` in `build/hull.ts`.
-      top.push(new THREE.Vector3(
-        _a.x + side * (s.lowerRadius + 0.16 + i * 0.035),
-        _a.y,
-        _a.z + gangFwd * (m.depth * 0.10 + f * m.depth * 0.55),
-      ));
-    }
+    const lower = sided(gangs.lower, side);
+    const pts = lower.map((v) => v.bot);
+    const top = lower.map((v) => v.top);
     for (let i = 0; i < nLower; i++) {
       const A = pts[i];
       const B = top[i];
@@ -299,32 +265,16 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
     L.family('shroud-topmast');
     // Topmast shrouds: from the top's rim to the crosstrees.
     const nTop = s.shrouds[1];
-    for (let i = 0; i < nTop; i++) {
-      const f = (i + 0.5) / nTop;
-      m.lower(m.platformY, _a);
-      _c.set(_a.x + side * m.halfWidth * (0.5 + 0.48 * f), m.platformY + 0.3,
-        _a.z + gangFwd * (m.depth * 0.02 + f * m.depth * 0.5));
-      m.top(m.crossY - i * 0.12, _b);
-      _d.set(_b.x + side * (s.topRadius + 0.1), _b.y, _b.z - 0.3 + f * 0.7);
-      L.add(_d, _c, 0.05, 0.028, TAR);
-    }
+    const tm = sided(gangs.topmast, side);
+    for (let i = 0; i < nTop; i++) L.add(tm[i].top, tm[i].bot, 0.05, 0.028, TAR);
     L.family('ratline-topmast');
     // Topmast ratlines.
     const nTopRat = Math.floor((m.crossY - m.platformY) / (quality >= 2 ? 0.42 : 0.66));
     if (nTop >= 2) {
-      m.lower(m.platformY, _a);
-      const a0 = new THREE.Vector3(
-        _a.x + side * m.halfWidth * 0.52, m.platformY + 0.3, _a.z + gangFwd * m.depth * 0.02,
-      );
-      const a1 = new THREE.Vector3(
-        _a.x + side * m.halfWidth * 0.97, m.platformY + 0.3,
-        _a.z + gangFwd * (m.depth * 0.02 + m.depth * 0.5),
-      );
-      m.top(m.crossY, _b);
-      const b0 = new THREE.Vector3(_b.x + side * (s.topRadius + 0.1), m.crossY, _b.z - 0.3);
-      const b1 = new THREE.Vector3(
-        _b.x + side * (s.topRadius + 0.1), m.crossY - (nTop - 1) * 0.12, _b.z + 0.4,
-      );
+      const a0 = tm[0].bot;
+      const a1 = tm[nTop - 1].bot;
+      const b0 = tm[0].top;
+      const b1 = tm[nTop - 1].top;
       for (let r = 1; r < nTopRat; r++) {
         const f = r / nTopRat;
         if (f > 0.9) break;
@@ -336,34 +286,17 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
 
     L.family('shroud-tg');
     // Topgallant shrouds run from the crosstrees to the topgallant head.
-    const nTg = s.shrouds[2];
-    for (let i = 0; i < nTg; i++) {
-      const f = (i + 0.5) / nTg;
-      m.top(m.crossY, _a);
-      _c.set(_a.x + side * s.topHalfWidth * 0.5, m.crossY + 0.1,
-        _a.z + gangFwd * (0.08 + f * 0.7));
-      m.tg(s.tgTop - 1.2, _b);
-      _d.set(_b.x + side * (s.tgRadius + 0.06), _b.y, _b.z);
-      L.add(_d, _c, 0.04, 0.02, TAR);
-    }
+    const tgs = sided(gangs.tg, side);
+    for (const g of tgs) L.add(g.top, g.bot, 0.04, 0.02, TAR);
 
     // Backstays: long sweeps from the topmast and topgallant heads to the
     // ship's side well abaft the channel. These are the lines that read as
     // the rig's outline from a beam-on view.
     L.family('backstay');
-    const backZ = CHANNELS[Math.min(2, MASTS.indexOf(s))]?.z1 ?? 0;
-    void backZ;
-    for (const [hy, dz, rad] of [
-      [s.topmastTop - 1.6, 5.0, 0.032], [s.topmastTop - 2.4, 7.2, 0.03],
-      [s.tgTop - 1.6, 9.4, 0.026],
-    ] as const) {
-      const src = hy > s.tgFoot ? m.tg(hy, _a) : m.top(hy, _a);
-      const z = THREE.MathUtils.clamp(s.z + dz, -24, 25.6);
-      const t = tAtZ(z);
-      const st = new Station(t);
-      _c.set(src.x + side * (s.topRadius + 0.08), src.y, src.z);
-      _d.set(side * (st.widthAt(sheerY(t) - 0.85) + 0.72), sheerY(t) - 0.5, z);
-      L.add(_c, _d, 0.14, rad, TAR);
+    const bs = sided(gangs.backstay, side);
+    const table = backstayTable(s);
+    for (let i = 0; i < bs.length; i++) {
+      L.add(bs[i].top, bs[i].bot, 0.14, table[i][2], TAR);
     }
   }
 }

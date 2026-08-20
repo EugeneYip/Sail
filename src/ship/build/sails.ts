@@ -38,6 +38,7 @@ import {
 import type { PartUniforms } from '../materials/materials';
 import type { TexSet } from '../materials/textures';
 import type { RigFrame } from './masts';
+import { buildRigEnvelope } from './rigEnvelope';
 
 export interface SailResult {
   group: THREE.Group;
@@ -89,6 +90,9 @@ export interface SailUniforms {
   uSailAback: { value: number[] };
   uSailStep: { value: THREE.Vector2 };
   uSailTime: { value: number };
+  /** Where the standing rigging is, so the cloth can take up against it. */
+  uRigPlane: { value: THREE.Vector4[] };
+  uRigBand: { value: THREE.Vector4[] };
 }
 
 const _wind = new THREE.Vector3();
@@ -118,6 +122,7 @@ export function buildSails(
     uSailAback: { value: new Array<number>(Math.max(1, n)).fill(0) },
     uSailStep: { value: new THREE.Vector2() },
     uSailTime: { value: 0 },
+    ...buildRigEnvelope(frame),
   };
   for (let i = 0; i < n; i++) {
     u.uSailA.value.push(new THREE.Vector3());

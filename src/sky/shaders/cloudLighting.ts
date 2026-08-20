@@ -54,24 +54,53 @@ uniform vec3  uCloudLightIrradiance;
 uniform vec3  uCloudAmbientTop;
 uniform vec3  uCloudAmbientBottom;
 
+/** Distance and integration width of the sun march's one long reach, km. */
+const float CLOUD_SUN_REACH_KM = 4.5;
+const float CLOUD_SUN_REACH_W = 1.6;
+
 /**
  * Optical depth from a sample toward the light. Five cone steps of geometrically
  * growing length plus one long reach: the near steps resolve the self-shadowing
  * that gives a cumulus tower its form, the far one catches a neighbouring tower
  * standing between this sample and the sun.
+ *
+ * DITHERED PER STEP, for the same reason the view march is (see cloudMarch).
+ * This march used to sample the FAR END of every step at a fixed offset —
+ * 0.090, 0.239, 0.484, 0.888, 1.555 and 4.500 km — so 'tauLight' was a function
+ * of the density field read on six fixed shells of a cone whose apex is the
+ * sample. Fixed sample distances paint iso-distance terraces, and here they are
+ * terraces in BRIGHTNESS rather than in opacity: measured in the 'golden' crop
+ * as vertical striations down the sunward face of every tower, because a 19 deg
+ * sun makes those shells near-vertical. Sampling a uniform random point inside
+ * each step removes the shells and is also the unbiased estimator for the step,
+ * which sampling its end is not — the end-sample underestimates tau wherever
+ * density falls off toward the light, i.e. on exactly the sunlit faces.
+ *
+ * The steps are decorrelated from each other, and from the view march's own
+ * offset, by a golden-ratio rotation: with one shared uniform all six samples
+ * would slide together, which is unbiased but leaves the six shells rigidly
+ * linked and puts all the variance in one dimension.
+ *
+ * The long reach carries HALF the march's total weight (1.6 km of 3.15), so it
+ * was the most strongly quantised sample in the sky — one hard-edged shell at
+ * exactly 4.5 km deciding whether a neighbouring tower shadows this one. It is
+ * now integrated across the 1.6 km it is weighted for, which is also what turns
+ * a neighbour's shadow edge from a hard step into a penumbra.
  */
-float cloudLightDepth(vec3 p, vec3 lightDir){
+float cloudLightDepth(vec3 p, vec3 lightDir, float jitter){
   float tau = 0.0;
   float step = 0.09;
-  vec3 q = p;
+  float t = 0.0;
   float h;
   for (int i = 0; i < CLOUD_SUN_STEPS; i++) {
-    q += lightDir * step;
-    tau += cloudDensityAt(q, false, h) * step;
+    float u = fract(jitter + float(i) * 0.6180339887498949);
+    tau += cloudDensityAt(p + lightDir * (t + step * u), false, h) * step;
+    t += step;
     step *= 1.65;
   }
-  q = p + lightDir * 4.5;
-  tau += cloudDensityAt(q, false, h) * 1.6;
+  float u = fract(jitter + 0.3090169943749474);
+  float far = CLOUD_SUN_REACH_KM + (u - 0.5) * CLOUD_SUN_REACH_W;
+  tau += cloudDensityAt(p + lightDir * far, false, h) * CLOUD_SUN_REACH_W;
   return tau * 1000.0 * CLOUD_SIGMA_T;
 }
 
@@ -264,7 +293,7 @@ vec4 cloudMarch(vec3 pos, vec3 dir, vec3 sunDir, float steps, float jitter,
       float density = cloudDensityAt(p, detail, h);
       if (density > 0.0015) {
         float sigma = density * CLOUD_SIGMA_T;
-        float tauLight = cloudLightDepth(p, uCloudLightDir);
+        float tauLight = cloudLightDepth(p, uCloudLightDir, jitter);
         vec3 S = cloudScatteredRadiance(tauLight, cosView, h);
         float stepT = exp(-sigma * dt * 1000.0);
         L += T * S * (1.0 - stepT);

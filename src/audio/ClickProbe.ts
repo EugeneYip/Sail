@@ -63,6 +63,35 @@ export interface WatchStats {
   events: { t: number; ratio: number; db: number }[];
 }
 
+/** One row of `ClickWatcher.inject`'s lead sweep. */
+export interface LeadSweepRow {
+  /** Lead each envelope was given against `ctx.currentTime`, seconds. */
+  leadS: number;
+  /** Envelopes scheduled. */
+  scheduled: number;
+  /** Step amplitude if the ramp collapses, linear. */
+  amp: number;
+  /** What the detector counted. */
+  clicks: number;
+  worstJumpDb: number;
+  worstRatio: number;
+  seconds: number;
+}
+
+/** Injected attack length. Shorter than a render quantum would step regardless. */
+const INJECT_ATTACK_S = 0.004;
+/** Ramp back to silence, so each envelope leaves the parameter at rest. */
+const INJECT_RELEASE_S = 0.06;
+/** Gap between envelopes. Must exceed attack + release and the 21 ms window. */
+const INJECT_GAP_S = 0.22;
+/**
+ * Step amplitude, linear. -26 dBFS: far above the -66 dBFS floor and roughly ten
+ * times the first-difference RMS of the calm bed, so a collapsed ramp is
+ * unambiguous, while a ramp that executes correctly rises at amp/192 per sample
+ * and is unambiguously nothing.
+ */
+const INJECT_AMP = 0.05;
+
 const WORKLET_NAME = 'click-probe';
 
 const SRC = `
@@ -247,7 +276,11 @@ function register(ctx: BaseAudioContext): Promise<boolean> {
  * not pulled unless something downstream asks for it.
  */
 export class ClickWatcher {
+  /** Created on the first `inject()` and never in a normal session. */
+  private injector: { src: ConstantSourceNode; gain: GainNode } | null = null;
+
   private constructor(
+    private readonly ctx: AudioContext,
     private readonly node: AudioWorkletNode,
     private readonly sink: GainNode,
     private readonly tap: AudioNode,
@@ -269,10 +302,78 @@ export class ClickWatcher {
       tap.connect(node);
       node.connect(sink);
       sink.connect(ctx.destination);
-      return new ClickWatcher(node, sink, tap);
+      return new ClickWatcher(ctx, node, sink, tap);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The positive control, and the only measurement that can price LEAD_S against
+   * real hardware.
+   *
+   * `0 clicks` is not a result until the detector has been shown to find a click
+   * that is really there. This schedules `count` short attack envelopes on a DC
+   * source summed straight into the detector's input — inaudible, since the
+   * detector's own output is zeroed — giving each one `leadS` of lead against a
+   * FRESH `ctx.currentTime`, exactly as a frame would.
+   *
+   * With enough lead the ramp executes as a ramp: it rises by `amp / 192` per
+   * sample and the detector must find nothing. With too little, the events land
+   * behind the point the audio thread has already rendered, the parameter is
+   * applied at the next sample, the 4 ms attack collapses into a step of `amp`,
+   * and the detector must find one click per envelope. Sweeping `leadS` therefore
+   * measures what lead THIS device needs, instead of checking LEAD_S against
+   * itself — which is the one thing `late` and the offline render cannot do.
+   */
+  async inject(o: { count?: number; leadS?: number; amp?: number } = {}): Promise<LeadSweepRow> {
+    const count = Math.max(1, Math.min(64, Math.round(o.count ?? 8)));
+    const amp = o.amp ?? INJECT_AMP;
+    const leadS = o.leadS ?? 0;
+    const inj = this.ensureInjector();
+    const g = inj.gain.gain;
+    // The detector ignores its first `win + guard` samples — it has no history to
+    // judge them against — so an envelope fired immediately after a reset is
+    // discarded and the control reads one short. 80 ms of pre-roll is four times
+    // that window.
+    await sleep(80);
+    for (let i = 0; i < count; i++) {
+      // A fresh currentTime per envelope: a single base time would put only the
+      // first event in the past and every later one comfortably in the future,
+      // which would silently turn the negative-lead control into a no-op.
+      const t = this.ctx.currentTime + leadS;
+      g.setValueAtTime(0, t);
+      g.linearRampToValueAtTime(amp, t + INJECT_ATTACK_S);
+      g.linearRampToValueAtTime(0, t + INJECT_ATTACK_S + INJECT_RELEASE_S);
+      await sleep(INJECT_GAP_S * 1000);
+    }
+    // Let the thread render the tail before the counters are read.
+    await sleep(300);
+    const s = await this.stats(false);
+    return {
+      leadS,
+      scheduled: count,
+      amp,
+      clicks: s.clicks,
+      worstJumpDb: s.worstJumpDb,
+      worstRatio: s.worstRatio,
+      seconds: s.seconds,
+    };
+  }
+
+  private ensureInjector(): { src: ConstantSourceNode; gain: GainNode } {
+    if (this.injector) return this.injector;
+    const src = this.ctx.createConstantSource();
+    src.offset.value = 1;
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0;
+    src.connect(gain);
+    // Into the detector only. Nothing reaches the destination, so the control
+    // signal is silent to the player even while the game is running.
+    gain.connect(this.node);
+    src.start();
+    this.injector = { src, gain };
+    return this.injector;
   }
 
   /** Read the counters. `reset` starts a fresh measurement window afterwards. */
@@ -307,5 +408,18 @@ export class ClickWatcher {
     } catch {
       /* already detached */
     }
+    const inj = this.injector;
+    this.injector = null;
+    if (inj) {
+      try {
+        inj.src.stop();
+        inj.src.disconnect();
+        inj.gain.disconnect();
+      } catch {
+        /* already stopped */
+      }
+    }
   }
 }
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

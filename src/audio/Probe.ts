@@ -117,6 +117,17 @@ export interface ProbeResult {
   /** Number of automation calls seen. 0 means the instrumentation did not run. */
   paramWrites: number;
   /**
+   * Bare `.value =` assignments on an `AudioParam` during the driving loop.
+   *
+   * `minLeadS` is structurally blind to these: an assignment carries no time, so
+   * there is no lead to measure — it simply takes effect at the next sample the
+   * thread renders, which makes it a step by construction and the classic click.
+   * The lead invariant is only complete with this at 0, and a grep is not an
+   * invariant. Build-time assignments are not counted: the spy is installed
+   * after `Rig.build()` returns.
+   */
+  valueWrites: number;
+  /**
    * Events the pools' backstop had to push forward — see `Context.schedule`.
    * Non-zero means some call site bypassed `eventTime()`. Must be 0.
    */
@@ -132,17 +143,31 @@ const DEFAULTS = {
   warmup: 2,
 };
 
+interface RigRender {
+  buf: AudioBuffer;
+  live: number;
+  created: number;
+  usesWorklet: boolean;
+  drive: number;
+  minLead: number;
+  writes: number;
+  valueWrites: number;
+  late: number;
+}
+
 /**
+ * Build the rig in an `OfflineAudioContext`, drive it, render it.
+ *
  * `OfflineAudioContext` renders synchronously once started, so the whole
  * driving loop runs first, scheduling everything against a virtual clock. Every
  * component takes `now` as an argument for exactly this reason.
  */
-export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult> {
-  const seconds = opts.seconds ?? DEFAULTS.seconds;
-  const sampleRate = opts.sampleRate ?? DEFAULTS.sampleRate;
+async function renderRig(
+  opts: ProbeOptions,
+  seconds: number,
+  sampleRate: number,
+): Promise<RigRender> {
   const fps = opts.fps ?? DEFAULTS.fps;
-  const warmup = Math.min(seconds * 0.75, opts.warmup ?? DEFAULTS.warmup);
-
   const ctx = new OfflineAudioContext({
     numberOfChannels: 2,
     length: Math.ceil(seconds * sampleRate),
@@ -165,22 +190,149 @@ export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult>
     spy.restore();
   }
   const buf = await ctx.startRendering();
-  const stats = analyse(buf, warmup);
+  const out: RigRender = {
+    buf,
+    live: rig.nodes.live,
+    created: rig.nodes.created,
+    usesWorklet: rig.usesWorklet,
+    drive,
+    minLead: spy.minLead,
+    writes: spy.writes,
+    valueWrites: spy.valueWrites,
+    late: schedule.late - late0,
+  };
   rig.dispose();
+  return out;
+}
+
+export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult> {
+  const seconds = opts.seconds ?? DEFAULTS.seconds;
+  const sampleRate = opts.sampleRate ?? DEFAULTS.sampleRate;
+  const warmup = Math.min(seconds * 0.75, opts.warmup ?? DEFAULTS.warmup);
+  const r = await renderRig(opts, seconds, sampleRate);
 
   return {
     seconds,
     sampleRate,
-    ...stats,
-    liveNodes: rig.nodes.live,
-    createdNodes: rig.nodes.created,
-    usesWorklet: rig.usesWorklet,
-    driveMsPerFrame: drive,
-    minLeadS: spy.minLead,
-    paramWrites: spy.writes,
-    late: schedule.late - late0,
+    ...analyse(r.buf, warmup),
+    liveNodes: r.live,
+    createdNodes: r.created,
+    usesWorklet: r.usesWorklet,
+    driveMsPerFrame: r.drive,
+    minLeadS: r.minLead,
+    paramWrites: r.writes,
+    valueWrites: r.valueWrites,
+    late: r.late,
     requiredLeadS: LEAD_S,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Detector calibration
+ * ------------------------------------------------------------------ */
+
+export interface SensitivityStep {
+  /** Injected step size, dBFS. */
+  db: number;
+  /** Steps added to the buffer. */
+  injected: number;
+  /** Steps the detector found, above the control count. */
+  found: number;
+}
+
+export interface SensitivityResult {
+  /** Clicks found in the UNTOUCHED render. Must be 0, or the rest means nothing. */
+  falsePositives: number;
+  /** Level of the signal the steps were injected into, dBFS. */
+  peakDb: number;
+  rmsDb: number;
+  steps: SensitivityStep[];
+  /**
+   * Quietest step, dBFS, at which every injection was found. `+240` means the
+   * detector caught nothing at any size, i.e. it is blind and every zero it has
+   * ever reported is void.
+   */
+  thresholdDb: number;
+}
+
+const SENSITIVITY_STEPS_DB = [-12, -18, -24, -30, -36, -42, -48, -54, -60, -66, -72];
+
+/** Steps are spaced far wider than the 21 ms analysis window, so each is judged alone. */
+const INJECT_GAP_S = 0.35;
+/** Decay of the injected step. A collapsed attack is a jump, then the tail plays out. */
+const INJECT_TAU_S = 0.008;
+
+/**
+ * Calibrate `countClicks` against known damage — the positive control the whole
+ * click measurement rests on.
+ *
+ * "0 clicks" is only a result if the detector can be shown to find a click when
+ * one is really there. This renders the rig, counts clicks in the clean buffer
+ * (which must be 0), then re-counts with `n` deliberate discontinuities of known
+ * size added, sweeping the size down until they stop being found. The answer is
+ * a sensitivity in dBFS, which is what turns "no clicks" into "no discontinuity
+ * larger than X".
+ */
+export async function probeSensitivity(
+  opts: ProbeOptions = {},
+  stepsDb: readonly number[] = SENSITIVITY_STEPS_DB,
+): Promise<SensitivityResult> {
+  const seconds = opts.seconds ?? DEFAULTS.seconds;
+  const sampleRate = opts.sampleRate ?? DEFAULTS.sampleRate;
+  const warmup = Math.min(seconds * 0.75, opts.warmup ?? DEFAULTS.warmup);
+  const { buf } = await renderRig(opts, seconds, sampleRate);
+  const start = Math.min(buf.length - 1, Math.floor(warmup * sampleRate));
+
+  const clean = buf.getChannelData(0);
+  const control = countClicks(clean, start, sampleRate);
+
+  let peak = 0;
+  let sum = 0;
+  for (let i = start; i < clean.length; i++) {
+    const v = clean[i];
+    if (!Number.isFinite(v)) continue;
+    const a = v < 0 ? -v : v;
+    if (a > peak) peak = a;
+    sum += v * v;
+  }
+  const n = Math.max(1, clean.length - start);
+
+  const scratch = new Float32Array(clean.length);
+  const steps: SensitivityStep[] = [];
+  let thresholdDb = 240;
+  for (const db of stepsDb) {
+    scratch.set(clean);
+    const injected = injectSteps(scratch, start, sampleRate, Math.pow(10, db / 20));
+    const found = countClicks(scratch, start, sampleRate).clicks - control.clicks;
+    steps.push({ db, injected, found });
+    if (injected > 0 && found >= injected && db < thresholdDb) thresholdDb = db;
+  }
+
+  return {
+    falsePositives: control.clicks,
+    peakDb: db(peak),
+    rmsDb: db(Math.sqrt(sum / n)),
+    steps,
+    thresholdDb,
+  };
+}
+
+/**
+ * Add discontinuities of exactly `amp` to `d`, spaced through the measured
+ * region. Each is an instant jump followed by an exponential tail, which is what
+ * an attack ramp collapsing into a step actually does to the signal — so the
+ * count the detector returns is the count it would return on the real defect.
+ */
+function injectSteps(d: Float32Array, start: number, sampleRate: number, amp: number): number {
+  const gap = Math.max(1, Math.round(INJECT_GAP_S * sampleRate));
+  const tau = INJECT_TAU_S * sampleRate;
+  const tail = Math.round(tau * 6);
+  let count = 0;
+  for (let at = start + gap; at + tail < d.length; at += gap) {
+    for (let j = 0; j < tail; j++) d[at + j] += amp * Math.exp(-j / tau);
+    count++;
+  }
+  return count;
 }
 
 /**
@@ -194,8 +346,10 @@ export async function renderProbe(opts: ProbeOptions = {}): Promise<ProbeResult>
 class LeadSpy {
   minLead = Infinity;
   writes = 0;
+  valueWrites = 0;
   private now = 0;
   private saved: [string, (...a: never[]) => unknown][] = [];
+  private savedValue: PropertyDescriptor | null = null;
 
   /** (method name, index of the time argument). */
   private static readonly SCHEDULERS: readonly (readonly [string, number])[] = [
@@ -228,6 +382,25 @@ class LeadSpy {
         return (orig as unknown as (...a: unknown[]) => unknown).apply(this, args);
       } as unknown as (...a: never[]) => unknown;
     }
+
+    // `.value =` carries no time, so there is no lead to measure and `minLead`
+    // cannot see it — it applies at the next sample rendered, which is a step.
+    // Counting it is what makes the lead invariant complete rather than a grep.
+    const desc = Object.getOwnPropertyDescriptor(AudioParam.prototype, 'value');
+    if (desc && typeof desc.set === 'function') {
+      this.savedValue = desc;
+      const set = desc.set;
+      const spy = this;
+      Object.defineProperty(AudioParam.prototype, 'value', {
+        configurable: true,
+        enumerable: desc.enumerable === true,
+        get: desc.get,
+        set(this: AudioParam, v: number): void {
+          spy.valueWrites++;
+          set.call(this, v);
+        },
+      });
+    }
   }
 
   restore(): void {
@@ -235,6 +408,10 @@ class LeadSpy {
     const proto = AudioParam.prototype as unknown as Record<string, (...a: never[]) => unknown>;
     for (const [name, orig] of this.saved) proto[name] = orig;
     this.saved.length = 0;
+    if (this.savedValue) {
+      Object.defineProperty(AudioParam.prototype, 'value', this.savedValue);
+      this.savedValue = null;
+    }
     if (this.minLead === Infinity) this.minLead = 0;
   }
 }
@@ -442,6 +619,7 @@ function analyse(
   | 'driveMsPerFrame'
   | 'minLeadS'
   | 'paramWrites'
+  | 'valueWrites'
   | 'late'
   | 'requiredLeadS'
 > {

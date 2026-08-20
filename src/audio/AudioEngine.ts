@@ -1,5 +1,5 @@
 import type { Module, QualityTier, World } from '../types';
-import { ClickWatcher, type WatchStats } from './ClickProbe';
+import { ClickWatcher, type LeadSweepRow, type WatchStats } from './ClickProbe';
 import { autoplayAllowed, LEAD_S, observeLead, onFirstGesture, schedule } from './Context';
 import type { ProbeOptions, ProbeResult } from './Probe';
 import { Rig } from './Rig';
@@ -55,6 +55,16 @@ export interface AudioExt {
   watch(on: boolean): Promise<boolean>;
   /** Read the detector. `reset` restarts the measurement window. */
   watched(reset?: boolean): Promise<WatchStats | null>;
+  /**
+   * Positive control for `watch`, and the price of LEAD_S on real hardware.
+   *
+   * Injects deliberate attack envelopes at each of `leads` seconds of lead and
+   * returns what the detector counted — see `ClickWatcher.inject`. Too little
+   * lead must produce one click per envelope; LEAD_S must produce none. Without
+   * this, "0 clicks" is indistinguishable from a blind instrument, which is the
+   * failure mode DIAGNOSIS.md §25 records ten times over. Requires `watch(true)`.
+   */
+  leadSweep(leads: number[], count?: number): Promise<LeadSweepRow[] | null>;
   /**
    * The scheduling-lead invariant, both halves of it.
    *
@@ -304,6 +314,7 @@ export class AudioEngine implements Module {
       },
       watch: (on: boolean) => self.watch(on),
       watched: async (reset?: boolean) => (await self.watcher?.stats(reset === true)) ?? null,
+      leadSweep: (leads: number[], count?: number) => self.leadSweep(leads, count),
       lateEvents: () => ({
         late: schedule.late,
         worstLeadS: schedule.worstLeadS,
@@ -315,6 +326,19 @@ export class AudioEngine implements Module {
         outputLatencyS: self.ctx?.outputLatency ?? 0,
       }),
     };
+  }
+
+  /** Each lead measured on a freshly reset detector, so the rows are independent. */
+  private async leadSweep(leads: number[], count = 8): Promise<LeadSweepRow[] | null> {
+    const w = this.watcher;
+    if (!w) return null;
+    const rows: LeadSweepRow[] = [];
+    for (const leadS of leads) {
+      await w.stats(true);
+      rows.push(await w.inject({ leadS, count }));
+    }
+    await w.stats(true);
+    return rows;
   }
 
   private async watch(on: boolean): Promise<boolean> {

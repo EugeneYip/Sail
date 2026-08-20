@@ -86,6 +86,14 @@ const pageErrors = [];
 const consoleLines = [];
 page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => consoleLines.push(`${m.type()}: ${m.text()}`));
+// Vite full-reloads on any module it cannot hot-patch. That destroys the
+// AudioContext and the detector's counters with it, so a live reading taken
+// across a reload is meaningless even though every call succeeded — the live
+// section watches this and redoes itself rather than reporting the wreckage.
+let navigations = 0;
+page.on('framenavigated', (f) => {
+  if (f === page.mainFrame()) navigations++;
+});
 
 // index.html pulls webfonts from Google. With no route out, the request sits
 // there and DOMContentLoaded — which waits on a stylesheet the module script is
@@ -230,6 +238,9 @@ const LIVE_CHECKS = [
   'context running',
   'AudioWorklet active for the rigging',
   'discontinuity detector attached to the live master',
+  'the detector counts a click that is really there',
+  'LEAD_S is enough on this device',
+  'LEAD_S has margin over what this device needs',
   'calm sea is free of clicks',
   'gale is free of clicks',
   'gale under main-thread stalls is free of clicks',
@@ -260,11 +271,51 @@ const STORM = {
 
 let noon = null;
 let storm = null;
+let sweep = null;
 const watched = {};
 if (!gameUp) {
   const why = 'the game did not boot — another subsystem is broken, not audio';
   for (const n of LIVE_CHECKS) skip(n, why);
 } else {
+/**
+ * A reload mid-measurement is not a flake to retry per-evaluate: every call can
+ * succeed and the numbers still be void, because the counters restarted in the
+ * middle. So the whole live section is redone, and the checks it already
+ * recorded are discarded — `results.length` is the checkpoint.
+ */
+const mark = results.length;
+const markFailures = failures;
+for (let attempt = 1; ; attempt++) {
+  const nav0 = navigations;
+  let err = null;
+  try {
+    await runLive();
+  } catch (e) {
+    err = e;
+  }
+  if (!err && navigations === nav0) break;
+  if (attempt >= 3) {
+    if (err) throw err;
+    check(
+      'the live measurement survived without a reload',
+      false,
+      `the page reloaded ${navigations - nav0}x during the live section — numbers discarded`,
+    );
+    break;
+  }
+  results.length = mark;
+  failures = markFailures;
+  if (!args.json) {
+    console.log(`\n  (page reloaded mid-measurement; redoing the live section, attempt ${attempt + 1})`);
+  }
+  await page.waitForTimeout(1500);
+  await loadProbe();
+  await page.waitForFunction(() => !!window.__leeward?.world?.ext?.audio, null, {
+    timeout: args.timeout,
+  });
+}
+
+async function runLive() {
 await robust(() => page.evaluate(() => window.__leeward.world.ext.audio.start()));
 await page.waitForTimeout(1500);
 
@@ -281,6 +332,81 @@ const watching = await robust(() =>
   page.evaluate(() => window.__leeward.world.ext.audio.watch(true)),
 );
 check('discontinuity detector attached to the live master', watching === true, `watch=${watching}`);
+
+/* ---------------------------------------------------------------- *
+ *  1a. calibrate the instrument before believing any zero from it
+ * ---------------------------------------------------------------- */
+
+/**
+ * Every click number below is a zero. DIAGNOSIS.md §25 lists ten instruments
+ * that produced a confident zero because they were blind, so this sweep is run
+ * FIRST and the rest is only meaningful if it passes.
+ *
+ * `leadSweep` schedules 4 ms attack ramps at each lead, silently, into the
+ * detector's own input. The physics is not in doubt: with less lead than the
+ * audio thread has already rendered, the events land in the past, the ramp is
+ * applied at the next sample as a step of 0.05 (-26 dBFS), and the detector must
+ * count one per envelope. With LEAD_S it must count none. That single sweep is
+ * both halves of the proof — the detector is not blind, AND LEAD_S is priced
+ * against this device's real render-ahead rather than against itself.
+ */
+const LEADS_S = [-0.02, 0, 0.002, 0.005, 0.01, 0.02, 0.055];
+await setScene(CALM.env, CALM.ship);
+await settle(2.5);
+sweep = await robust(() =>
+  page.evaluate((leads) => window.__leeward.world.ext.audio.leadSweep(leads, 6), LEADS_S),
+);
+if (!args.json) {
+  console.log('\nCALIBRATION (deliberate defects injected at a known scheduling lead)');
+  for (const r of sweep ?? []) {
+    console.log(
+      `    lead ${fmt(r.leadS * 1000, 1).padStart(6)} ms   ${String(r.clicks).padStart(3)}/${r.scheduled} caught   ` +
+        `worst ${fmt(r.worstJumpDb, 1).padStart(6)} dBFS (x${fmt(r.worstRatio, 0)})`,
+    );
+  }
+}
+const rowAt = (lead) => (sweep ?? []).find((r) => Math.abs(r.leadS - lead) < 1e-9) ?? null;
+const negative = rowAt(-0.02);
+const marginal = rowAt(0.002);
+const atLead = rowAt(0.055);
+// The quietest lead in the sweep that still came back clean: what this device
+// actually needs, as opposed to what the constant claims.
+const cleanest = (sweep ?? []).filter((r) => r.clicks === 0).reduce((a, r) => (a === null || r.leadS < a.leadS ? r : a), null);
+
+check(
+  'the detector counts a click that is really there',
+  negative !== null && negative.clicks >= negative.scheduled,
+  negative
+    ? `${negative.clicks}/${negative.scheduled} injected steps of ${fmt(20 * Math.log10(negative.amp), 1)} dBFS found at ${fmt(negative.leadS * 1000, 0)} ms lead`
+    : 'the sweep did not run — every zero below is unverified',
+);
+check(
+  'LEAD_S is enough on this device',
+  atLead !== null && atLead.clicks === 0,
+  atLead ? `0/${atLead.scheduled} at 55 ms lead` : 'no reading',
+);
+/**
+ * How much margin LEAD_S actually has, measured rather than argued.
+ *
+ * Worth recording plainly, because the sweep contradicts the mechanism written
+ * into Probe.ts and ClickProbe.ts. Those say an event at `currentTime + 2 ms`
+ * lands in the PAST online and collapses a 4 ms ramp into a step. On this box it
+ * does not: 2 ms is clean, and so is 0 ms. Only a NEGATIVE lead steps. The
+ * explanation is that Chrome's `currentTime` is the start of the last block
+ * committed, the thread picks the automation up one 2.7 ms quantum later, and a
+ * 4 ms ramp still has most of its length left to run — so it is compressed, not
+ * collapsed. LEAD_S stays at 55 ms: it costs nothing audible and a device with a
+ * larger output buffer may well need it. But the margin here is the whole 55 ms,
+ * not the few milliseconds the comments imply.
+ */
+check(
+  'LEAD_S has margin over what this device needs',
+  cleanest !== null && atLead !== null && cleanest.leadS <= 0.055,
+  cleanest
+    ? `clean from ${fmt(cleanest.leadS * 1000, 1)} ms upward, LEAD_S is 55 ms — ` +
+      `2 ms lead measured ${marginal ? marginal.clicks : '?'}/${marginal ? marginal.scheduled : '?'}, so §19's "2 ms lands in the past" does NOT reproduce here`
+    : 'no clean lead found — LEAD_S may be insufficient',
+);
 
 const readWatch = () =>
   robust(() => page.evaluate(() => window.__leeward.world.ext.audio.watched(true)));
@@ -402,12 +528,7 @@ check(
 );
 await robust(() => page.evaluate(() => window.__leeward.world.ext.audio.watch(false)));
 }
-
-/* ------------------------------------------------------------------ *
- *  2. offline — wind sweep
- * ------------------------------------------------------------------ */
-
-if (!args.json) console.log('\nOFFLINE wind sweep 0 -> 25 m/s (music + wildlife muted: both are timed events)');
+}
 
 const FIXED = {
   seaState: 3,
@@ -420,6 +541,54 @@ const FIXED = {
   exposure: 0.6,
   masterVolume: 0.8,
 };
+
+/* ------------------------------------------------------------------ *
+ *  2a. calibrate the offline detector too
+ * ------------------------------------------------------------------ */
+
+/**
+ * The same argument as 1a, for `Probe.countClicks`. Renders the rig, counts
+ * clicks in the clean buffer, then re-counts with steps of known size added and
+ * reports the quietest size that is still found. That number is what makes every
+ * "0 clicks" below readable as "no discontinuity above X dBFS" instead of a bare
+ * zero — and the gale is included because a loud broadband bed RAISES the local
+ * threshold, so it is the case where the detector is least sensitive.
+ */
+if (!args.json) console.log('\nCALIBRATION offline detector sensitivity (steps of known size added to a real render)');
+
+const sens = {};
+for (const [label, opts] of [
+  ['calm bed', { seconds: 8, warmup: 2, only: ['sea'], motion: 1, set: { ...FIXED, seaState: 2, waveHeight: 0.6, choppiness: 0.25, windSpeed: 4.2, speedKnots: 4, apparentWind: 4.2, masterVolume: 1 } }],
+  ['gale, everything', { seconds: 8, warmup: 2, motion: 1.6, set: { ...FIXED, seaState: 7, waveHeight: 6.5, choppiness: 0.85, windSpeed: 22, apparentWind: 26, speedKnots: 11, rain: 0.85, masterVolume: 1 } }],
+]) {
+  const r = await inProbe((p, o) => p.probeSensitivity(o), opts);
+  sens[label] = r;
+  if (!args.json) {
+    const caught = r.steps.map((s) => `${s.db}:${s.found}/${s.injected}`).join(' ');
+    console.log(
+      `    ${label.padEnd(18)} programme ${fmt(r.peakDb, 1)} dBFS peak / ${fmt(r.rmsDb, 1)} dBFS RMS   ` +
+        `false positives ${r.falsePositives}\n      caught ${caught}\n      threshold ${fmt(r.thresholdDb, 0)} dBFS`,
+    );
+  }
+}
+check(
+  'the offline detector does not invent clicks',
+  Object.values(sens).every((r) => r.falsePositives === 0),
+  Object.entries(sens).map(([k, r]) => `${k}:${r.falsePositives}`).join(' '),
+);
+check(
+  'the offline detector catches a step it should hear',
+  Object.values(sens).every((r) => r.thresholdDb <= -36),
+  Object.entries(sens).map(([k, r]) => `${k} ${fmt(r.thresholdDb, 0)} dBFS`).join(', ') +
+    ' — every zero below means "nothing above this"',
+);
+
+/* ------------------------------------------------------------------ *
+ *  2. offline — wind sweep
+ * ------------------------------------------------------------------ */
+
+if (!args.json) console.log('\nOFFLINE wind sweep 0 -> 25 m/s (music + wildlife muted: both are timed events)');
+
 const windRows = [];
 for (const windSpeed of [0, 5, 10, 15, 20, 25]) {
   const r = await probe(
@@ -440,14 +609,44 @@ for (const windSpeed of [0, 5, 10, 15, 20, 25]) {
     );
   }
 }
-let windMono = true;
-for (let i = 1; i < windRows.length; i++) {
-  if (!(windRows[i].rms > windRows[i - 1].rms)) windMono = false;
+/**
+ * The wind bus alone, because the full mix is sea-dominated BY DESIGN.
+ *
+ * This assertion used to be "the whole mix rises monotonically with wind", and
+ * it failed: -43.0, -43.0, -43.0, -42.9, -41.3, -36.7 dBFS. Nothing was wrong.
+ * The sea is pinned at state 3 in this sweep and directive 5 puts the sea in
+ * front, so at 5 m/s the wind bed sits ~23 dB under the sea and moves the sum by
+ * less than the FFT can resolve — "light air is genuinely nothing" is the
+ * intended behaviour, stated in Wind.ts. Asserting on the sum measured the sea's
+ * constancy, not the wind's response. So: the wind bus alone must be strictly
+ * monotonic, and the sum must merely never fall.
+ */
+const windOnly = [];
+for (const windSpeed of [0, 5, 10, 15, 20, 25]) {
+  const r = await probe(
+    {
+      seconds: 5,
+      warmup: 2.5,
+      only: ['wind'],
+      set: { ...FIXED, windSpeed, apparentWind: windSpeed, masterVolume: 1 },
+      sails: { count: 12, area: 300, set: 1, luff: 0 },
+    },
+    `wind-only ${windSpeed}`,
+  );
+  windOnly.push({ windSpeed, ...r });
+}
+if (!args.json) {
+  console.log(`    wind bus alone: ${windOnly.map((r) => fmt(r.rmsDb, 1)).join(' -> ')} dBFS`);
 }
 check(
-  'RMS rises monotonically with wind speed',
-  windMono,
-  windRows.map((r) => fmt(r.rmsDb, 1)).join(' -> ') + ' dBFS',
+  'the wind bus rises monotonically with wind speed',
+  windOnly.every((r, i) => i === 0 || r.rms > windOnly[i - 1].rms),
+  windOnly.map((r) => fmt(r.rmsDb, 1)).join(' -> ') + ' dBFS',
+);
+check(
+  'more wind never makes the whole mix quieter',
+  windRows.every((r, i) => i === 0 || r.rmsDb > windRows[i - 1].rmsDb - 0.15),
+  windRows.map((r) => fmt(r.rmsDb, 1)).join(' -> ') + ' dBFS (sea pinned at state 3)',
 );
 check(
   'wind also brightens, not just swells',
@@ -672,6 +871,7 @@ check(
 
 const minLead = Math.min(...renders.map((r) => r.minLeadS));
 const writes = renders.reduce((a, r) => a + r.paramWrites, 0);
+const valueWrites = renders.reduce((a, r) => a + r.valueWrites, 0);
 const lateTotal = renders.reduce((a, r) => a + r.late, 0);
 const required = renders[0].requiredLeadS;
 const worstRender = renders.reduce((a, r) => (r.minLeadS < a.minLeadS ? r : a), renders[0]);
@@ -696,6 +896,16 @@ check(
   'no call site needed the backstop clamp',
   lateTotal === 0,
   lateTotal === 0 ? 'every event built with eventTime()' : `${lateTotal} clamped`,
+);
+// A bare assignment carries no time, so `minLeadS` above cannot see it: it takes
+// effect at the next sample rendered and is therefore a step by construction.
+// Closes the only hole left in the lead invariant.
+check(
+  'no running parameter is assigned with .value =',
+  valueWrites === 0,
+  valueWrites === 0
+    ? `0 bare assignments across ${writes} timed events`
+    : `${valueWrites} bare assignments — each one is a step`,
 );
 
 /* ------------------------------------------------------------------ *
@@ -767,7 +977,7 @@ await browser.close();
 if (args.json) {
   console.log(
     JSON.stringify(
-      { results, watched, live: { noon, storm }, seaRows, windRows, speedRows, worst, stallRows, census, renders },
+      { results, watched, sweep, sens, live: { noon, storm }, seaRows, windRows, windOnly, speedRows, worst, stallRows, census, renders },
       null,
       2,
     ),

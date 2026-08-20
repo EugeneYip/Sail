@@ -110,7 +110,18 @@ float wakeFalloff(vec2 xz){
       vec2 wuv = fract((uWakeMatrix * vec3(P.xz, 1.0)).xy);
       vec4 wk = texture2D(uWake, wuv);
       slope += wk.ba * wf;
-      wakeFoam = wk.r * wf;
+      // ANYTHING THAT CANNOT BE WHITE MUST BE EXACTLY NOTHING.
+      //
+      // The divergent arms are a narrow ridge inside a broad Gaussian, so their
+      // sub-visible tail spans a band tens of metres wide either side of the
+      // cusp, and the persistent buffer's decay walks every value between the
+      // peak and zero on its way out. Foam suppresses the water's specular, and
+      // at golden hour the reflection it suppresses carries several hundred
+      // times the body radiance — so a coverage of 0.03 is not invisible, it is
+      // a broad DARK LANE ruled at the Kelvin half-angle. 'wake.ts' applies this
+      // rule at the source for exactly this reason; the consumer has to apply it
+      // too, because decay reintroduces the tail the source refused to write.
+      wakeFoam = max(wk.r - 0.06, 0.0) * (1.0 / 0.94) * wf;
     }
   }`
     : '';
