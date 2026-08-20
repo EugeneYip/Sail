@@ -230,6 +230,7 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
   const s = m.spec;
   const headY = s.lowerTop - 1.1;
   const nLower = s.shrouds[0];
+  const gangFwd = s.name === 'mizzen' ? -1 : 1;
 
   for (const side of [1, -1] as const) {
     const pts = side > 0 ? ch.stbd : ch.port;
@@ -238,15 +239,23 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
     for (let i = 0; i < nLower; i++) {
       const f = (i + 0.5) / nLower;
       m.lower(headY - i * 0.16, _a);
-      // The gang goes round the masthead ABAFT the mast and fans aft. It used
-      // to start 0.28 of the top's depth FORWARD of the mast axis, which put
-      // the leading shrouds ahead of the sail's own head — so a course could
-      // not carry any camber at all without a shroud coming out of its front
-      // face. Nothing forward of the jackstay now.
+      // WHICH WAY THE GANG FANS is decided by what is set on that mast.
+      //
+      // Fore and main carry courses, which belly aft when she is close-hauled;
+      // the gang used to start 0.28 of the top's depth FORWARD of the mast
+      // axis, so the leading shrouds stood ahead of the sail's own head and a
+      // course could not carry any camber without one coming out of its front
+      // face. Those two fan ABAFT the mast.
+      //
+      // The mizzen carries the spanker, whose luff is on the mast and which
+      // sweeps aft and outboard as it is sheeted. A gang fanning aft is
+      // straight through it, at any sheet angle worth having. That one fans
+      // FORWARD, which is also why a ship with a big driver puts her mizzen
+      // channels forward of the mast — see `CHANNELS` in `build/hull.ts`.
       top.push(new THREE.Vector3(
         _a.x + side * (s.lowerRadius + 0.16 + i * 0.035),
         _a.y,
-        _a.z + m.depth * 0.10 + f * m.depth * 0.55,
+        _a.z + gangFwd * (m.depth * 0.10 + f * m.depth * 0.55),
       ));
     }
     for (let i = 0; i < nLower; i++) {
@@ -294,7 +303,7 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
       const f = (i + 0.5) / nTop;
       m.lower(m.platformY, _a);
       _c.set(_a.x + side * m.halfWidth * (0.5 + 0.48 * f), m.platformY + 0.3,
-        _a.z + m.depth * 0.02 + f * m.depth * 0.5);
+        _a.z + gangFwd * (m.depth * 0.02 + f * m.depth * 0.5));
       m.top(m.crossY - i * 0.12, _b);
       _d.set(_b.x + side * (s.topRadius + 0.1), _b.y, _b.z - 0.3 + f * 0.7);
       L.add(_d, _c, 0.05, 0.028, TAR);
@@ -305,10 +314,11 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
     if (nTop >= 2) {
       m.lower(m.platformY, _a);
       const a0 = new THREE.Vector3(
-        _a.x + side * m.halfWidth * 0.52, m.platformY + 0.3, _a.z + m.depth * 0.02,
+        _a.x + side * m.halfWidth * 0.52, m.platformY + 0.3, _a.z + gangFwd * m.depth * 0.02,
       );
       const a1 = new THREE.Vector3(
-        _a.x + side * m.halfWidth * 0.97, m.platformY + 0.3, _a.z + m.depth * 0.02 + m.depth * 0.5,
+        _a.x + side * m.halfWidth * 0.97, m.platformY + 0.3,
+        _a.z + gangFwd * (m.depth * 0.02 + m.depth * 0.5),
       );
       m.top(m.crossY, _b);
       const b0 = new THREE.Vector3(_b.x + side * (s.topRadius + 0.1), m.crossY, _b.z - 0.3);
@@ -330,7 +340,8 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
     for (let i = 0; i < nTg; i++) {
       const f = (i + 0.5) / nTg;
       m.top(m.crossY, _a);
-      _c.set(_a.x + side * s.topHalfWidth * 0.5, m.crossY + 0.1, _a.z + 0.08 + f * 0.7);
+      _c.set(_a.x + side * s.topHalfWidth * 0.5, m.crossY + 0.1,
+        _a.z + gangFwd * (0.08 + f * 0.7));
       m.tg(s.tgTop - 1.2, _b);
       _d.set(_b.x + side * (s.tgRadius + 0.06), _b.y, _b.z);
       L.add(_d, _c, 0.04, 0.02, TAR);
@@ -605,7 +616,19 @@ function running(
   }
 }
 
-/** Where a brace is belayed: aft on the next mast, or on the ship's side. */
+/**
+ * Where a brace is belayed: aft on the next mast, or on the ship's side.
+ *
+ * The belay point has to be ABAFT the next mast's canvas, not on its axis.
+ * These points sit inside the vertical span of the sail they are behind, and on
+ * the axis they were also inside its DEPTH — so every brace on the ship ended by
+ * entering the next mast's sail from in front and coming out at the back. The
+ * offset is the deepest belly a course can stand (a quarter of a 26 m chord)
+ * plus the yard's own standoff, which is where a pin rail or a block on the
+ * stay would be anyway.
+ */
+const BRACE_BELAY_ABAFT_M = 2.6;
+
 function braceAnchor(frame: RigFrame, mast: number, tier: number): THREE.Vector3 {
   const out = new THREE.Vector3();
   if (mast === 0) {
@@ -627,6 +650,7 @@ function braceAnchor(frame: RigFrame, mast: number, tier: number): THREE.Vector3
     m.at(y, out);
     out.x += m.spec.lowerRadius + 0.4;
   }
+  out.z += BRACE_BELAY_ABAFT_M;
   return out;
 }
 

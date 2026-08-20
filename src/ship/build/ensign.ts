@@ -160,13 +160,25 @@ function makeEnsignTexture(size: number): { map: THREE.Texture; normalMap: THREE
       let c: readonly [number, number, number] = row % 2 === 0 ? RED : WHITE;
 
       // Sewn seams between the strips of bunting, and the stitching in them.
+      // The union is ONE piece of blue bunting, so the stripe seams stop at its
+      // fly edge — carrying them across it drew eight horizontal creases over
+      // the stars that no flag has ever had.
       const sv = v * STRIPES;
       const seamD = Math.min(sv - Math.floor(sv), 1 - (sv - Math.floor(sv))) / STRIPES;
-      const seam = Math.max(0, 1 - seamD / (1.4 / h));
+      const inUnion = u < unionU && v < unionV;
+      let seam = Math.max(0, 1 - seamD / (1.4 / h));
+      if (inUnion) seam = 0;
+      // The union's own two seams: where it is sewn to the stripes below and to
+      // the field abaft it.
+      const unionSeam = Math.max(
+        Math.max(0, 1 - Math.abs(v - unionV) / (1.4 / h)) * (u < unionU ? 1 : 0),
+        Math.max(0, 1 - Math.abs(u - unionU) * FLY_RATIO / (1.4 / h)) * (v < unionV ? 1 : 0),
+      );
+      seam = Math.max(seam, unionSeam);
       const stitch = seam * (vnoise(fx * 260, fy * 260, 7) > 0.55 ? 1 : 0);
 
       let inStar = 0;
-      if (u < unionU && v < unionV) {
+      if (inUnion) {
         c = BLUE;
         const cw = unionU * FLY_RATIO;
         const ch = unionV;
@@ -355,7 +367,10 @@ export function buildEnsign(
   const leech = clew.clone().sub(frame.spanker.gaffEnd).normalize();
   // Perpendicular to the leech, in the sail's plane, pointing away from the
   // luff: the direction to stand the flag off the canvas.
-  const outward = new THREE.Vector3(0, -leech.z, leech.y).normalize();
+  // (0, +z, -y) of a leech that runs down-and-aft points up-and-aft, which is
+  // out of the sail. The other sign points down and forward, straight into the
+  // canvas, and buries the hoist third of the flag behind it.
+  const outward = new THREE.Vector3(0, leech.z, -leech.y).normalize();
   const anchor = frame.spanker.gaffEnd.clone()
     .addScaledVector(outward, LEECH_CLEAR_M)
     .addScaledVector(leech, 0.18);

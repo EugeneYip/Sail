@@ -961,7 +961,11 @@ function buildDecks(bins: Bins, stations: Station[]): void {
 export const CHANNELS: readonly { mast: number; z0: number; z1: number }[] = [
   { mast: 0, z0: -15.2, z1: -10.4 },
   { mast: 1, z0: 2.0, z1: 7.4 },
-  { mast: 2, z0: 16.6, z1: 20.2 },
+  // FORWARD of the mizzen (z = 15.6), unlike the other two. The spanker's luff
+  // is on that mast and its boom sweeps aft and outboard; a gang set up abaft
+  // the mast is inside the sail at any useful sheet angle, which is what put
+  // the mizzen ratlines through the spanker in every trim state.
+  { mast: 2, z0: 11.4, z1: 15.0 },
 ];
 
 function buildChannels(bins: Bins): void {
