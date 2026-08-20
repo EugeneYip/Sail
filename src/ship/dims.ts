@@ -429,10 +429,34 @@ export const BOWSPRIT = {
   length: 15.4,
   radius0: 0.56,
   radius1: 0.33,
-  /** Jibboom runs on beyond the bowsprit cap. */
-  jibboom: 12.6,
+  /**
+   * Jibboom and flying jibboom, running on beyond the bowsprit cap.
+   *
+   * These were 12.6 and 8.4, which carried the flying jibboom's tip to
+   * z = -51.6 — 24.6 m forward of the stem, a forward reach of 46 per cent of
+   * the hull's own length, and 77.9 m from the taffrail to the tip against the
+   * 62 m in AGENTS.md.
+   *
+   * The BOWSPRIT itself is not the problem and has not been touched: its cap
+   * lands at z = -36.14, which is 62.44 m from the transom — the contract's
+   * "length overall w/ bowsprit" to a rounding error, so whoever sized it sized
+   * it to that figure. Everything past the cap is jibboom, and a jibboom is not
+   * part of an LOA. Cut to the historical proportion instead: the jibboom
+   * projects about two thirds of the bowsprit's own outboard length beyond the
+   * cap and the flying jibboom about half of that again, which brings the
+   * forward reach to 18.0 m (34 per cent of the hull) and taffrail-to-tip to
+   * 71.3 m.
+   *
+   * A LITERAL 62 m taffrail-to-tip is not reachable with a jibboom at all: it
+   * would put the foremost spar at z = -35.7, four tenths of a metre ABAFT the
+   * present bowsprit cap, deleting the jibboom, the flying jibboom, the
+   * martingale and the tacks of three of the four headsails. Note also that the
+   * true SPARRED length is 82 m, not 71: the spanker boom overhangs the transom
+   * by 11 m and is the aftermost spar in the ship.
+   */
+  jibboom: 8.0,
   jibboomRadius: 0.2,
-  flying: 8.4,
+  flying: 5.6,
   flyingRadius: 0.12,
   /** Dolphin striker, hanging under the bowsprit cap. */
   strikerLen: 2.5,

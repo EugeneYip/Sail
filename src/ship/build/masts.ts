@@ -423,7 +423,7 @@ function buildBowsprit(bins: Bins, yards: YardFrame[], quality: number): RigFram
   oak.spar(jStart, jibboomEnd, B.jibboomRadius * 1.4, B.jibboomRadius * 0.7, 8);
 
   const dir3 = new THREE.Vector3(0, Math.sin(B.steeve * 0.6), -Math.cos(B.steeve * 0.6)).normalize();
-  const fStart = jibboomEnd.clone().addScaledVector(dir2, -3.0);
+  const fStart = jibboomEnd.clone().addScaledVector(dir2, -2.4);
   const flyingEnd = fStart.clone().addScaledVector(dir3, B.flying);
   oak.setColorHexLinear(0xffffff, 0.86);
   oak.spar(fStart, flyingEnd, B.flyingRadius * 1.5, B.flyingRadius * 0.7, 6);

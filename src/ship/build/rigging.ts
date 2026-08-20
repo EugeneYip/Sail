@@ -23,7 +23,7 @@ import type { PartUniforms } from '../materials/materials';
 import type { TexSet } from '../materials/textures';
 import type { SailUniforms } from './sails';
 import type { HullResult } from './hull';
-import { backstayTable, channelPoints, mastGangs } from './rigEnvelope';
+import { backstayTable, channelPoints, gangFan, mastGangs } from './rigEnvelope';
 import type { MastFrame, RigFrame, YardFrame } from './masts';
 import {
   BOWSPRIT, MASTS, PART, SPANKER, Station, YARDS, deckSideY, sheerY, squareCut, tAtZ, DECK_CAMBER,
@@ -35,16 +35,23 @@ import { JACKSTAY_STANDOFF_M } from './sails';
 const FOOTROPE_ABAFT_M = 0.34;
 /** Length of the brace pendant leading aft off the yardarm, metres. */
 const BRACE_PENDANT_M = 2.4;
+/** How far abaft the yard's surface a lift is shackled, metres. */
+const LIFT_ABAFT_M = 0.5;
 /**
  * How far proud of the cloth a bound line rides, metres.
  *
  * The cloth is drawn as a 21x15 polygon mesh of an analytic surface, so between
  * vertices the triangles chord ACROSS the belly and sit a centimetre or two
  * inside the true surface. A line evaluated on the exact surface would sink
- * into the polygons on the concave side; 6 cm clears that with room to spare
- * and is invisible at any range.
+ * into the polygons on the concave side.
+ *
+ * 6 cm cleared the smooth camber surface. It does NOT clear the fold the
+ * standing-rigging contact model puts in the cloth: across a crease the
+ * polygons chord over a metre of curvature, and the buntlines started dipping
+ * through the very sail they are bound to (+19 piercings, measured). 15 cm is
+ * still invisible at any range a buntline is resolvable at.
  */
-const BOUND_STANDOFF_M = 0.06;
+const BOUND_STANDOFF_M = 0.15;
 
 export interface RiggingResult {
   mesh: THREE.Mesh;
@@ -268,12 +275,23 @@ function shrouds(L: LineSet, m: MastFrame, chan: THREE.Vector3[], quality: numbe
 
     L.family('futtock');
     // Futtock shrouds: from the top's rim down and in to the lower mast.
+    //
+    // They take their fore-and-aft offset from the GANG's own fan, because that
+    // is what they are — the lower shrouds carried on up past the top. They used
+    // to start a third of the top's depth FORWARD of the mast, which put the
+    // leading pair within centimetres of the topsail's flat cut: harmless while
+    // the cloth bellied aft past them, and 20 fresh piercings the moment the
+    // contact model stopped it doing that. Inside the gang they are behind the
+    // cloth's limit at every height, on either mast sense.
+    const fan = gangFan(s);
     for (let i = 0; i < Math.min(5, nLower); i++) {
       const f = (i + 0.5) / Math.min(5, nLower);
       m.lower(m.platformY + 0.3, _a);
-      _c.set(_a.x + side * m.halfWidth * 0.95, m.platformY + 0.34, _a.z - m.depth * 0.3 + f * m.depth * 0.7);
+      _c.set(_a.x + side * m.halfWidth * 0.95, m.platformY + 0.34,
+        _a.z + fan * m.depth * (0.28 + f * 0.37));
       m.lower(m.platformY - 2.1, _b);
-      _d.set(_b.x + side * (s.lowerRadius + 0.1), _b.y, _b.z - m.depth * 0.16 + f * m.depth * 0.36);
+      _d.set(_b.x + side * (s.lowerRadius + 0.1), _b.y,
+        _b.z + fan * m.depth * (0.28 + f * 0.30));
       L.add(_c, _d, 0.02, 0.03, TAR);
     }
 
@@ -465,14 +483,20 @@ function running(
     for (const tip of [yf.stbd, yf.port]) {
       _c.copy(liftAt);
       _c.x += Math.sign(tip.x) * 0.16;
-      L.add(tip, _c, 0.22, 0.024, MANILA, 0, part, 0);
+      // A lift is shackled to a band on the yardarm's AFTER side, and it has to
+      // be: the sail's head corner is at the yardarm itself, so a lift leaving
+      // from the spar's axis starts inside the cloth and is overtaken by the
+      // upper leech as soon as the sail carries any camber.
+      _d.copy(tip);
+      _d.z += yf.spec.radius + LIFT_ABAFT_M;
+      L.add(_d, _c, 0.22, 0.024, MANILA, 0, part, 0);
     }
 
     // Braces: from the yard arms aft (and, for the mizzen, forward) to a
     // fixed point, so bracing the yard visibly hauls one and slackens the
     // other. This is the single most legible piece of running rigging.
     L.family('brace');
-    const braceTo = braceAnchor(frame, yf.spec.mast, yf.spec.tier);
+    const braceTo = braceAnchor(frame, yf.spec.mast, yf.spec.tier, yf.centre.y);
     for (const [tip, sgn] of [[yf.stbd, 1], [yf.port, -1]] as const) {
       _c.copy(braceTo);
       _c.x *= sgn;
@@ -595,7 +619,53 @@ const BRACE_BELAY_ABAFT_M = 2.6;
  */
 const COURSE_BRACE_ABAFT_M = 9.2;
 
-function braceAnchor(frame: RigFrame, mast: number, tier: number): THREE.Vector3 {
+/**
+ * The one height on the next mast a brace can be led to.
+ *
+ * A brace from an upper yardarm travels fifteen or twenty metres in z to reach
+ * the mast next along, and somewhere on the way it must cross the PLANE of that
+ * mast's canvas. Belaying it abaft the sail does not help — the crossing happens
+ * long before the belay. Nor can it pass outboard: a topgallant yardarm is at
+ * x 6.5 and the sail it must clear sheets out to 9.4.
+ *
+ * What is left is the gaps. The sails on a mast do not touch: each one's foot is
+ * sheeted to the yardarm below it, so between the head of one sail and the foot
+ * of the next there is a metre or three of clear air — and that is where the real
+ * leading blocks are, at the top and at the crosstrees.
+ *
+ * Which gap is NOT the brace's own tier. A brace leads very nearly horizontally,
+ * and the mizzen is fifteen metres shorter than the main: aiming a main topsail
+ * brace at the mizzen's tier-one gap sent it diving eighteen metres, straight
+ * down through the mizzen topsail AND into the spanker. Take the gap nearest the
+ * yardarm's own height instead. Two extra rules follow from the same picture:
+ * nothing may be led to the mizzen below the spanker's gaff peak, because the
+ * driver fills that whole quarter; and a mizzen brace, which leads FORWARD off a
+ * yard braced aft, has to RISE, or it crosses its own sail's leech on the way.
+ */
+function braceGapY(frame: RigFrame, target: number, fromY: number, rising: boolean): number {
+  const cands: number[] = [];
+  for (let t = 0; t <= 3; t++) {
+    const above = YARDS.find((v) => v.mast === target && v.tier === t);
+    const below = YARDS.find((v) => v.mast === target && v.tier === t - 1);
+    if (!above) continue;
+    const foot = above.y - above.sailDrop;
+    if (below) cands.push((foot + below.y) * 0.5);
+    else cands.push(foot - 1.0);
+  }
+  // Clear above the topmost canvas on that mast, where the pole is bare.
+  const top = YARDS.filter((v) => v.mast === target).reduce((a, b) => (b.y > a.y ? b : a));
+  cands.push(top.y + 2.4);
+  // The spanker fills the whole quarter from the boom to the gaff peak.
+  const floor = target === 2 ? SPANKER.gaffY + SPANKER.gaffLen * SPANKER.gaffRise + 1.0 : -1e9;
+  const ok = cands.filter((y) => y > floor && (!rising || y >= fromY));
+  const use = ok.length ? ok : cands.filter((y) => y > floor);
+  if (!use.length) return frame.masts[target].spec.deckY + 2.4;
+  return use.reduce((a, b) => (Math.abs(b - fromY) < Math.abs(a - fromY) ? b : a));
+}
+
+function braceAnchor(
+  frame: RigFrame, mast: number, tier: number, fromY: number,
+): THREE.Vector3 {
   const out = new THREE.Vector3();
   if (tier === 0 && mast < 2) {
     const z = MASTS[mast].z + COURSE_BRACE_ABAFT_M;
@@ -606,25 +676,12 @@ function braceAnchor(frame: RigFrame, mast: number, tier: number): THREE.Vector3
     out.set(st.widthAt(y) - 0.45, y, z);
     return out;
   }
-  if (mast === 0) {
-    // Fore braces lead aft to the mainmast.
-    const m = frame.masts[1];
-    const y = tier === 0 ? m.spec.deckY + 2.2 : tier === 1 ? m.platformY - 1.2 : m.crossY - 4;
-    m.at(y, out);
-    out.x += m.spec.lowerRadius + 0.5;
-  } else if (mast === 1) {
-    // Main braces lead aft to the mizzen.
-    const m = frame.masts[2];
-    const y = tier === 0 ? m.spec.deckY + 2.6 : tier === 1 ? m.platformY - 0.8 : m.crossY - 3;
-    m.at(y, out);
-    out.x += m.spec.lowerRadius + 0.5;
-  } else {
-    // Mizzen braces lead forward to the mainmast top.
-    const m = frame.masts[1];
-    const y = tier === 0 ? m.platformY - 3 : tier === 1 ? m.crossY - 5 : m.spec.tgFoot + 1;
-    m.at(y, out);
-    out.x += m.spec.lowerRadius + 0.4;
-  }
+  // Fore braces lead aft to the main, main braces aft to the mizzen, mizzen
+  // braces forward to the main.
+  const target = mast === 0 ? 1 : mast === 1 ? 2 : 1;
+  const m = frame.masts[target];
+  m.at(braceGapY(frame, target, fromY, mast === 2), out);
+  out.x += m.spec.lowerRadius + (mast === 2 ? 0.4 : 0.5);
   out.z += BRACE_BELAY_ABAFT_M;
   return out;
 }
@@ -684,6 +741,5 @@ function flagHalyards(L: LineSet, frame: RigFrame): void {
   main.tg(main.spec.truck - 0.2, _a);
   main.tg(main.spec.tgTop - 3, _b);
   L.add(_a, _b, 0.12, 0.014, MANILA);
-  void YARDS;
   void BOWSPRIT;
 }

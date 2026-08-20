@@ -94,6 +94,16 @@ function gangSpread(s: MastSpec): number {
   return s.name === 'mizzen' ? 0.55 : 1;
 }
 
+/**
+ * Signed fan of a mast's gangs: positive abaft the axis, negative forward, and
+ * already scaled. Anything that must lie INSIDE the gang — the futtock shrouds
+ * continue the lower shrouds up past the top — takes its offset from this, so
+ * the cloth's contact limit clears it for free.
+ */
+export function gangFan(s: MastSpec): number {
+  return (s.name === 'mizzen' ? -1 : 1) * gangSpread(s);
+}
+
 export interface Member {
   bot: THREE.Vector3;
   top: THREE.Vector3;
@@ -125,7 +135,7 @@ export function mastGangs(m: MastFrame, chan: THREE.Vector3[]): {
   lower: Member[]; topmast: Member[]; tg: Member[]; backstay: Member[];
 } {
   const s = m.spec;
-  const fwd = (s.name === 'mizzen' ? -1 : 1) * gangSpread(s);
+  const fwd = gangFan(s);
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
 
