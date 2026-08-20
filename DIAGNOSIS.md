@@ -1430,3 +1430,50 @@ matrices rather than the ones forced inside `render()`. Material reads
 - Hull salt-streak weathering reads as heavy vertical rain streaks at close range.
 - The ensign hides behind the spanker in light air.
 - The helm camera frames wheel, fife rail and grating as an unreadable jumble.
+
+## 40. The foam plate IS fixed — and fixing it revealed the next defect
+
+### Verified visually at last
+The near-field plate is gone. Waterline and orbit crops now show **discrete torn
+foam flecks over deep blue water with clear water between them** — which is exactly
+what thresholding a histogram-flattened field should produce, and the opposite of
+the uniform wash bounded by a smooth curve that was there before.
+
+The cause was never detail, it was the coverage function. Integrated over 6400
+samples against the real baked texture, the old form rendered **0.056 coverage when
+asked for 0.000** (a 5.6% white haze over the entire open sea) and **0.302 when
+asked for 0.180** — a third of an alpha over 100% of the footprint. That is the
+plate, in one line of arithmetic. `saturate(x*1.7)` cannot produce foam; it produces
+a wash with a smooth boundary.
+
+Note the shape of the insight, because it generalises: thresholding a **flattened**
+field has expectation exactly `c` at *any* ramp width, so the boundary can be torn
+with as much high-frequency detail as the pixel resolves **while the area stays what
+the physics asked for**. Detail and correctness stop competing.
+
+### NEW: hard rectangular shadow blocks on the sails
+Clearly visible in the `orbit` crop: the sails carry **hard-edged dark rectangular
+patches** where other sails shadow them. They read as grey rectangles pasted onto
+the canvas, not as soft cloth shadows, and they are now the most damaging thing in
+a close view of the ship.
+
+**This is very likely a defect that our own fix exposed.** §28 restored sail shadows
+by wiring `sailVertOuts()` — before that, `MeshDepthMaterial` wrote an undeclared
+`vAback` and **every sail shadow silently failed to compile**, so there were no sail
+shadows at all to look wrong. Now they render, and their quality is poor.
+
+Do not guess the owner: the shadow map itself (CSM cascade count, `shadowMapSize`,
+filtering) is `src/sky`, while the sail depth material is `src/ship`. Bisect —
+vary `settings.shadowMapSize` and the cascade split first, since a resolution or
+filter problem and a depth-bias problem look nothing alike once you change one.
+
+Also still visible: a hard-edged white slab under the hull at the waterline, and
+the sails still read papery.
+
+### A measurement caveat worth keeping
+The `waterline` frame is smeared by motion blur, because the `cinematic` camera
+moves during a **106 ms** frame under 9 rivals of GPU contention — the shutter
+integrates far more movement than it would at 16 ms. Contention does not change
+pixels, but it *does* change motion blur, so **a contended frame is not a valid
+reference for anything the camera moves through.** Use `orbit` or a static mode
+when the box is busy.
