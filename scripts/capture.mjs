@@ -245,6 +245,16 @@ const SCENES = {
     env: { timeOfDay: 15.6, windSpeed: 9.0, cloudCover: 0.4, cloudType: 0.75, turbidity: 2.2, rain: 0, visibility: 32000, seaState: 3, waveHeight: 1.5, choppiness: 0.55 },
     cam: { mode: 'orbit', distance: 110 },
   },
+  // Direction 3's content is invisible to a scene that never asks for it: the
+  // populations appear on a Poisson process with means of minutes, so a plain
+  // scene will usually show empty sea. `showcase` forces one of each near enough
+  // to read.
+  wildlife: {
+    label: 'Marine life, vessels and Boston — everything near',
+    env: { timeOfDay: 9.4, windSpeed: 8.0, cloudCover: 0.38, cloudType: 0.7, turbidity: 2.4, rain: 0, visibility: 40000, seaState: 3, waveHeight: 1.4, choppiness: 0.5 },
+    cam: { mode: 'chase', distance: 86 },
+    showcase: 'near',
+  },
   waterline: {
     label: 'Low waterline — wave shape and foam',
     env: { timeOfDay: 13.8, windSpeed: 12.0, cloudCover: 0.35, cloudType: 0.8, turbidity: 2.0, rain: 0, visibility: 34000, seaState: 5, waveHeight: 3.0, choppiness: 0.7 },
@@ -443,10 +453,45 @@ for (const name of sceneNames) {
       Object.assign(w.cam, scene.cam ?? {});
       w.bus.emit('settings:changed');
       if (scene.focusIsland) w.bus.emit('capture:focusIsland');
+      if (scene.showcase) w.bus.emit('world:showcase', scene.showcase);
       w.bus.emit('capture:scene', scene);
     },
     { scene, quality: args.quality },
   );
+
+  /*
+   * Assert the frame is the render and nothing else.
+   *
+   * `UiLayer.enterCaptureMode()` already dismisses the title card, the tutorial
+   * and the panels when it sees `capture:scene`, so this is not a fix -- it is a
+   * tripwire. An agent reported that this harness shoots through the title card;
+   * it does not, and measuring said so (centre luminance differed by 0.7%, i.e.
+   * noise, and the crop shows open sea where the display type would be). But the
+   * failure it imagined would have been expensive and silent: `.intro` lays a
+   * radial scrim at rgba(shade, 0.5) over the CENTRE of frame, so every tonal,
+   * contrast and exposure judgment taken from these PNGs would have been made
+   * through a half-strength dark vignette that also inverts the natural one.
+   *
+   * That is worth one cheap check per scene rather than trusting a hook in
+   * another module to keep working.
+   */
+  const overlay = await page.evaluate(() => {
+    for (const sel of ['.intro', '.firstrun', '.panel.open', '.photo.on']) {
+      const n = document.querySelector(sel);
+      if (!n) continue;
+      const cs = getComputedStyle(n);
+      if (cs.display !== 'none' && Number(cs.opacity) > 0.01) {
+        return `${sel} (display=${cs.display} opacity=${cs.opacity})`;
+      }
+    }
+    return null;
+  });
+  if (overlay) {
+    console.error(`SCENE ${name}: a UI overlay is still up -- ${overlay}. Every frame`
+      + ' from here would be shot through it. Refusing to capture.');
+    await browser.close();
+    process.exit(1);
+  }
 
   await waitForQuiet(name);
 
