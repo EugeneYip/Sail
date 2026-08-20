@@ -9,7 +9,8 @@
     "typecheck": "node scripts/check-glsl.mjs && tsc --noEmit",
     "preview": "vite preview",
     "check-glsl": "node scripts/check-glsl.mjs",
-    "preflight": "node scripts/preflight.mjs"
+    "preflight": "node scripts/preflight.mjs",
+    "check-shaders": "node scripts/check-shaders.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

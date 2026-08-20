@@ -34,6 +34,11 @@ jobs:
       - run: npm run typecheck
       # Refuses to publish a repo carrying scratch files, credentials, oversized
       # assets, or HTML missing what a crawler and a share preview need.
+      # Compiles and links every fullscreen-pass program against a real driver.
+      # typecheck cannot see GLSL semantics; this can. Skips loudly (exit 0) if
+      # the runner has no browser or no WebGL2, rather than failing the deploy.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check-shaders
       - run: npm run preflight
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
