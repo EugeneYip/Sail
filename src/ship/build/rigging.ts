@@ -21,12 +21,29 @@ import type { World } from '../../types';
 import { makeLineMaterial, makeRibbonGeometry, type LineMatUniforms } from '../shaders/line';
 import type { PartUniforms } from '../materials/materials';
 import type { TexSet } from '../materials/textures';
+import type { SailUniforms } from './sails';
 import type { HullResult } from './hull';
 import { CHANNELS } from './hull';
 import type { MastFrame, RigFrame, YardFrame } from './masts';
 import {
   BOWSPRIT, MASTS, PART, SPANKER, Station, YARDS, deckSideY, sheerY, squareCut, tAtZ, DECK_CAMBER,
 } from '../dims';
+import { JACKSTAY_STANDOFF_M } from './sails';
+
+/** How far abaft the yard's surface the footropes are slung, metres. */
+const FOOTROPE_ABAFT_M = 0.34;
+/** Length of the brace pendant leading aft off the yardarm, metres. */
+const BRACE_PENDANT_M = 2.4;
+/**
+ * How far proud of the cloth a bound line rides, metres.
+ *
+ * The cloth is drawn as a 21x15 polygon mesh of an analytic surface, so between
+ * vertices the triangles chord ACROSS the belly and sit a centimetre or two
+ * inside the true surface. A line evaluated on the exact surface would sink
+ * into the polygons on the concave side; 6 cm clears that with room to spare
+ * and is invisible at any range.
+ */
+const BOUND_STANDOFF_M = 0.06;
 
 export interface RiggingResult {
   mesh: THREE.Mesh;
@@ -45,7 +62,24 @@ class LineSet {
   readonly b: number[] = [];
   readonly p: number[] = [];
   readonly part: number[] = [];
+  /**
+   * Which family each instance belongs to, in instance order. Built once and
+   * hung off the mesh's `userData` — no per-frame cost — because the only way
+   * to find out which of nine hundred anonymous ropes is the one drawn through
+   * a sail is to be able to name it. See `.tmp/ropesail.mjs`.
+   */
+  readonly tag: string[] = [];
+  /** (sail slot + 1, standoff m, 0, 0) — see `iBind` in `shaders/line.ts`. */
+  readonly bind: number[] = [];
+  /** (u0, v0, u1, v1) of the path a bound line takes across the cloth. */
+  readonly bindUv: number[] = [];
+  /** Family applied to every `add` until the next `family()` call. */
+  private cur = '?';
   count = 0;
+
+  family(name: string): void {
+    this.cur = name;
+  }
 
   add(
     A: THREE.Vector3, B: THREE.Vector3,
@@ -56,7 +90,31 @@ class LineSet {
     this.b.push(B.x, B.y, B.z);
     this.p.push(sag, radius, bays, kind);
     this.part.push(partA, partB);
+    this.bind.push(0, 0, 0, 0);
+    this.bindUv.push(0, 0, 0, 0);
+    this.tag.push(this.cur);
     this.count++;
+  }
+
+  /**
+   * A line that LIES ON a sail: rove up the cloth's forward face from
+   * (u0, v0) to (u1, v1), `standoff` metres proud of it. `A` and `B` are still
+   * given because the shader keeps using them for the wind-sway seed, and
+   * because they are the right answer if the binding is ever switched off.
+   */
+  addOnSail(
+    A: THREE.Vector3, B: THREE.Vector3, radius: number,
+    slot: number, uv: readonly [number, number, number, number], standoff: number,
+    partSlot: number,
+  ): void {
+    this.add(A, B, 0, radius, MANILA, 0, partSlot, partSlot);
+    const i = (this.count - 1) * 4;
+    this.bind[i] = slot + 1;
+    this.bind[i + 1] = standoff;
+    this.bindUv[i] = uv[0];
+    this.bindUv[i + 1] = uv[1];
+    this.bindUv[i + 2] = uv[2];
+    this.bindUv[i + 3] = uv[3];
   }
 }
 
@@ -71,9 +129,14 @@ export function buildRigging(
   rope: TexSet,
   hull: HullResult,
   frame: RigFrame,
+  sailU: SailUniforms,
   quality: number,
 ): RiggingResult {
   const L = new LineSet();
+  // Sail id -> slot in the cloth's uniform arrays, so a bound line can name
+  // the sail it lies against.
+  const sailSlot = new Map<string, number>();
+  world.ship.sails.forEach((sa, i) => sailSlot.set(sa.id, i));
 
   const chan = channelPoints(hull);
   for (let mi = 0; mi < frame.masts.length; mi++) {
@@ -81,7 +144,7 @@ export function buildRigging(
   }
   stays(L, frame);
   headRigging(L, frame);
-  running(L, frame, quality);
+  running(L, frame, sailSlot, quality);
   spankerRigging(L, frame);
   flagHalyards(L, frame);
 
@@ -92,6 +155,8 @@ export function buildRigging(
   g.setAttribute('iB', new THREE.InstancedBufferAttribute(new Float32Array(L.b), 3));
   g.setAttribute('iParam', new THREE.InstancedBufferAttribute(new Float32Array(L.p), 4));
   g.setAttribute('iPart', new THREE.InstancedBufferAttribute(new Float32Array(L.part), 2));
+  g.setAttribute('iBind', new THREE.InstancedBufferAttribute(new Float32Array(L.bind), 4));
+  g.setAttribute('iBindUV', new THREE.InstancedBufferAttribute(new Float32Array(L.bindUv), 4));
   // The rig fills the screen from every camera; culling it by the unit ribbon's
   // own bounds would pop it out of frame.
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 30, 0), 90);
@@ -101,7 +166,9 @@ export function buildRigging(
     uViewportH: { value: 900 },
     uLineFade: { value: 1 },
   };
-  const mat = makeLineMaterial(world.uniforms, parts, rope, extra);
+  const mat = makeLineMaterial(
+    world.uniforms, parts, rope, extra, sailU, world.ship.sails.length,
+  );
   const mesh = new THREE.Mesh(g, mat);
   mesh.name = 'ship-rigging';
   mesh.frustumCulled = false;
@@ -109,6 +176,7 @@ export function buildRigging(
   mesh.receiveShadow = false;
   mesh.matrixAutoUpdate = false;
   mesh.renderOrder = 2;
+  mesh.userData.lineTags = L.tag;
 
   const inv = new THREE.Matrix4();
   return {
@@ -170,23 +238,31 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
     for (let i = 0; i < nLower; i++) {
       const f = (i + 0.5) / nLower;
       m.lower(headY - i * 0.16, _a);
+      // The gang goes round the masthead ABAFT the mast and fans aft. It used
+      // to start 0.28 of the top's depth FORWARD of the mast axis, which put
+      // the leading shrouds ahead of the sail's own head — so a course could
+      // not carry any camber at all without a shroud coming out of its front
+      // face. Nothing forward of the jackstay now.
       top.push(new THREE.Vector3(
         _a.x + side * (s.lowerRadius + 0.16 + i * 0.035),
         _a.y,
-        _a.z - m.depth * 0.28 + f * m.depth * 0.66,
+        _a.z + m.depth * 0.10 + f * m.depth * 0.55,
       ));
     }
     for (let i = 0; i < nLower; i++) {
       const A = pts[i];
       const B = top[i];
+      L.family('shroud-lower');
       // A shroud is set up bar-taut; only a hair of sag.
       L.add(B, A, 0.09, 0.036, TAR);
+      L.family('deadeye');
       // Deadeye pair and lanyard, drawn as a short thick stub.
       _c.copy(A);
       _c.y -= 0.36;
       L.add(A, _c, 0.0, 0.1, TAR);
     }
 
+    L.family('ratline-lower');
     // Ratlines: every 0.38 m up the gang, scalloped between each pair.
     const nRat = Math.floor((headY - pts[0].y) / (quality >= 2 ? 0.4 : 0.62));
     for (let r = 1; r < nRat; r++) {
@@ -200,6 +276,7 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
       L.add(_a, _b, 0.028, 0.021, TAR, nLower - 1);
     }
 
+    L.family('futtock');
     // Futtock shrouds: from the top's rim down and in to the lower mast.
     for (let i = 0; i < Math.min(5, nLower); i++) {
       const f = (i + 0.5) / Math.min(5, nLower);
@@ -210,24 +287,28 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
       L.add(_c, _d, 0.02, 0.03, TAR);
     }
 
+    L.family('shroud-topmast');
     // Topmast shrouds: from the top's rim to the crosstrees.
     const nTop = s.shrouds[1];
     for (let i = 0; i < nTop; i++) {
       const f = (i + 0.5) / nTop;
       m.lower(m.platformY, _a);
       _c.set(_a.x + side * m.halfWidth * (0.5 + 0.48 * f), m.platformY + 0.3,
-        _a.z - m.depth * 0.3 + f * m.depth * 0.62);
+        _a.z + m.depth * 0.02 + f * m.depth * 0.5);
       m.top(m.crossY - i * 0.12, _b);
       _d.set(_b.x + side * (s.topRadius + 0.1), _b.y, _b.z - 0.3 + f * 0.7);
       L.add(_d, _c, 0.05, 0.028, TAR);
     }
+    L.family('ratline-topmast');
     // Topmast ratlines.
     const nTopRat = Math.floor((m.crossY - m.platformY) / (quality >= 2 ? 0.42 : 0.66));
     if (nTop >= 2) {
       m.lower(m.platformY, _a);
-      const a0 = new THREE.Vector3(_a.x + side * m.halfWidth * 0.52, m.platformY + 0.3, _a.z - m.depth * 0.3);
+      const a0 = new THREE.Vector3(
+        _a.x + side * m.halfWidth * 0.52, m.platformY + 0.3, _a.z + m.depth * 0.02,
+      );
       const a1 = new THREE.Vector3(
-        _a.x + side * m.halfWidth * 0.97, m.platformY + 0.3, _a.z - m.depth * 0.3 + m.depth * 0.62,
+        _a.x + side * m.halfWidth * 0.97, m.platformY + 0.3, _a.z + m.depth * 0.02 + m.depth * 0.5,
       );
       m.top(m.crossY, _b);
       const b0 = new THREE.Vector3(_b.x + side * (s.topRadius + 0.1), m.crossY, _b.z - 0.3);
@@ -243,12 +324,13 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
       }
     }
 
+    L.family('shroud-tg');
     // Topgallant shrouds run from the crosstrees to the topgallant head.
     const nTg = s.shrouds[2];
     for (let i = 0; i < nTg; i++) {
       const f = (i + 0.5) / nTg;
       m.top(m.crossY, _a);
-      _c.set(_a.x + side * s.topHalfWidth * 0.5, m.crossY + 0.1, _a.z - 0.3 + f * 0.8);
+      _c.set(_a.x + side * s.topHalfWidth * 0.5, m.crossY + 0.1, _a.z + 0.08 + f * 0.7);
       m.tg(s.tgTop - 1.2, _b);
       _d.set(_b.x + side * (s.tgRadius + 0.06), _b.y, _b.z);
       L.add(_d, _c, 0.04, 0.02, TAR);
@@ -257,6 +339,7 @@ function shrouds(L: LineSet, m: MastFrame, ch: ChannelPts, quality: number): voi
     // Backstays: long sweeps from the topmast and topgallant heads to the
     // ship's side well abaft the channel. These are the lines that read as
     // the rig's outline from a beam-on view.
+    L.family('backstay');
     const backZ = CHANNELS[Math.min(2, MASTS.indexOf(s))]?.z1 ?? 0;
     void backZ;
     for (const [hy, dz, rad] of [
@@ -280,16 +363,19 @@ function stays(L: LineSet, frame: RigFrame): void {
   // The four head stays come straight from `frame.headStays`, which is also
   // where the headsails get their luffs — a jib whose luff is not exactly on
   // its stay is the first thing that reads as wrong.
+  L.family('headstay');
   for (let i = 0; i < frame.headStays.length; i++) {
     const st = frame.headStays[i];
     // Hanked sails hold a stay much straighter than a bare one hangs.
     L.add(st.head, st.tack, 0.22 + i * 0.06, i === 0 ? 0.05 : 0.036, TAR);
   }
+  L.family('forestay');
   // Fore preventer stay, inboard of the fore stay proper.
   const B = frame.bowsprit;
   addStay(L, fore, fore.spec.lowerTop - 2.4, B.heel.clone().addScaledVector(B.dir, 1.2), 0.34, 0.042);
 
   // Main and mizzen stays lead forward and down to the deck at the next mast.
+  L.family('mast-stay');
   const stayTo = (m: MastFrame, target: MastFrame, dz: number) => {
     const y = deckSideY(tAtZ(target.spec.z + dz)) + DECK_CAMBER;
     addStay(L, m, m.spec.lowerTop - 1.2, new THREE.Vector3(0, y + 0.6, target.spec.z + dz), 0.62, 0.05);
@@ -319,12 +405,14 @@ function addStayTg(L: LineSet, m: MastFrame, y: number, to: THREE.Vector3, sag: 
 function headRigging(L: LineSet, frame: RigFrame): void {
   const B = frame.bowsprit;
 
+  L.family('bobstay');
   // Bobstays: bowsprit down to the stem, the lines that stop it lifting.
   for (const [f, sy] of [[0.55, -1.2], [0.85, 0.6], [1.0, 2.2]] as const) {
     _a.copy(B.heel).addScaledVector(B.dir, BOWSPRIT.length * f);
     _b.set(0, sy, -27.4 - sy * 0.15);
     L.add(_a, _b, 0.16, 0.05, TAR);
   }
+  L.family('bowsprit-shroud');
   // Bowsprit shrouds, out to the bows.
   for (const side of [1, -1] as const) {
     _a.copy(B.cap);
@@ -333,6 +421,7 @@ function headRigging(L: LineSet, frame: RigFrame): void {
     _b.set(side * st.widthAt(sheerY(t) - 1.2), sheerY(t) - 1.0, -24.6);
     L.add(_a, _b, 0.12, 0.04, TAR);
   }
+  L.family('martingale');
   // Martingale stays: jibboom down to the dolphin striker and back to the bows.
   _a.copy(B.jibboomEnd);
   L.add(_a, B.strikerTip, 0.05, 0.036, TAR);
@@ -344,6 +433,7 @@ function headRigging(L: LineSet, frame: RigFrame): void {
     _b.set(side * st.widthAt(sheerY(t) - 2.4), sheerY(t) - 2.2, -25.4);
     L.add(B.strikerTip, _b, 0.05, 0.034, TAR);
   }
+  L.family('jibboom-guy');
   // Jibboom guys, out to the head rails.
   for (const side of [1, -1] as const) {
     _b.set(side * 1.35, 6.1, -27.6);
@@ -351,6 +441,7 @@ function headRigging(L: LineSet, frame: RigFrame): void {
     _b.set(side * 1.15, 6.5, -29.4);
     L.add(B.flyingEnd, _b, 0.16, 0.026, TAR);
   }
+  L.family('bowsprit-footrope');
   // Foot ropes under the bowsprit.
   for (const side of [1, -1] as const) {
     _a.copy(B.heel).addScaledVector(B.dir, 3.0);
@@ -365,7 +456,9 @@ function headRigging(L: LineSet, frame: RigFrame): void {
  *  Running rigging
  * ------------------------------------------------------------------ */
 
-function running(L: LineSet, frame: RigFrame, quality: number): void {
+function running(
+  L: LineSet, frame: RigFrame, sailSlot: Map<string, number>, quality: number,
+): void {
   for (const yf of frame.yards) {
     if (yf.spec.mast === 3) {
       spritsailGear(L, yf, frame);
@@ -376,14 +469,22 @@ function running(L: LineSet, frame: RigFrame, quality: number): void {
 
     // Footropes and stirrups: what the topmen actually stand on. These hang
     // from the yard so they carry the yard's part slot at both ends.
+    L.family('yard-footrope');
     const nStir = quality >= 2 ? 4 : 3;
+    // Footropes hang from stirrups on the yard's AFTER side, and they have to
+    // hang clear of the sail gathered on top of it: a furled course makes a
+    // roll half a metre in radius centred on the jackstay, and at 0.7 of a
+    // radius abaft the axis the ropes and every stirrup ran straight through
+    // it. Real ones are slung well aft of the spar for exactly this reason —
+    // you stand behind the bundle to furl it.
+    const ropeZ = yf.spec.radius + FOOTROPE_ABAFT_M;
     for (const side of [1, -1] as const) {
       _a.copy(yf.centre);
       _a.x += side * 0.5;
-      _a.z += yf.spec.radius * 0.7;
+      _a.z += ropeZ;
       _b.copy(side > 0 ? yf.stbd : yf.port);
       _b.x -= side * 0.5;
-      _b.z += yf.spec.radius * 0.7;
+      _b.z += ropeZ;
       L.add(_a, _b, 0.62, 0.026, MANILA, 0, part, part);
       for (let i = 1; i <= nStir; i++) {
         const f = i / (nStir + 1);
@@ -396,6 +497,7 @@ function running(L: LineSet, frame: RigFrame, quality: number): void {
       }
     }
 
+    L.family('lift');
     // Lifts: yard arms up to the masthead above.
     const liftY = yf.spec.tier === 0 ? m.spec.lowerTop - 0.8
       : yf.spec.tier === 1 ? m.spec.topmastTop - 0.9
@@ -410,36 +512,74 @@ function running(L: LineSet, frame: RigFrame, quality: number): void {
     // Braces: from the yard arms aft (and, for the mizzen, forward) to a
     // fixed point, so bracing the yard visibly hauls one and slackens the
     // other. This is the single most legible piece of running rigging.
+    L.family('brace');
     const braceTo = braceAnchor(frame, yf.spec.mast, yf.spec.tier);
     for (const [tip, sgn] of [[yf.stbd, 1], [yf.port, -1]] as const) {
       _c.copy(braceTo);
       _c.x *= sgn;
-      L.add(tip, _c, 0.55 + yf.spec.tier * 0.1, 0.023, MANILA, 0, part, 0);
+      // Brace PENDANT: a short strop leading aft off the yardarm before the
+      // brace proper takes over. Without it the brace left the yardarm and
+      // dived straight for its belay point, which took it across the flare of
+      // its own sail's foot — the clews sheet out wider than the yard — and,
+      // at the far end, in through the next mast's canvas.
+      _d.copy(tip);
+      _d.z += BRACE_PENDANT_M;
+      _d.x += sgn * 0.25;
+      _d.y -= 0.12;
+      L.add(tip, _d, 0.04, 0.023, MANILA, 0, part, part);
+      L.add(_d, _c, 0.55 + yf.spec.tier * 0.1, 0.023, MANILA, 0, part, 0);
     }
 
     // Clewlines and buntlines: from the yard down to the sail's own foot and
     // clews, taken from the same cut the sail is built from so they land on it.
     const drop = yf.spec.sailDrop;
+    const slot = sailSlot.get(yf.spec.id) ?? -1;
     if (drop > 0) {
       const cut = squareCut(yf.spec);
+      // Buntlines and leechlines LIE ON the cloth: they are rove through
+      // cringles on the sail's forward face and haul the bunt up to the yard.
+      // Bound to the same `lwSailPoint` the cloth is drawn from, so they
+      // follow camber, shiver, reef and the furled roll instead of cutting
+      // across whichever of those happens to be showing.
+      L.family('buntline');
       for (const f of quality >= 2 ? [-0.62, -0.24, 0.24, 0.62] : [-0.5, 0.5]) {
+        const u = 0.5 + f * 0.5;
         _c.copy(yf.centre);
         _c.x += f * cut.headHalf;
         _d.copy(_c);
         _d.x = f * cut.footHalf;
         _d.y -= drop * 0.94;
-        _d.z += 0.35;
-        L.add(_c, _d, 0.1, 0.019, MANILA, 0, part, part);
+        if (slot >= 0) {
+          L.addOnSail(_c, _d, 0.019, slot, [u, 0.985, u, 0.0], BOUND_STANDOFF_M, part);
+        } else {
+          L.add(_c, _d, 0.1, 0.019, MANILA, 0, part, part);
+        }
       }
+      L.family('leechline');
+      if (quality >= 2 && slot >= 0) {
+        for (const u of [0.015, 0.985]) {
+          _c.copy(yf.centre);
+          _c.x += (u - 0.5) * 2 * cut.headHalf;
+          _d.copy(_c);
+          _d.y -= drop * 0.55;
+          L.addOnSail(_c, _d, 0.017, slot, [u, 0.55, u, 0.0], BOUND_STANDOFF_M, part);
+        }
+      }
+      L.family('sheet');
       // Sheets from the clews down to the yard below (or the deck).
       const below = frame.yards.find(
         (v) => v.spec.mast === yf.spec.mast && v.spec.tier === yf.spec.tier - 1,
       );
+      // The clew has to be taken from the SAME construction `build/sails.ts`
+      // uses, or the sheet starts a metre from the corner it is bent to —
+      // which is what put every sheet through the foot of its own sail.
+      const rake = yf.spec.mast < MASTS.length ? Math.tan(MASTS[yf.spec.mast].rake) : 0;
+      const clewZ = yf.centre.z - (yf.spec.radius + JACKSTAY_STANDOFF_M) - drop * rake;
       for (const [tip, sgn] of [[yf.stbd, 1], [yf.port, -1]] as const) {
         _c.copy(tip);
-        _c.x = sgn * cut.footHalf;
+        _c.x = sgn * (cut.footHalf + 0.05);
         _c.y = yf.centre.y - drop;
-        _c.z = yf.centre.z + drop * 0.03;
+        _c.z = clewZ;
         if (below) {
           _d.copy(sgn > 0 ? below.stbd : below.port);
           _d.x -= sgn * 0.5;
@@ -455,6 +595,7 @@ function running(L: LineSet, frame: RigFrame, quality: number): void {
 
     // Halyard for the yards that hoist (topsail, topgallant, royal).
     if (yf.spec.tier >= 1) {
+      L.family('yard-halyard');
       _c.copy(yf.centre);
       _c.z += 0.2;
       const hy = liftY + 0.6;
@@ -491,6 +632,7 @@ function braceAnchor(frame: RigFrame, mast: number, tier: number): THREE.Vector3
 
 function spritsailGear(L: LineSet, yf: YardFrame, frame: RigFrame): void {
   const B = frame.bowsprit;
+  L.family('spritsail-gear');
   for (const tip of [yf.stbd, yf.port]) {
     _c.copy(B.cap);
     _c.y += 0.3;
@@ -505,6 +647,7 @@ function spankerRigging(L: LineSet, frame: RigFrame): void {
   const S = frame.spanker;
   const miz = frame.masts[2];
 
+  L.family('topping-lift');
   // Topping lifts hold the boom up when the sail is off her.
   for (const side of [1, -1] as const) {
     miz.lower(SPANKER.gaffY + 3.4, _a);
@@ -513,11 +656,13 @@ function spankerRigging(L: LineSet, frame: RigFrame): void {
     _b.x += side * 0.12;
     L.add(_a, _b, 0.3, 0.028, MANILA, 0, 0, PART.BOOM);
   }
+  L.family('gaff-halyard');
   // Peak and throat halyards for the gaff.
   miz.top(miz.spec.topmastFoot + 6.5, _a);
   L.add(_a, S.gaffEnd, 0.14, 0.026, MANILA, 0, 0, PART.GAFF);
   miz.lower(miz.spec.lowerTop - 1.6, _a);
   L.add(_a, S.gaffPivot, 0.1, 0.026, MANILA, 0, 0, PART.GAFF);
+  L.family('vang');
   // Vangs from the gaff peak down to the quarters.
   for (const side of [1, -1] as const) {
     const t = tAtZ(24.5);
@@ -525,6 +670,7 @@ function spankerRigging(L: LineSet, frame: RigFrame): void {
     _b.set(side * st.widthAt(sheerY(t) - 0.7), sheerY(t) - 0.4, 24.5);
     L.add(S.gaffEnd, _b, 0.32, 0.024, MANILA, 0, PART.GAFF, 0);
   }
+  L.family('spanker-sheet');
   // Sheet: boom end to the taffrail horse.
   _b.set(0, sheerY(1) - 0.6, 26.4);
   L.add(S.boomEnd, _b, 0.24, 0.03, MANILA, 0, PART.BOOM, 0);
@@ -533,6 +679,7 @@ function spankerRigging(L: LineSet, frame: RigFrame): void {
 function flagHalyards(L: LineSet, frame: RigFrame): void {
   const miz = frame.masts[2];
   const main = frame.masts[1];
+  L.family('flag-halyard');
   miz.tg(miz.spec.truck - 0.2, _a);
   L.add(_a, frame.spanker.gaffEnd, 0.3, 0.016, MANILA, 0, 0, PART.GAFF);
   main.tg(main.spec.truck - 0.2, _a);

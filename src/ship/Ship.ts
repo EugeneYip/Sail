@@ -21,6 +21,7 @@ import { buildMasts, type RigFrame } from './build/masts';
 import { buildDeckFurniture, type DeckResult } from './build/deck';
 import { buildRigging, type RiggingResult } from './build/rigging';
 import { buildSails, type SailResult } from './build/sails';
+import { buildEnsign, type EnsignResult } from './build/ensign';
 import {
   createPartUniforms, makeDepthFor, makeShipMaterial, type PartUniforms,
 } from './materials/materials';
@@ -45,6 +46,7 @@ export class Ship implements Module {
   private geometries: THREE.BufferGeometry[] = [];
   private rigging: RiggingResult | null = null;
   private sails: SailResult | null = null;
+  private ensign: EnsignResult | null = null;
 
   init(world: World): void {
     const t0 = performance.now();
@@ -78,10 +80,16 @@ export class Ship implements Module {
 
     this.addBins(world, bins, tex);
 
-    this.rigging = buildRigging(world, this.parts, tex.rope, hull, frame, q);
-    this.root.add(this.rigging.mesh);
+    // Sails first: the rigging material evaluates the cloth's own
+    // `lwSailPoint`, so it needs the sail uniforms to bind buntlines to.
     this.sails = buildSails(world, this.parts, tex.canvas, frame, q);
+    this.rigging = buildRigging(
+      world, this.parts, tex.rope, hull, frame, this.sails.uniforms, q,
+    );
+    this.root.add(this.rigging.mesh);
     this.root.add(this.sails.group);
+    this.ensign = buildEnsign(world, this.parts, frame, q);
+    this.root.add(this.ensign.mesh);
 
     world.shipRoot.add(this.root);
     this.publish(world, hull, frame, deck);
@@ -290,6 +298,7 @@ export class Ship implements Module {
     this.rig.update(world.ship, world.time.dt);
     this.rigging?.update(world, this.root);
     this.sails?.update(world);
+    this.ensign?.update(world);
     void this.ext;
   }
 
@@ -297,6 +306,7 @@ export class Ship implements Module {
     const q = qualityLevel(world.settings.quality);
     this.rigging?.applySettings(q);
     this.sails?.applySettings(q);
+    this.ensign?.applySettings(q);
   }
 
   dispose(): void {
@@ -304,6 +314,7 @@ export class Ship implements Module {
     for (const m of this.materials) m.dispose();
     this.rigging?.dispose();
     this.sails?.dispose();
+    this.ensign?.dispose();
     disposeTextures();
   }
 }

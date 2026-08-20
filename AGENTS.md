@@ -50,6 +50,23 @@ bundle: `base: './'` (already set), no server dependency, no runtime asset
 fetches. Watch bundle size and cold-load time, and keep `npm run build` green.
 Consider touch/pointer input and smaller viewports as real targets.
 
+## Measuring anything on this box
+
+`scripts/capture.mjs` now **refuses to print an unflagged frame time when another
+headless renderer is running**, because several agents capture concurrently and
+**load average is a CPU run-queue metric that cannot see GPU contention** — a run
+once reported "load 1.9" while measuring a 50 ms frame the engine renders in 6 ms.
+If you see `!! rival renderer(s) — TIMINGS INVALID`, the numbers are noise. State
+readouts (`world.ship.*`, `world.stats`) are unaffected; only timings are.
+
+**Never bisect with `git checkout <sha> -- src/` here.** Other agents hold
+uncommitted work in the same tree and that command destroys it. Use a `git
+worktree` with its own dev server.
+
+**Commit source and docs separately.** A commit labelled `docs:` that also carries
+source changes makes `git log` useless for bisecting, and has already sent one
+investigation to an empty window.
+
 ## Non-negotiables
 
 1. **Modules talk only through the blackboard.** Never import another

@@ -35,10 +35,31 @@ import { lwFloat } from '../../util/glsl';
 /** Draft position along the chord: sin(PI * c^k) peaks at the k-th root of 1/2. */
 const DRAFT_AT = 0.4;
 const DRAFT_EXP = Math.log(0.5) / Math.log(DRAFT_AT);
-/** Belly depth as a fraction of the chord at camber = 1. */
-const CAMBER_GAIN = 0.42;
-/** Radius of a fully gathered bundle as a fraction of the sail's hoist. */
+/**
+ * Belly depth as a fraction of the chord at camber = 1.
+ *
+ * `Aero.ts` writes `camber = sgn * (0.05 + 0.35 * fill) * set`, so the deepest
+ * draft a sail can carry is 0.40 times this. It used to be 0.42, i.e. 17 per
+ * cent of the chord — nearly double what a square sail stands, and the single
+ * biggest cause of the owner's "ropes pass through the sails": on a 26 m course
+ * chord that is a 4.4 m belly, which reaches the lower shrouds when it goes aft
+ * and the fore braces and the mast stays when it goes forward. Measured with
+ * `.tmp/ropesail.mjs`, bringing it to a real 11 per cent removes most of the
+ * intersections on its own, without moving a single rope.
+ */
+const CAMBER_GAIN = 0.275;
+/**
+ * Radius of a fully gathered bundle as a fraction of the sail's hoist, and the
+ * hard cap in metres.
+ *
+ * The fraction alone is wrong dimensionally — the cloth of a deep course is
+ * spread along the whole length of its yard, so the roll's radius grows far
+ * more slowly than its hoist does. Uncapped it gave the main course a 0.98 m
+ * radius: a two-metre-thick sausage that swallowed the yard, its footropes and
+ * every stirrup. A furled course is about a metre through.
+ */
 const BUNDLE_R = 0.078;
+const BUNDLE_R_MAX_M = 0.5;
 /**
  * Turns of canvas in a fully gathered bundle. The whole roll is resolved by the
  * span rows of the grid — 15 of them at high quality — so 2.2 turns gave under
@@ -60,11 +81,17 @@ const FOLD_CYCLES = 2.4;
 const FOLD_CYCLES_FINE = 5.3;
 
 /**
- * Uniforms and `lwSailPoint`, shared by the sail material and its depth
- * material so the shadow is cast by the shape you can actually see.
+ * Uniforms and `lwSailPoint`, shared by the cloth material, its depth material
+ * and the RIGGING material — so the shadow, and any rope bound to the cloth,
+ * come from the shape you can actually see.
  * Depends on: GLSL.common (for PI).
+ *
+ * `withInstanceAttr` declares `iSail`, which only the two cloth programs have
+ * in their geometry. The rigging program must not declare it: three binds the
+ * attributes its compiled program reports active, and one a driver declined to
+ * strip would be looked for in a geometry that has none.
  */
-export function sailDecl(count: number): string {
+export function sailDecl(count: number, withInstanceAttr = true): string {
   const n = Math.max(1, count);
   return /* glsl */ `
 #ifndef SHIP_SAIL_DECL
@@ -95,7 +122,7 @@ uniform float uSailAback[SAIL_N];
 uniform vec2 uSailStep;
 uniform float uSailTime;
 
-attribute float iSail;
+${withInstanceAttr ? 'attribute float iSail;' : ''}
 
 /**
  * One point on a sail.
@@ -218,7 +245,8 @@ vec3 lwSailPoint(int si, vec2 uv, out vec4 aux, out vec4 met) {
   // gasket, spiralling outward so the last cloth taken in lies on top.
   float bunt = 0.55 + 0.45 * pow(max(sin(PI * p), 0.0), 0.6);
   float gask = 1.0 - 0.36 * pow(abs(cos(p * PI * ${lwFloat(GASKETS)})), 16.0);
-  float R = spanLen * ${lwFloat(BUNDLE_R)} * gath * bunt * gask;
+  float R = min(spanLen * ${lwFloat(BUNDLE_R)}, ${lwFloat(BUNDLE_R_MAX_M)})
+         * gath * bunt * gask;
   float rr = 0.30 + 0.70 * (1.0 - rollT);
   float ang = rollT * 6.2831853 * ${lwFloat(BUNDLE_TURNS)};
   vec3 rollP = r0 + qDir * (R - R * rr * cos(ang)) + nrm * (R * rr * sin(ang));

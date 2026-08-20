@@ -20,9 +20,11 @@
 
 import * as THREE from 'three';
 import { PARTS_DECL } from './parts';
+import { sailDecl } from './sail';
 import { GLSL_COMMON_SAFE, type PartUniforms } from '../materials/materials';
 import type { SharedUniforms } from '../../types';
 import type { TexSet } from '../materials/textures';
+import type { SailUniforms } from '../build/sails';
 
 export interface LineMatUniforms {
   uCamLocal: { value: THREE.Vector3 };
@@ -30,11 +32,33 @@ export interface LineMatUniforms {
   uLineFade: { value: number };
 }
 
-const COMMON = /* glsl */ `
+/**
+ * `iBind` is what stops a buntline being drawn through the sail it is supposed
+ * to be lying against.
+ *
+ * A buntline or leechline genuinely runs ON the cloth: it is rove through
+ * cringles on the sail's forward face and hauls the bunt up to the yard.
+ * Routing it as a straight line between two points of the REST CUT can only
+ * ever be wrong, because the cloth is vertex-animated — a line that clears a
+ * furled sail pierces a full one, and the other way about. So a bound line is
+ * evaluated from the same `lwSailPoint` the cloth is drawn from, along the
+ * (u, v) path in `iBindUV`, and pushed `iBind.y` metres out along the cloth's
+ * own normal onto its forward face. Camber, shiver, reef and the furled roll
+ * are then followed for free, in every state, permanently.
+ *
+ *   iBind   = (sail slot + 1, standoff in metres, unused, unused)
+ *   iBindUV = (u0, v0, u1, v1)
+ *
+ * `iBind.x == 0` is the ordinary straight-and-sagging rope, which is all but a
+ * few dozen of the nine hundred instances.
+ */
+const COMMON = (sailCount: number): string => /* glsl */ `
 attribute vec3 iA;
 attribute vec3 iB;
 attribute vec4 iParam;   // sag, radius, bays, kind (0 = tarred, 1 = manila)
 attribute vec2 iPart;
+attribute vec4 iBind;
+attribute vec4 iBindUV;
 uniform vec3 uCamLocal;
 uniform float uViewportH;
 uniform vec3 uWind;
@@ -46,6 +70,7 @@ varying vec3 vRightL;
 varying vec3 vViewL;
 varying float vKind;
 ${PARTS_DECL}
+${sailDecl(sailCount, false)}
 
 vec3 ropePoint(vec3 A, vec3 B, float s, float sag, float bays, vec3 windOff){
   vec3 P = mix(A, B, s);
@@ -59,6 +84,31 @@ vec3 ropePoint(vec3 A, vec3 B, float s, float sag, float bays, vec3 windOff){
   P.y -= sag * e;
   return P + windOff * e;
 }
+
+/** A point on the cloth, 'standoff' metres proud of its forward face. */
+vec3 lwBoundPoint(int si, float s, float standoff){
+  vec2 uv = mix(iBindUV.xy, iBindUV.zw, clamp(s, 0.0, 1.0));
+  vec4 aux; vec4 met; vec4 j0; vec4 j1;
+  // lwSailPoint clamps its parameter, so at the leech and the foot a forward
+  // difference collapses. Step inward there and put the sign back on the cross
+  // product, exactly as SAIL_VERT_BODY does.
+  float sx = uv.x + uSailStep.x > 1.0 ? -1.0 : 1.0;
+  float sy = uv.y + uSailStep.y > 1.0 ? -1.0 : 1.0;
+  vec3 P  = lwSailPoint(si, uv, aux, met);
+  vec3 Pu = lwSailPoint(si, uv + vec2(sx * uSailStep.x, 0.0), j0, j1);
+  vec3 Pv = lwSailPoint(si, uv + vec2(0.0, sy * uSailStep.y), j0, j1);
+  vec3 n = cross(Pv - P, Pu - P) * (sx * sy);
+  float nl = length(n);
+  n = nl > 1e-9 ? n / nl : vec3(0.0, 0.0, 1.0);
+  // The forward face is -n: a square sail's cloth normal comes out +Z, and the
+  // buntlines are rove up the fore side of it.
+  return shipPart(P - n * standoff, uSailInfo[si].x);
+}
+
+vec3 lwLinePoint(vec3 A, vec3 B, float s, vec3 windOff){
+  if (iBind.x > 0.5) return lwBoundPoint(int(iBind.x - 0.5), s, iBind.y);
+  return ropePoint(A, B, s, iParam.x, iParam.z, windOff);
+}
 `;
 
 export function makeLineMaterial(
@@ -66,6 +116,8 @@ export function makeLineMaterial(
   parts: PartUniforms,
   tex: TexSet,
   extra: LineMatUniforms,
+  sailU: SailUniforms,
+  sailCount: number,
 ): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({
     map: tex.map,
@@ -87,10 +139,11 @@ export function makeLineMaterial(
     shader.uniforms.uWind = shared.uWind;
     shader.uniforms.uWindSpeed = shared.uWindSpeed;
     shader.uniforms.uTime = shared.uTime;
+    Object.assign(shader.uniforms, sailU);
 
     shader.vertexShader = /* glsl */ `
       ${GLSL_COMMON_SAFE}
-      ${COMMON}
+      ${COMMON(sailCount)}
       ${shader.vertexShader
         .replace('#include <common>', '#include <common>')
         .replace(
@@ -132,8 +185,8 @@ export function makeLineMaterial(
             float amp = 0.0032 * span * uWindSpeed * (0.35 + 0.9 * iParam.w);
             vec3 windOff = (wdir * sin(ph) + vec3(0.0, 0.45, 0.0) * sin(ph * 1.63 + 1.1)) * amp;
 
-            vec3 P  = ropePoint(A, B, s, iParam.x, iParam.z, windOff);
-            vec3 P2 = ropePoint(A, B, min(1.0, s + 0.02), iParam.x, iParam.z, windOff);
+            vec3 P  = lwLinePoint(A, B, s, windOff);
+            vec3 P2 = lwLinePoint(A, B, min(1.0, s + 0.02), windOff);
             vec3 tangent = normalize(P2 - P + vec3(0.0, 1e-5, 0.0));
             vec3 viewL = normalize(uCamLocal - P);
             vec3 right = cross(tangent, viewL);

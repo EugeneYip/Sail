@@ -963,3 +963,95 @@ visibly wrong reads as carelessness, so:
   at a masthead. A commissioning pennant belongs at the main truck.
 - Proportions, star geometry and stripe count must be exact; the cloth needs a
   proper travelling-wave response to `uWind` rather than a flat waving quad.
+
+## 31. §29 RETRACTED — there was no regression, and my instrument was blind
+
+**No commit caused the "3x regression".** The reference point `4cbc8c0`, whose own
+message records noon p25 16.7 ms, measures **52.6 ms today — marginally SLOWER
+than HEAD's 50.3 ms**. Two independent statistics agree.
+
+**Why I got it wrong, twice over:**
+
+1. **My commit hygiene broke the bisect.** Several commits labelled `docs:` also
+   carried large source changes (`84534fa`: 38 files/2205 lines; `3f4ed9d`: 21/1501;
+   `200cae3`: 24/1452; `edef72b`: 35/1197). So every candidate I named — the ocean
+   clipmap rewrite, the ship material detail, the cloud work — had landed *before*
+   my "known good" point, and the window I sent the agent to bisect contained only
+   `DIAGNOSIS.md`, three lines of audio, and the sail varying fix. **Source and docs
+   go in separate commits from now on.**
+2. **Load average cannot see GPU contention.** §29 recorded "load 1.9 at start" and
+   still measured 50 ms, because 4-9 other headless Chromium processes spin up
+   *during* a run and the 1-minute average lags badly. Load is a CPU run-queue
+   metric; the GPU is invisible to it.
+
+**The engine is not slow.** Minimum observed frame period is **5.7-7.1 ms** and
+**6-7% of frames complete within one vsync** even with 5-9 competitors rendering.
+A frame that genuinely costs 50 ms cannot produce a 7 ms frame. Cost is
+fragment-bound: 1-vsync share by render scale is 7% @1.00, 42% @0.70, 47% @0.50,
+58% @0.35.
+
+`scripts/capture.mjs` now counts competing headless renderers before and after each
+scene and refuses to print an unflagged timing when any exist.
+
+## 32. §30A is frame pacing, not a temporal ping-pong
+
+Every hypothesis I proposed was disproven by measurement over 90 consecutive
+title-screen frames:
+
+| my hypothesis | measured | verdict |
+|---|---|---|
+| whole-frame flicker | brightness ac1(Δ) **−0.01**, ac2 −0.03 | no period-2 signal |
+| auto-exposure oscillating | ac1(Δ) **+0.83** (smooth ramp) | not oscillating |
+| TAA history rejected | `aa.reset` **0/90** frames | never reset |
+| jitter sign flip | **8 distinct** offsets = full Halton cycle | correct |
+| frame-parity keying | none found (jitter is `frame % 8`) | none |
+
+**Actual cause: vsync beat aliasing.** `dt` averages **63.8 ms pre-begin / 49.3 ms
+post-begin** and **every value is an exact multiple of 16.67** (33.2 / 50.0 / 66.7 /
+83.3 / 100.0). A frame cost straddling vsync boundaries lands alternately on 2, 3,
+4 and 6 intervals, so animation advances in lurches — precisely "stuck, stuck,
+going back and forth". Worst on the sails because that is the motion you watch, and
+worst pre-begin because the title screen is ~30% slower. `dt` also pins at the
+100 ms clamp in `Engine.tick`, so the sim then advances slower than wall clock and
+amplifies the stall. The "dim flicker" is the auto-exposure **ramp** (24.4% swing
+pre-begin vs 5.9% post) sampled at 16 fps — a slow pump, not a flicker.
+
+So §29 and §30A are one bug, as suspected — but via frame **cost**, not a temporal
+system. Fixing it means fewer competitors and/or genuine fragment-cost reduction,
+not touching TAA.
+
+## 33. Two more visual claims that measurement disproved
+
+The perf agent reported the noon frame showing "the ship heeled to roughly 50-60°
+at 15.8 kn" and "the square sail plan rendering as one large sheet rather than
+discrete sails". **Both are wrong**, measured live:
+
+```
+assist true, 14.66 kn
+physics_heel_deg   9.96
+visual_roll_deg   -9.96     <- exact, not 50-60
+sailMeshCount      1  ("ship-sail-cloth")
+sailsSetSum        16 of 16
+sailAreaDrawing    2775 m2
+```
+
+A single sail mesh is **expected** — it is an `InstancedMesh` drawing all 16 sails,
+which is what AGENTS.md demands ("instance everything repeated", ship under ~120
+draw calls). An earlier full-frame capture plainly shows discrete sails on three
+masts.
+
+**This is the second time an observer has misjudged heel from a screenshot** (§9
+records me doing it). Tall masts plus yaw relative to the chase camera plus a wide
+lens reads as far more heel than 10°. **Measure `ship.heel` against the
+`shipRoot` matrix before reporting heel — it takes one probe.**
+
+## 34. A hazard someone created while bisecting
+
+The perf agent bisected using `git checkout <sha> -- src/`, which is **destructive
+to concurrent uncommitted work** in a shared tree. It checked the tree was clean at
+each step and believes nothing was lost, and flagged it unprompted. Recorded in
+AGENTS.md: use a `git worktree` with its own dev server instead.
+
+Also noted: `src/post/Pipeline.ts` sets `(globalThis).__rcPipe = this` under a
+`TEMP-DEBUG-RC` comment — a shipped debug global, zero per-frame cost, currently
+depended on by probes. Remove before release.

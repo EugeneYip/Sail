@@ -17,6 +17,7 @@
  */
 
 import { chromium } from 'playwright';
+import { execFileSync } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -31,6 +32,46 @@ import process from 'node:process';
  * freshly booted, unsettled engine — wrong waves, wrong exposure, wrong
  * everything, with nothing in the output to say so.
  */
+/**
+ * Count headless Chromium processes that are NOT ours.
+ *
+ * This exists because load average is a CPU run-queue metric and **cannot see
+ * GPU contention**. A run once recorded "load 1.9" and measured a 50 ms frame
+ * that the engine renders in 6 ms, purely because 4-9 other agents were
+ * capturing at the same time. Every performance conclusion drawn from that
+ * number was wrong, and the only reason we know is that the same session also
+ * observed a 5.7 ms minimum period — a frame that genuinely costs 50 ms cannot
+ * produce a 7 ms frame.
+ *
+ * So: measure the competition, and refuse to print an unflagged number when
+ * there is any.
+ */
+function competingRenderers() {
+  try {
+    const out = execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], { encoding: 'utf8' });
+    const mine = new Set([process.pid]);
+    const rows = out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+      const m = /^(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+      return m ? { pid: +m[1], ppid: +m[2], cmd: m[3] } : null;
+    }).filter(Boolean);
+    // Our own browser is a descendant of this process; walk parents to exclude it.
+    const byPid = new Map(rows.map((r) => [r.pid, r]));
+    const isMine = (r) => {
+      let cur = r, hops = 0;
+      while (cur && hops++ < 40) {
+        if (mine.has(cur.pid)) return true;
+        cur = byPid.get(cur.ppid);
+      }
+      return false;
+    };
+    return rows.filter(
+      (r) => /(Chromium|Google Chrome|chrome)/i.test(r.cmd) && /--headless/.test(r.cmd) && !isMine(r),
+    ).length;
+  } catch {
+    return -1; // unknown; do not claim the box is quiet
+  }
+}
+
 const staging = await mkdtemp(join(tmpdir(), 'leeward-shots-'));
 /** [stagedPath, finalPath] pairs, flushed at exit. */
 const pending = [];
@@ -274,6 +315,8 @@ const gpuInfo = await page.evaluate(() => {
 });
 
 const results = [];
+/** Set if any scene saw a competing renderer; makes the summary refuse to lie. */
+let contended = false;
 
 for (const name of sceneNames) {
   const scene = SCENES[name];
@@ -316,6 +359,8 @@ for (const name of sceneNames) {
     w.__periodRaf = requestAnimationFrame(tick);
   });
 
+  const rivalsBefore = competingRenderers();
+
   // Let the sim settle: waves need to build, TAA needs to converge, auto
   // exposure needs to adapt, LOD/streaming needs to finish.
   const settleMs = args.settle * 1000;
@@ -326,6 +371,7 @@ for (const name of sceneNames) {
     lastFps = await page.evaluate(() => window.__leeward.world.time.fps);
   }
 
+  const rivalsAfter = competingRenderers();
   const stats = await page.evaluate(() => {
     const w = window.__leeward.world;
     const P = (window.__periods ?? []).slice(10).sort((a, b) => a - b);
@@ -353,14 +399,17 @@ for (const name of sceneNames) {
   results.push({ name, label: scene.label, file, fps: lastFps ? Math.round(lastFps) : stats.fps, ...stats });
   // Headless Chromium caps rAF at 60 Hz, so 16.6 ms IS the floor here and a
   // p25 at the cap means "as fast as this harness can observe", not "exactly 60".
+  const rivals = Math.max(rivalsBefore, rivalsAfter);
+  contended ||= rivals > 0;
   const capped = stats.p25 > 0 && stats.p25 <= 17.2;
+  const flag = rivals > 0 ? `  !! ${rivals} rival renderer(s) — TIMINGS INVALID` : rivals < 0 ? '  !! contention unknown' : '';
   console.log(
     `[capture] ${name.padEnd(10)} ` +
       `p25 ${String(stats.p25).padStart(5)}ms${capped ? '*' : ' '} ` +
       `p50 ${String(stats.p50).padStart(5)}ms  ` +
       `p95 ${String(stats.p95).padStart(6)}ms  ` +
       `${String(stats.drawCalls).padStart(3)}dc  ` +
-      `${(stats.triangles / 1e6).toFixed(2)}Mtri  -> ${file}`,
+      `${(stats.triangles / 1e6).toFixed(2)}Mtri  -> ${file}${flag}`,
   );
 }
 
@@ -383,6 +432,14 @@ if (navigations > 1) {
 }
 
 console.log('\nGPU: ' + gpuInfo.renderer + (gpuInfo.float ? ' [float-rt ok]' : ' [NO FLOAT RT]'));
+if (contended) {
+  console.log(
+    '\n!! GPU CONTENTION DETECTED — every frame-period number above is INVALID.\n' +
+      '   Other headless renderers were running. Load average cannot see GPU\n' +
+      '   contention, so a quiet-looking box still ruins timings. Re-run when\n' +
+      '   `ps -Ao command= | grep -c "[-]-headless"` reports only your own.',
+  );
+}
 console.log('* p25 at the 16.6 ms rAF cap — the harness cannot observe faster than 60 Hz.');
 console.log('Trust p25/p50 (engine cost). p95 and any mean are dominated by machine load.');
 if (errors.length) {

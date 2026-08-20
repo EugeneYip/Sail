@@ -42,6 +42,12 @@ import type { RigFrame } from './masts';
 export interface SailResult {
   group: THREE.Group;
   meshes: THREE.Mesh[];
+  /**
+   * The cloth's own uniforms, so the rigging material can evaluate the SAME
+   * `lwSailPoint` the cloth is drawn from. That is what lets a buntline lie on
+   * the animated sail instead of through it — see `shaders/line.ts`.
+   */
+  uniforms: SailUniforms;
   update(world: World): void;
   applySettings(quality: number): void;
   dispose(): void;
@@ -59,6 +65,9 @@ const SHEET_GAIN = 2.35;
  */
 const GRID: readonly [number, number][] = [[13, 9], [17, 11], [21, 15], [27, 19]];
 
+/** How far forward of the yard's surface the jackstay holds the head, metres. */
+export const JACKSTAY_STANDOFF_M = 0.06;
+
 /** How much light comes through the cloth, relative to its diffuse albedo. */
 const CLOTH_TRANSMISSION = 0.34;
 
@@ -69,7 +78,7 @@ const CREASE_REACH = 0.4;
 /** Ridges in the fan from one corner, in cycles of the fan parameter. */
 const CREASE_CYCLES = 2.4;
 
-interface SailUniforms {
+export interface SailUniforms {
   uSailA: { value: THREE.Vector3[] };
   uSailB: { value: THREE.Vector3[] };
   uSailC: { value: THREE.Vector3[] };
@@ -148,7 +157,11 @@ export function buildSails(
       // lower third of every square sail had the mast straight through it.
       const rake = yard.mast < MASTS.length ? Math.tan(MASTS[yard.mast].rake) : 0;
       const hy = yf.centre.y;
-      const hz = yf.centre.z - yard.radius * 0.35;
+      // The jackstay is an iron rod along the yard's FORWARD face, so the head
+      // is bent a whole radius forward of the spar's axis, not a third of one.
+      // At 0.35 the cloth started inside the yard, and with any camber at all
+      // it started inside the forward-most lower shrouds too.
+      const hz = yf.centre.z - (yard.radius + JACKSTAY_STANDOFF_M);
       const fy = hy - cut.drop;
       const fz = hz - cut.drop * rake;
       A.set(-cut.headHalf, hy, hz);
@@ -205,6 +218,7 @@ export function buildSails(
   return {
     group,
     meshes: [mesh],
+    uniforms: u,
 
     update(w) {
       const st = u.uSailState.value;
