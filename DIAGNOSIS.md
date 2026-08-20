@@ -910,3 +910,56 @@ detail (more texture fetches per pixel).
 guessing.** Note §16: `gl.finish()` and `EXT_disjoint_timer_query` are unusable on
 ANGLE-on-Metal, and `settings.debug` perturbs what it measures — use the slope
 method and p25/p50 percentiles.
+
+## 30. Owner-observed defects, 2026-08-19 evening
+
+### A. Two-frame stutter + full-screen dim flicker, worst on the title screen
+
+The owner reports, **before pressing begin**: a persistent full-screen dim
+flicker, and the sails stuttering — described as "stuck, stuck, going back and
+forth between two frames". **Catastrophic at close camera on the sails.** Unknown
+whether it also occurs in-game.
+
+That signature — alternating between exactly two states, plus a whole-frame
+brightness flicker — is characteristic of a **temporal system ping-ponging**, not
+of low frame rate. Prime suspects, and note they are all in the same territory as
+§29's regression and may share a root cause:
+- TAA history alternately accepted and rejected (neighbourhood clamp too tight, or
+  a velocity/jitter sign flipping frame to frame)
+- the sail vertex animation sampling an alternating jitter or an odd/even frame
+  index, which would make it worst exactly where the owner says — close up on cloth
+- auto-exposure oscillating between two adaptation states (explains the dim flicker
+  specifically, since it is whole-frame)
+- the cloud or ocean temporal reprojection disagreeing with TAA's jitter
+
+**The title screen is the tell.** If the sim is paused or time-warped pre-begin,
+any system keyed on frame parity rather than elapsed time will alternate visibly.
+Check what `dt` and `world.time.frame` do before `begin`.
+
+### B. Ship parts intersect — ropes pass through sails
+
+Needs care rather than brute force: the rig is instanced and the sails are
+vertex-animated, so a rope that clears a furled sail may pierce a full one. Routing
+must account for the cloth's animated envelope, not its rest shape.
+
+### C. Bow, side and stern spray still read as fake
+
+The owner's description is diagnostic: the **side spray looks like a square, tidy
+horizontal waterfall**. That says the emitter is a rectangular grid or sheet quad
+rather than something following the hull's curve, with too much regularity and a
+hard edge. Bow and stern are also called out.
+
+### D. The US ensign — accuracy matters here
+
+The Constitution should fly the ensign. The owner asks explicitly for care over
+position, historical fidelity, cloth quality and physics. Getting a national flag
+visibly wrong reads as carelessness, so:
+- **Era.** This is the 1797 44-gun frigate. Her War-of-1812 ensign was the
+  **15-star, 15-stripe** flag (1795–1818) — the Star-Spangled Banner pattern, stars
+  in five rows of three. Today's ship flies a 50-star flag; the 15-star one is
+  correct for the vessel being modelled. `AGENTS.md` already specifies "the 15-star
+  ensign at the spanker gaff".
+- **Position.** The ensign flies at the **spanker gaff** (aft, on the mizzen), not
+  at a masthead. A commissioning pennant belongs at the main truck.
+- Proportions, star geometry and stripe count must be exact; the cloth needs a
+  proper travelling-wave response to `uWind` rather than a flat waving quad.
