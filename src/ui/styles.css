@@ -2342,6 +2342,41 @@ body {
   .photo-bar { flex-wrap: wrap; gap: 12px 16px; max-width: 92vw; }
 }
 
+/* Pro on a phone. 390 px cannot carry seven instruments, and the honest version
+   of that is to drop the two that need WIDTH rather than let them overlap.
+   Rendered in the real bundle at 390x844 (`.tmp/uidist.mjs`), Pro came out as a
+   collision, not a layout: the compass ribbon is 74vw = 289 px centred while the
+   mode switch occupies x 198-341, so the ribbon ran straight through it; and the
+   289 px sail plan overlapped the wind stats from x 196, printing "TRUEng28921%"
+   — three labels stacked on one line.
+
+   Both casualties are diagrams: a 300 px sail plan of three masts and eighteen
+   sails, and a compass strip that needs degrees of arc per pixel. They need
+   width or they are decoration. Everything that survives is text — speed,
+   heading, apparent and true wind, force, weather, the watch — and text at this
+   size reads, which is the same argument the minimal screen is built on. */
+@media (max-width: 430px) {
+  .r-top-c,
+  .r-bot-c {
+    display: none;
+  }
+
+  .r-bot-r {
+    max-width: 62vw;
+  }
+
+  /* The wind row is stats beside a 76 px rose. Side by side that needs ~276 px
+     inside a 242 px column, so the rose ended up behind the tail of
+     "APPARENT 036° stbd · 29.5 kn". Stack it instead of deleting it — there is
+     vertical room at the bottom right and the rose is the one diagram here that
+     still reads small, because it carries a single needle. */
+  .windrow {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+}
+
 @media (max-height: 620px) {
   .chart { display: none; }
   .speedblock { margin-top: 0; }
