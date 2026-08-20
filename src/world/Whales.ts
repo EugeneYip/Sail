@@ -105,7 +105,7 @@ export class Whales {
   }
 
   showcase(world: World, close: boolean): void {
-    this.arrive(world, close ? 260 : 1450);
+    this.arrive(world, close ? 155 : 1450);
     this.nextEvent = MEAN_VISIT_S * 6;
     for (const w of this.whales) {
       if (!w.active) continue;
@@ -124,7 +124,11 @@ export class Whales {
     const range = forcedRange > 0 ? forcedRange : r() < 0.6 ? 1200 + r() * 2000 : 160 + r() * 420;
     // A forced encounter goes on the bow so a capture can see it; a natural one
     // can be anywhere.
-    const bearing = world.ship.heading + (r() - 0.5) * (forcedRange > 0 ? 0.5 : 1.5);
+    // A forced encounter goes on the starboard bow, clear of our own rig, so a
+    // capture can actually see it; a natural one can be anywhere.
+    const bearing = forcedRange > 0
+      ? world.ship.heading + 0.52 + (r() - 0.5) * 0.16
+      : world.ship.heading + (r() - 0.5) * 1.5;
     const bx = world.ship.position.x + Math.sin(bearing) * range;
     const bz = world.ship.position.z - Math.cos(bearing) * range;
     const course = r() * Math.PI * 2;
@@ -268,8 +272,11 @@ export class Whales {
       }
       live++;
 
-      // The back sits just proud of the water when up; `depth` takes it under.
-      const y = w.waterY + 1.05 * w.scale - w.depth;
+      // The body's half-height is 1.72 m, so floating the CENTRE above the
+      // surface put the whole animal on top of the water and it read as a
+      // submarine. Sit the centre 1.35 m under and only the top 0.37 m of the
+      // back shows, which is all you ever see of a whale that is not breaching.
+      const y = w.waterY - 1.35 * w.scale - w.depth;
       pool.push(
         w.x, y, w.z, w.heading,
         w.pitch, w.roll, w.scale * 1.0, w.beat,

@@ -21,6 +21,8 @@ export interface MastSpec {
   gaff?: boolean;
   /** Fraction of the mast's height the gaff peak reaches. */
   gaffPeak?: number;
+  /** Boom length abaft the mast, metres. Defaults to 0.30 of the hull length. */
+  boom?: number;
 }
 
 export interface VesselSpec {
@@ -42,7 +44,7 @@ export interface VesselSpec {
   canvas: number;
   /** Best speed through the water, m/s. */
   topSpeed: number;
-  /** Multiplier on how far she heels for a given wind. */
+  /** Divides the heel angle: a three-decker is stiffer than a fishing boat. */
   stiffness: number;
 }
 
@@ -64,25 +66,44 @@ const STATIONS: readonly (readonly [number, number, number, number])[] = [
   [1.00, 0.44, 0.40, 1.08],
 ];
 
-/** Section outline, starboard side: [halfBeamScale, yKind, yFrac]. */
-const SECTION: readonly (readonly [number, number, number])[] = [
-  [1.00, 1, 1.00], // rail cap
-  [0.98, 1, 0.72], // deck level, inboard face of the bulwark
-  [1.00, 1, 0.30], // wale
-  [0.99, 1, 0.00], // waterline
-  [0.90, 0, 0.32],
-  [0.62, 0, 0.70],
-  [0.20, 0, 0.94],
-  [0.00, 0, 1.00], // keel
-];
+const STRIPE_HALF = 0.075;
+
+/**
+ * Section outline, starboard side: [halfBeamScale, above-water?, yFrac].
+ *
+ * Generated rather than tabulated, because the painted gunport stripes have to
+ * land ON a vertex to exist at all. The tabulated version had four above-water
+ * levels at 1.00, 0.72, 0.30 and 0.00 and a brig whose stripe was specified at
+ * 0.44 — so the stripe matched no vertex and simply never rendered. Every hull
+ * in the fleet was a plain black slab and it took a 216 m crop to notice.
+ */
+function sectionOutline(stripes: readonly number[]): (readonly [number, number, number])[] {
+  const levels = new Set<number>([1.0, 0.86, 0.72, 0.5, 0.3, 0.14, 0.0]);
+  for (const st of stripes) {
+    levels.add(Math.min(0.99, st + STRIPE_HALF));
+    levels.add(st);
+    levels.add(Math.max(0.01, st - STRIPE_HALF));
+  }
+  const sorted = [...levels].sort((a, b) => b - a);
+  const out: (readonly [number, number, number])[] = [];
+  for (const yf of sorted) {
+    // Tuck the topside in very slightly above the wale so the rail reads as a
+    // rail rather than as the widest part of the hull.
+    const hs = yf > 0.78 ? 0.975 : yf > 0.42 ? 1.0 : 0.995;
+    out.push([hs, 1, yf]);
+  }
+  out.push([0.9, 0, 0.32], [0.62, 0, 0.7], [0.2, 0, 0.94], [0.0, 0, 1.0]);
+  return out;
+}
 
 function hullColour(spec: VesselSpec, yFrac: number, above: boolean): RGB {
   const hull = srgb(spec.hull);
   if (!above) return mixRGB(srgb(spec.boot), hull, 0.25);
   for (const s of spec.stripes) {
-    if (Math.abs(yFrac - s) < 0.085) return srgb(0xd8b166);
+    if (Math.abs(yFrac - s) <= STRIPE_HALF + 1e-4) return srgb(0xd8b166);
   }
   if (yFrac > 0.9) return mixRGB(hull, srgb(0x000000), 0.35);
+  if (yFrac < 0.16) return mixRGB(hull, srgb(spec.boot), 0.45);
   return hull;
 }
 
@@ -92,6 +113,7 @@ function buildHull(b: MeshBuilder, spec: VesselSpec): void {
   const deckIdx: number[][] = [];
   const rings: number[][] = [];
   const aux: Aux = [0, 0, 0, ROUGH_PAINT];
+  const section = sectionOutline(spec.stripes);
 
   for (const [t, hbf, keelf, railf] of STATIONS) {
     const z = -half + t * spec.loa;
@@ -101,7 +123,7 @@ function buildHull(b: MeshBuilder, spec: VesselSpec): void {
     const ring: number[] = [];
     const starboard: number[] = [];
     const port: number[] = [];
-    for (const [hs, kindAbove, yf] of SECTION) {
+    for (const [hs, kindAbove, yf] of section) {
       const above = kindAbove === 1;
       const y = above ? railY * yf : keelY * yf;
       const col = hullColour(spec, yf, above);
@@ -112,7 +134,7 @@ function buildHull(b: MeshBuilder, spec: VesselSpec): void {
     for (let i = port.length - 1; i >= 0; i--) ring.push(port[i]);
     rings.push(ring);
     railIdx.push([starboard[0], port[0]]);
-    deckIdx.push([starboard[1], port[1], hb * 0.98, railY * 0.72, z]);
+    deckIdx.push([starboard[1], port[1], hb * 0.96, railY * 0.86, z]);
   }
   b.tube(rings, false);
 
@@ -215,12 +237,16 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
     if (m.squares > 0) {
       // Yards climb the mast; a course yard is about twice the beam, and each
       // one above it is shorter.
-      const spans = [1.06, 0.9, 0.72, 0.56];
-      const levels = [0.30, 0.53, 0.72, 0.86];
+      const spans = [1.06, 0.92, 0.76, 0.58];
+      // Spread the yards further up the mast when she carries fewer sails, so a
+      // three-sail rig does not leave a third of the topmast a bare pole.
+      const levels = m.squares >= 4 ? [0.26, 0.47, 0.66, 0.84] : [0.30, 0.56, 0.80, 0.9];
       const yardZ = m.z + rake * 0.7;
       for (let i = 0; i < Math.min(m.squares, 4); i++) {
         const yTop = heel + (m.height - heel) * levels[i];
-        const yBot = i === 0 ? heel + 1.2 : heel + (m.height - heel) * levels[i - 1] + 0.5;
+        // The foot of a topsail is sheeted to the yard BELOW it, not left
+        // hanging 2 m above it. The gap made the rig read as stacked cardboard.
+        const yBot = i === 0 ? heel + 1.1 : heel + (m.height - heel) * levels[i - 1] - 0.15;
         const hs = spec.beam * spans[i];
         b.cyl(-hs, yTop, yardZ, hs, yTop, yardZ, r0 * 0.34, r0 * 0.34, 5, sparHi, [1, yardZ, 0, ROUGH_SPAR]);
         sailPanel(
@@ -238,11 +264,27 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
       }
     }
 
+    // Shrouds and a forestay. Four thin cones a side is nothing to draw and it
+    // is most of the difference between a rig and two posts with crossbars.
+    const tarred = srgb(0x2a2622);
+    const rig: Aux = [0, 0, 0, 0.9];
+    const capZ = m.z + rake;
+    const shroudR = Math.max(0.035, r0 * 0.09);
+    for (const side of [1, -1]) {
+      for (let k = 0; k < 3; k++) {
+        const spread = spec.beam * (0.40 + k * 0.055);
+        const along = m.z + spec.loa * (0.045 + k * 0.035);
+        b.cyl(side * spread, heel * 0.98, along, side * r0 * 0.7, capH - 0.5, capZ, shroudR, shroudR, 4, tarred, rig);
+      }
+    }
+    b.cyl(0, capH - 0.5, capZ, 0, heel * 0.92, m.z - spec.loa * 0.20, shroudR, shroudR, 4, tarred, rig);
+
     if (m.gaff) {
       const peak = heel + (m.height - heel) * (m.gaffPeak ?? 0.82);
-      const boomEnd = m.z + spec.loa * 0.30;
+      const boomLen = m.boom ?? spec.loa * 0.30;
+      const boomEnd = m.z + boomLen;
       const boomY = heel + 0.9;
-      const gaffZ = m.z + spec.loa * 0.20;
+      const gaffZ = m.z + boomLen * 0.62;
       b.cyl(0, boomY, m.z + 0.3, 0, boomY - 0.2, boomEnd, r0 * 0.32, r0 * 0.24, 5, sparHi, [2, m.z, 0, ROUGH_SPAR]);
       b.cyl(0, peak - 1.2, m.z + 0.3, 0, peak, gaffZ, r0 * 0.28, r0 * 0.2, 5, sparHi, [2, m.z, 0, ROUGH_SPAR]);
       sailPanel(
@@ -312,10 +354,10 @@ export const VESSEL_SPECS: readonly VesselSpec[] = [
     boot: 0x4a3326,
     canvas: 0xa86a44,
     topSpeed: 3.3,
-    stiffness: 1.25,
+    stiffness: 0.85,
     masts: [
-      { z: -2.4, height: 15.5, squares: 0, gaff: true, gaffPeak: 0.86 },
-      { z: 3.6, height: 13.0, squares: 0, gaff: true, gaffPeak: 0.86 },
+      { z: -2.6, height: 12.6, squares: 0, gaff: true, gaffPeak: 0.80, boom: 5.6 },
+      { z: 3.4, height: 11.0, squares: 0, gaff: true, gaffPeak: 0.80, boom: 6.4 },
     ],
   },
   {
@@ -352,7 +394,7 @@ export const VESSEL_SPECS: readonly VesselSpec[] = [
     boot: 0x6a6144,
     canvas: 0xd9d1bd,
     topSpeed: 5.6,
-    stiffness: 0.72,
+    stiffness: 1.75,
     masts: [
       { z: -15.0, height: 50.0, squares: 3 },
       { z: 0.5, height: 58.0, squares: 3 },

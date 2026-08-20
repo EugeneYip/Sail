@@ -10,8 +10,15 @@ const MAX_VESSELS = 4;
 /** Mean seconds between one sail appearing and the next. */
 const MEAN_GAP_S = 215;
 const RETIRE_M = 12500;
-/** Closest a stranger's helmsman will let her come. */
+/**
+ * Closest a stranger's helmsman will let her come. The avoidance term used to
+ * start at three times this and carry a gain of 0.85, which meant a vessel
+ * 400 m off was throwing 50 degrees of helm to dodge a ship that was never
+ * going to hit her — measured, it swung a brig from broadside to nearly
+ * stern-on and her square sails went edge-on and vanished.
+ */
 const AVOID_M = 260;
+const AVOID_START = AVOID_M * 1.6;
 /** How close she has to be before it is worth spending an ocean foam slot. */
 const FOAM_RANGE_M = 430;
 
@@ -37,6 +44,8 @@ interface Vessel {
   tackTimer: number;
   heel: number;
   pitch: number;
+  /** Set by the review hook: hold this course, do not dodge, do not tack. */
+  held: boolean;
   brace: number;
   sheet: number;
   bulge: number;
@@ -166,7 +175,7 @@ export class Vessels {
       this.vessels.push({
         active: false, type: 0, flavour: 'crossing', x: 0, z: 0, y: 0,
         heading: 0, speed: 0, course: 0, tack: 1, tackTimer: 0,
-        heel: 0, pitch: 0, brace: 0, sheet: 0, bulge: 0, scale: 1, tint: 1,
+        heel: 0, pitch: 0, held: false, brace: 0, sheet: 0, bulge: 0, scale: 1, tint: 1,
       });
     }
     this.applySettings(world);
@@ -211,24 +220,42 @@ export class Vessels {
    */
   showcaseNear(world: World): void {
     const ship = world.ship;
+    // NOT beam-on. A square-rigger's yards are athwartships, so her beam is
+    // exactly the angle from which every sail is edge-on and the rig reads as
+    // two bare poles — which is what the first review crop showed. Put her on a
+    // near-reciprocal course instead, so we look at her from about 35 degrees
+    // off the bow and see the faces of the canvas whatever the brace.
+    const bow = world.ship.heading;
     // On the bow, not abeam: a chase camera sees about 55 degrees and anything
     // truly on the beam is off the edge of the frame.
-    const ranges = [230, 380, 640];
+    const ranges = [130, 230, 420];
     for (let t = 0; t < VESSEL_SPECS.length; t++) {
       const slot = this.vessels.find((v) => !v.active);
       if (!slot) break;
-      const bearing = ship.heading + (t % 2 === 0 ? 1 : -1) * (0.30 + t * 0.09);
+      const side = t % 2 === 0 ? 1 : -1;
+      const bearing = bow + side * (0.20 + t * 0.09);
+      // The two rigs want opposite viewing angles and there is no compromise:
+      // a square yard is athwartships, so her sails face you from ahead or
+      // astern; a gaff sail lies along the keel, so hers face you from abeam.
+      // Get it wrong and the canvas is edge-on and she looks bare-poled.
+      const foreAndAft = VESSEL_SPECS[t].masts.every((m) => m.squares === 0);
+      const disp = foreAndAft
+        ? bearing + Math.PI * 0.5
+        : bearing + Math.PI - side * 0.62;
       slot.type = t;
       slot.flavour = 'crossing';
       slot.x = ship.position.x + Math.sin(bearing) * ranges[t];
       slot.z = ship.position.z - Math.cos(bearing) * ranges[t];
-      slot.course = ship.heading + Math.PI * 0.55;
-      slot.heading = slot.course;
+      // Broadside to the camera, and held there: the point of this hook is to
+      // see how she is built, not to watch her helmsman work.
+      slot.course = disp;
+      slot.heading = disp;
       slot.tack = 1;
-      slot.tackTimer = 400;
+      slot.tackTimer = 1e6;
       slot.speed = 2;
       slot.heel = 0;
       slot.pitch = 0;
+      slot.held = true;
       slot.scale = 1;
       slot.tint = 1;
       slot.active = true;
@@ -295,6 +322,7 @@ export class Vessels {
     slot.pitch = 0;
     slot.scale = 0.94 + r() * 0.12;
     slot.tint = 0.9 + r() * 0.2;
+    slot.held = false;
     slot.active = true;
     if (!this.batches[slot.type]) this.pendingBuild = slot.type;
     world.bus.emit('world:sail', { type: VESSEL_SPECS[slot.type].label, range });
@@ -344,7 +372,7 @@ export class Vessels {
       v.tackTimer -= dt;
       const wantOff = wrapPi(env.windBearing - v.course);
       let steer = v.course;
-      if (Math.abs(wantOff) < CLOSE_HAULED) {
+      if (!v.held && Math.abs(wantOff) < CLOSE_HAULED) {
         if (v.tackTimer <= 0) {
           v.tack = -v.tack;
           v.tackTimer = 70 + this.rng() * 150;
@@ -352,13 +380,14 @@ export class Vessels {
         steer = env.windBearing - v.tack * CLOSE_HAULED;
       }
 
-      // Give the player room: nobody sails straight through you.
+      // Give the player room: nobody sails straight through you. Deliberately
+      // weak and short-ranged so it nudges rather than steers.
       const dxs = v.x - shipX;
       const dzs = v.z - shipZ;
       const ds = Math.hypot(dxs, dzs);
-      if (ds < AVOID_M * 3) {
+      if (!v.held && ds < AVOID_START) {
         const away = Math.atan2(dxs, -dzs);
-        steer += wrapPi(away - steer) * (1 - ds / (AVOID_M * 3)) * 0.85;
+        steer += wrapPi(away - steer) * (1 - ds / AVOID_START) * 0.5;
       }
 
       v.heading += wrapPi(steer - v.heading) * Math.min(1, dt * 0.22);
@@ -379,7 +408,8 @@ export class Vessels {
       v.z += fz * v.speed * dt;
 
       // --- attitude. Heel to leeward, pitch from the wave she is actually on.
-      const heelMag = Math.min(0.30, Math.pow(env.windSpeed * env.gust, 2) * 1.7e-3 * Math.sin(a)) /
+      // A three-decker is stiffer than a fishing boat, so `stiffness` divides.
+      const heelMag = Math.min(0.34, Math.pow(env.windSpeed * env.gust, 2) * 2.6e-3 * Math.sin(a)) /
         spec.stiffness;
       v.heel = damp(v.heel, -Math.sign(twa || 1) * heelMag, 1.2, dt);
 
@@ -396,7 +426,8 @@ export class Vessels {
       const s = Math.sign(twa || 1);
       v.brace = damp(v.brace, -s * (1 - a / Math.PI) * 0.95, 0.9, dt);
       v.sheet = damp(v.sheet, s * (0.16 + (a / Math.PI) * 1.05), 0.9, dt);
-      v.bulge = damp(v.bulge, Math.cos(twa) * (0.42 + env.windSpeed * 0.07) * drive, 1.5, dt);
+      // Cloth is never a flat sheet, even luffing, so the belly has a floor.
+      v.bulge = damp(v.bulge, Math.cos(twa) * (0.42 + env.windSpeed * 0.07) * (0.4 + 0.6 * drive), 1.5, dt);
 
       if (ds > RETIRE_M) {
         v.active = false;

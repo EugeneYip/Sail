@@ -86,7 +86,9 @@ export class Dolphins {
       d.active = true;
       // Two loose ranks off either bow, where the pressure wave actually is.
       const side = i % 2 === 0 ? 1 : -1;
-      d.sx = side * (3.2 + r() * 8.5);
+      // Wide enough that the ship's own canvas does not mask the whole pod from
+      // the chase camera, and still on the pressure wave.
+      d.sx = side * (4.6 + r() * 13.0);
       d.sz = -30 - r() * 13 - Math.floor(i / 2) * 2.6;
       d.join = 0;
       d.u = r();
@@ -167,8 +169,11 @@ export class Dolphins {
       const a = d.u * Math.PI * 2;
       const s = Math.sin(a);
       const lift = s > 0 ? Math.pow(s, 1.75) : 0;
-      const height = d.breach > 0 ? 3.4 : 1.5;
-      const yTarget = d.waterY - 0.9 + lift * height;
+      // A surfacing dolphin shows its back and dorsal and nothing else; only a
+      // breach leaves the water. 1.5 m of lift on a 0.24 m half-height body put
+      // the whole animal airborne on every single arc.
+      const height = d.breach > 0 ? 3.2 : 0.98;
+      const yTarget = d.waterY - 0.78 + lift * height;
       d.y = yTarget;
       // Pitch is the slope of that arc; nose up on the way out, down on entry.
       const slope = Math.cos(a) * (s > 0 ? 1 : 0.22) * (d.breach > 0 ? 1.35 : 0.75);
