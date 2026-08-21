@@ -813,6 +813,32 @@ function makeSailMaterial(
               through * pow(back, 1.6) * uSunColor * uSunIntensity * INV_PI
                       * sh * lwCloudShadow(vSailWP)
             + through * 0.28 * uSkyColor;
+
+          // And the same translucency seen from the OTHER side: light that came
+          // through whatever is shadowing this sail.
+          //
+          // A shadow map cannot say what cast a shadow, so a front-lit sail in
+          // shadow is rendered as if the occluder were opaque. Measured, nine
+          // tenths of the shadow that lands on this ship is cast by canvas — so
+          // that assumption is wrong for almost all of it, and it is why
+          // sail-on-sail shadows read as hard black cut-outs instead of the grey
+          // wash a lampshade throws. This adds back the fraction the occluder
+          // would have passed.
+          //
+          // It goes in indirectDiffuse rather than touching three's direct-light
+          // path, because the shadow multiply and the accumulation both happen
+          // inside 'lights_fragment_begin' and dividing the result back out is
+          // unstable as 'sh' approaches zero. Same uniforms and the same INV_PI
+          // as the block above, so the radiometry contract is unchanged: the
+          // 1/PI is ours because uSunIntensity is irradiance.
+          //
+          // Assuming EVERY occluder is canvas is wrong for the tenth that is
+          // spar and top, which now read a third too light. That is the smaller
+          // error, and it is on the smaller area; the alternative is a per-caster
+          // opacity a shadow map has nowhere to put.
+          float front = max(0.0, dot(wn, uSunDirection));
+          reflectedLight.indirectDiffuse += through * (1.0 - sh) * front
+            * uSunColor * uSunIntensity * INV_PI * lwCloudShadow(vSailWP);
         }`,
       );
   };

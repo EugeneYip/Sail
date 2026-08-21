@@ -73,24 +73,23 @@ export class SunLight {
     // changed meaning every time the range did. Derive it.
     sun.shadow.bias = -SHADOW_BIAS_M / (sun.shadow.camera.far - sun.shadow.camera.near);
     sun.shadow.normalBias = 0.055;
-    // TRANSLUCENT CASTERS. Measured on the `orbit` frame: removing the sails
-    // from the shadow map takes the darkest decile over the ship from 56 to 111
-    // sRGB against 123 with no shadow at all, so canvas casts about nine tenths
-    // of the shadow that lands on this ship. Canvas passes a third of the light,
-    // which makes a sail's shadow on another sail a grey wash at roughly a
-    // quarter of full sun; rendered as an opaque occluder it was at 5%, and that
-    // — not the map resolution, not the filter width, not the caster's
-    // tessellation, all three of which measured null — is why those shadows read
-    // as hard black cut-outs.
+    // TRANSLUCENT CASTERS, and why the fix is NOT here. Measured on the `orbit`
+    // frame: removing the sails from the shadow map takes the darkest decile
+    // over the ship from 56 to 111 sRGB against 123 with no shadow at all, so
+    // canvas casts about nine tenths of the shadow that lands on this ship.
+    // Canvas passes a third of the light, which makes a sail's shadow on another
+    // sail a grey wash at roughly a quarter of full sun; rendered as an opaque
+    // occluder it was at 5%, and that — not the map resolution, not the filter
+    // width, not the caster's tessellation, all three of which measured null —
+    // is why those shadows read as hard black cut-outs.
     //
-    // A shadow map cannot carry per-caster opacity, and this is a per-LIGHT
-    // floor, so it is a compromise in both directions: it lifts the canvas
-    // shadows most of the way to where they belong, and it lifts the opaque
-    // shadows of hull, spars and tops to about twice their honest darkness. The
-    // exact fix is a transmission-aware shadow term in the sail material, which
-    // is one line in `ship/build/sails.ts`; until that lands, the error sits on
-    // a tenth of the shadow area instead of on nine tenths of it.
-    sun.shadow.intensity = 1 - SHADOW_CANVAS_FLOOR;
+    // This was briefly a per-LIGHT floor here, which lifted the canvas shadows
+    // most of the way to where they belong and lifted the honest shadows of
+    // hull, deck and spars along with them. The intensity stays at three's
+    // default 1 so those stay honest, and the correction lives on the RECEIVER
+    // that needs it, in `ship/build/sails.ts` — see SHADOW_CANVAS_FLOOR.
+    sun.shadow.intensity = 1;
+    void SHADOW_CANVAS_FLOOR;
     // VSM blurs the ENTIRE shadow map, twice, every frame, regardless of how
     // little of it a single ship covers: cost is blurSamples x 2 x mapSize^2.
     // At 8 taps on a 4096 map that was 268 M fetches a frame and 19 ms, the
