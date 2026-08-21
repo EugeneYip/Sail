@@ -188,6 +188,10 @@ export class Engine {
 
     if (this.resizePending) this.applyResize();
 
+    // Draw calls are counted for the whole frame, so the reset belongs here —
+    // before the module updates draw anything. See the note below `dcAfterUpdate`.
+    world.renderer.info.reset();
+
     // --- shared uniforms that everything depends on
     const u = world.uniforms;
     u.uTime.value = time.elapsed;
@@ -207,8 +211,25 @@ export class Engine {
       }
     }
 
+    /*
+     * Draw calls are counted for the WHOLE frame, and they used to be counted
+     * only for the render hook.
+     *
+     * `info.reset()` was called here — after the module update loop — so
+     * everything drawn during an update was invisible to the stat. The ocean
+     * alone runs 57 FFT and spectrum passes there; the wake field, the sun's
+     * shadow map and the environment probe also draw during updates. Every
+     * draw-call figure this project has quoted was an undercount: 68-91 reported
+     * against roughly 140 real.
+     *
+     * The reset now happens once at the top of the frame. The hook's own share
+     * is published separately as `drawCalls:render`, because "what does the
+     * visible render cost" and "what does the frame cost" are different
+     * questions and both are worth having.
+     */
+    const dcAfterUpdate = world.renderer.info.render.calls;
+
     // --- render
-    world.renderer.info.reset();
     if (this.renderHook) this.renderHook.render(world);
     else {
       world.renderer.clear();
@@ -216,6 +237,8 @@ export class Engine {
     }
 
     world.stats.drawCalls = world.renderer.info.render.calls;
+    world.stats['drawCalls:update'] = dcAfterUpdate;
+    world.stats['drawCalls:render'] = world.renderer.info.render.calls - dcAfterUpdate;
     world.stats.triangles = world.renderer.info.render.triangles;
     world.stats.programs = world.renderer.info.programs?.length ?? 0;
 
