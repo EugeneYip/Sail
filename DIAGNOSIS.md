@@ -4035,7 +4035,9 @@ arrived at by two compensating errors, which is the most dangerous kind of agree
   clipped flat to black is now visible. Nothing new appeared on the sixteen `capture.mjs`
   panes, but the `night` sails carry heavy chroma speckle that is worth a look; it is
   midtone, so it predates this, and the likeliest cause is the documented gap that animated
-  vertex shaders write no velocity for TAA.
+  vertex shaders write no velocity for TAA. **The speckle was real and is now fixed — but the
+  TAA guess was wrong. It was three's `dithering` material flag adding display codes to
+  scene-linear radiance; see §73.**
 - **`AGX_IN` in `src/util/glsl.ts` is the transpose of three's AgX inset matrix** while
   `AGX_OUT` matches three's outset exactly, so the pair no longer round-trips. Greys come out
   of the inset as (1.106, 0.933, 0.961), a +0.15/−0.10/−0.06 stop channel imbalance before
@@ -4113,3 +4115,163 @@ about a stop".
 prediction at one end is not thereby validated — two independent errors of similar
 magnitude in opposite directions will reproduce agreement, and that agreement is what
 stops you looking further.
+
+## 73. §71a's sail speckle was three's `dithering` flag, adding display codes to scene-linear radiance
+
+§71a measured heavy spatially-incoherent colour speckle on the sails at low light and
+located it upstream of the composite. It is **three's `dithering` material flag**, and it
+was set on **12 of the ship's 14 materials**. Removed; the fix is four deleted lines.
+
+### The mechanism, and why it was proportional to darkness
+
+`dithering: true` compiles `dithering_fragment`, the **last** chunk in the built-in
+fragment shader — after `tonemapping_fragment` and `colorspace_fragment` — and it adds
+
+```
+vec3 dither_shift_RGB = vec3( 0.25, -0.25, 0.25 ) / 255.0;   // mix(2x, -2x, rand(gl_FragCoord.xy))
+```
+
+Those are **display codes**. The chunk is written on the assumption that the renderer
+finishes with a tonemap and an sRGB encode, so half an LSB is half an LSB. Here
+`renderer.toneMapping` is `NoToneMapping` and the post stack owns the encode
+(non-negotiable 6), so both of those chunks are no-ops and what the flag actually added
+was **0.00196 of scene-linear radiance**, per channel, **with green opposed to red and
+blue** — a magenta/green flip keyed off a hash of `gl_FragCoord`. Purple and green pepper,
+by construction, exactly as the owner described it.
+
+The amplifier is not in the material. It is that a **fixed absolute** quantity was injected
+upstream of auto-exposure. Applied multiplier, read back off `expStateB.g` in the same
+frame:
+
+| scene | applied exposure | dither as post-exposure signal |
+|---|---|---|
+| orbit | 0.151 | 0.0003 — nothing |
+| dusk | **22.63** | 0.044 |
+| night | **22.63** | 0.044 |
+
+**7.2 stops** between them, and at dusk and night the sails' own radiance is of the same
+order as 0.044 — so every sail pixel was being pushed a large fraction of its own value.
+The negative half of the swing clips at the floor, so the dither did not only add noise, it
+**lifted the canvas**: most of a stop of the sails' dusk and night luminance was rectified
+noise, which is why the sails read paler before this and darker after.
+
+### Both states of the fix, inside ONE frozen frame
+
+`.tmp/H73speck.mjs` restores the flag **from the page** (`material.dithering = true`, a
+fresh `customProgramCacheKey`, `needsUpdate`), so before and after share one wave phase,
+one cloud field, one sun and one heading. Statistics over the **sail silhouette only**;
+`chroma` is `max(R,G,B) - min(R,G,B)` on the stored 8-bit codes, `nbr jump` is the mean
+`|Δchroma|` over 4-neighbour pairs inside the mask, `m HF` is the high-frequency part of
+the magenta-green opponent `(R+B)/2 − G`, which is the axis the dither lives on.
+
+| scene | chroma p50 | p99 | mean L | nbr jump | m HF |
+|---|---|---|---|---|---|
+| dusk, dither on | 19.0 | 45 | 24.1 | 6.92 | 6.31 |
+| **dusk, shipping** | **12.0** | **19** | **14.5** | **1.84** | **0.47** |
+| night, dither on | 21.0 | 46 | 24.5 | 6.43 | 5.48 |
+| **night, shipping** | **13.0** | **29** | **15.4** | **2.10** | **0.57** |
+| orbit, dither on | 35.0 | 41 | 118.2 | 2.32 | 0.41 |
+| **orbit, shipping** | **35.0** | **41** | **118.2** | **2.33** | **0.40** |
+
+Null spread in the same frozen frame (`base` against `base2`) is 0.0–0.1 on chroma p50,
+0.04 on the jump and 0.02–0.04 on `m HF`. **Daylight is unchanged to every digit.** The
+magenta-green high-frequency energy falls **13x at dusk and 10x at night**, and the
+neighbour-to-neighbour jump at dusk and night is now **below** daylight's 2.32.
+
+### The residual is the illuminant, and §71a's premise was wrong about it
+
+Chroma p50 is still 82–88% of mean L at dusk and night, so on §71a's stated test — "a
+near-white flax sail should have chroma near zero" — the defect would look unfixed. That
+test only holds under a **neutral** illuminant. The sail's chromaticity against the sky's,
+measured in the same frame:
+
+| | R | G | B |
+|---|---|---|---|
+| dusk sail | 0.250 | 0.276 | 0.474 |
+| dusk sky | 0.258 | 0.298 | 0.444 |
+| night sail | 0.233 | 0.276 | 0.491 |
+| night sky | 0.218 | 0.285 | 0.497 |
+
+Within 0.03 on every axis: the cloth is the colour of the sky that lights it, which is what
+a white surface under a blue-hour sky must be. And with the dither on, the **mean** hue was
+measurably shifted off it — the dusk sail went to (0.255, 0.276, 0.469) and the night sail
+to (0.248, 0.277, 0.475), i.e. toward magenta, so the flag was biasing colour as well as
+adding noise. The discriminator that matters for "speckle" is spatial coherence, not
+chroma magnitude, and §71a's own jump statistic already said so.
+
+### Ablated and ruled out, one term at a time in the same frozen frame
+
+Every candidate in the brief, plus the rest of the sail shader. `m HF` is the column that
+matters; none of these moves it, and the ones that move `mean L` are moving real light.
+
+| ablation | m HF, dusk | mean L, dusk | verdict |
+|---|---|---|---|
+| nothing | 5.76 | 27.0 | the defect |
+| **`dithering` off** | **1.52** | **18.1** | **the whole of it** |
+| `through * 0.28 * uSkyColor` = 0 | 6.12 | 25.3 | not it; real fill |
+| backlit `pow(back,1.6) * uSunColor * uSunIntensity` = 0 | 4.90 | 27.0 | not it, and ~0 at night anyway |
+| shadow-transmission `through * (1−sh) * front` = 0 | 4.52 | 27.1 | not it |
+| `#include <lights_fragment_maps>` removed (the whole env probe) | 4.70 | 25.5 | **not it** |
+| `lwShipAerial` removed | 4.62 | 26.8 | not it |
+| `diffuseColor.rgb = 0.62` (all cloth albedo detail) | 6.06 | 28.8 | not it |
+| crease/cockle/seam normal perturbation off | 5.68 | 27.1 | not it |
+| `sheen = 0` | 5.73 | 25.5 | not it; worth 0.2 stops |
+
+- **The environment probe is innocent** and was the brief's leading candidate. It is
+  `HalfFloatType` already (`sky/EnvProbe.ts`), and removing it entirely changes no
+  high-frequency statistic at any light level — at `orbit` it moves `m HF` 0.40 → 0.42 while
+  moving `mean L` 118 → 102. It is supplying about half the sails' dusk light (14.6 → 10.1)
+  and it is supplying it smoothly.
+- **`shaders/bounce.ts` is not on the sail material at all.** It is injected only by
+  `makeShipMaterial`, so it could not have been this.
+- The two remaining large terms in the dusk sail's light are the probe (0.53 stops) and the
+  fabric sheen lobe (0.37 stops). Both are smooth.
+
+### Nothing was lost by removing it
+
+`COMPOSITE_FRAG` already ends with **one LSB of triangular-PDF dither, monochrome,
+immediately before the 8-bit write**, with a comment saying the sky bands without it. That
+is exactly what the material flag was reaching for, in the one place where 1/255 really is
+one code and where a monochrome perturbation cannot make chroma. The flag was a duplicate
+in the wrong colour space, on the wrong axis, at the wrong point in the pipeline.
+
+### Two things found in passing, neither of them mine
+
+- **Auto-exposure is pinned to its ceiling at dusk and at night.** `expStateA.r` reads
+  **4.4999990** in both, and `MAX_GAIN_STOPS` in `src/post/AutoExposure.ts` is **4.5**;
+  `2^4.5 = 22.627417`, which is the applied multiplier to seven digits. So both scenes are
+  asking for more exposure than the controller will give, and the night frames are as bright
+  as the engine can currently make them.
+- **§72's 2.14-stop gap is scene-dependent, not a constant.** It reproduces exactly on
+  `orbit` (estimate 0.665, applied 0.151), but at dusk and night the estimate and the
+  applied value agree to seven digits — **because both are sitting on the same 4.5-stop
+  clamp**, not because the estimate is good there. A calibration that agrees at one end,
+  again.
+
+### The instrument, because the mask is the part that is reusable
+
+The statistic needs the sail pixels and nothing else, and **a difference of two composites
+cannot give you them**: hiding the sails changes what the adapt pass meters, the whole frame
+moves, and the difference mask selects everything. So the sail meshes are rendered **alone**
+into a private RGBA8 target with clear alpha 0 — an opaque fragment writes alpha 1, so the
+alpha channel *is* the silhouette, with no post stack and no exposure anywhere in it. Then
+erode one pixel, because an edge pixel's chroma is a coverage artefact. 37k px at dusk,
+168k at `orbit`.
+
+Two traps worth writing down. `material.fragmentShader` does not exist on a
+`MeshPhysicalMaterial` — patch by **wrapping `onBeforeCompile`** so the module's own
+injections are in scope first. And `customProgramCacheKey` here returns the constant
+`'ship-sail'`, so three serves the cached program and **your edit silently does nothing**
+until you vary the key too.
+
+### What is still not good enough
+
+- The sails at dusk sit at **mean L 14.5** and at night **15.4**, most of a stop darker than
+  they looked yesterday. That is the honest value — the lift that is gone was rectified
+  noise, not light — but "the sails are dark at blue hour" is now a real question about the
+  sky's fill on canvas rather than a noise artefact, and it is worth a look by whoever owns
+  the illuminant. It is not fixable by putting noise back.
+- `p99` chroma at night is **29** against dusk's 19. The top percentile of night sail pixels
+  still carries more colour spread than dusk's does, and this fix does not explain why.
+- The residual `m HF` of 0.47–0.57 at dusk and night against `orbit`'s 0.40 is small but not
+  zero. It was not chased.
