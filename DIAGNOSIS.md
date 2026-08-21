@@ -3261,3 +3261,82 @@ Whether the wake texel change is visible to the owner on a real panel: a headles
 backing store, not what a panel shows after upscaling. And none of this is measured on real
 hardware — §64E makes the fixed term a property of this box's CPU as much as its GPU, so a
 quieter machine with a faster core has a smaller one, and by how much is not knowable here.
+
+## 65. Four instrument corrections, one of which I had propagated into three briefs
+
+### `world.ext.post.profile()` does not return GPU time on this box
+Its passes sum to **2.31–2.61 ms** against frames costing **24.8–55.8 ms**. The reason
+is already in this file: `gl.finish()` does not block under ANGLE-on-Metal (§16), and
+`profile()` is built on a `finish()` between passes. So it is timing **CPU submission**,
+not GPU work.
+
+**This is mine to own.** I wrote "`ext.post.profile()` … has the resolution you need" or
+equivalent into three agent briefs, on the strength of an agent having priced a change at
+0.020 ms with it. That 0.020 ms was CPU submission time, not frame time. An instrument
+that reports a tenth of the frame it claims to account for is not a resolution problem,
+it is a units problem — and I promoted it to a recommendation on one data point that
+looked precise.
+
+The working alternative is the one the sweep uses: **ablate a candidate and measure the
+saving at two or three render scales.** A saving that is the same at 1.115 Mpx and
+3.327 Mpx is fixed cost; one that scales is per-pixel. It needs paired A/B in short
+alternating bursts, because the baseline's own spread at the low rung is ±1 ms — the size
+of the effects being measured.
+
+### `world.stats.drawCalls` counted the render hook, not the frame
+`info.reset()` sat *after* the module update loop, so everything drawn during an update
+was invisible. Measured after moving it: **138 draw calls for the whole frame — 68 in the
+update phase, 70 in the render hook.** Every draw-call figure this project has quoted,
+including every one I reported, was about half the truth, and the harness printed it as
+`dc` under a label everyone read as the frame's. Fixed; the hook's share is still
+published separately.
+
+### Setting `renderScale` without dispatching a resize measures the opening cap
+It silently reports **1.56 Mpx** — the adaptive controller's opening bid — rather than
+the rung you asked for. This invalidated one run of the fixed-cost sweep.
+
+### The rival-renderer counter counts your own shells
+It matches command lines, so a wait-loop shell whose text contains the browser name is
+counted as a rival. A run on an **idle** box reported `rivals 3/3`, and a comparison was
+discarded as contended when it was not. So `CONTENDED` has been over-reported, and some
+measurements discarded on this project were probably fine. It cuts the other way too:
+contention can only *add* time, so a `CONTENDED` run still bounds the truth from below.
+
+## 66. The fixed frame cost is three things, and the floor is CPU
+
+Measured by ablating one candidate at a time and reading the saving at two render scales
+— a saving that does not change with pixel count is fixed cost. Curve reproduced first at
+**7.86 ms + 14.37 ms/Mpx**, worst residual 0.15 ms (§59B had 9.44 + 13.83).
+
+| ablated | fixed cost |
+|---|---|
+| the sun's shadow map (generation) | **3.3–3.7 ms** — of which the VSM blur is only ~1.15, the depth render into the same 2048² map is the other 2.2–2.7 |
+| the wake field | **2.3–2.9 ms** |
+| the ocean FFT (57 passes) | **1.8–3.0 ms** |
+| foam sim, env probe + PMREM, aerial LUT, sky-view LUT | ≤0.35 ms each |
+| the cloud shadow map, 512² over 26 km | **0.00 ms**, measured twice |
+
+A whole-module ablation confirms nothing large sits outside that list.
+
+**All three of my suspects were priced and two were wrong.** The VSM blur is real but a
+third of the shadow's cost, and it cannot be cheapened at the same radius — three spaces
+its taps uniformly over ±radius, so 6 taps across 2.2 texels are already 0.88 texels
+apart. The atmosphere LUT chain is ~0.3 ms total, because transmittance and multi-scatter
+never rebuild in steady state. `CLOUD_SHADOW_SIZE` is free.
+
+**And the uncomfortable finding: the floor is CPU.** `sum(upd:*)` 3.95–4.94 ms plus
+post-stack submission 2.31–2.61 ms is **6.3–7.6 ms of CPU per frame** against a 7.86 ms
+intercept. So the fixed term cannot "drop ~13 ms" as I had implied — there is only
+7.9–9.4 there in total and most of it is CPU. Both terms of the cost model have to move.
+
+**Cut so far: 1.3 ms**, `wakeRes` at `ultra` 1536 → 1024, the value `high` has always
+shipped, measured in both directions with all six pairs on one sign. Visual cost stated
+and measured rather than asserted: the persistent field's texel goes 0.67 m → 1.0 m, and
+high-frequency energy on the same wake crop reads **6.049 at 1024 against 5.974 at 1536**
+— 1.3% apart and in the *wrong direction* for a resolution loss, i.e. indistinguishable.
+
+**Left on the table, priced:** shadow map at 1024 for **2.45 ms** (an owner decision —
+§56 measured `map512` taking sail-shadow edge p50 from 3.48 to 8.42 px, and 1024 is
+untested); the wake decay pass for ~0.9 ms, exactly free; and the ocean sim from 57 to 31
+passes for ~0.9 ms, bit-identical, because `oceanResolution` is a no-op between `high`
+and `ultra` and ultra's three 64² cascades could share one FFT over 6 MRT attachments.
