@@ -1005,8 +1005,35 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
       const st = new Station(t);
       const y = sheerY(t);
       const w = st.widthAt(y);
-      ir.box(side * (w + 0.02), y + 0.42, z, 0.035, 0.36, 0.035);
-      ir.box(side * (w + 0.14), y + 0.78, z, 0.16, 0.035, 0.035);
+      /*
+       * A crane is a bent iron rod, and it used to be two axis-aligned boxes.
+       *
+       * These are the "25+ identical Gamma glyphs with no gradient across them,
+       * no variation between pins at different orientations" a blind critic
+       * reported. It called them belaying pins and a following agent agreed;
+       * both were wrong, and the count is the tell — this loop runs z = -18 to
+       * 19 at 1.5 m, which is 25 a side, while the belaying pins come in three
+       * clusters of 11. A vertical box plus a horizontal box at its head IS a
+       * Gamma, and an axis-aligned box has exactly two lit faces at any sun
+       * angle, so every crane presented the identical pair.
+       *
+       * The lighting half of that complaint was real and is already fixed
+       * elsewhere: these are `iron`, and iron was authored at F0 0.019 — below
+       * the 0.04 dielectric floor — so they were a dark plastic L. This is the
+       * geometry half. A `spar` is a tube, so the normal sweeps across it and
+       * curvature carries a gradient; the elbow is a third short spar rather
+       * than a mitre, which is what a rod bent round a former actually looks
+       * like. Deterministic per-station lean, because a row of ironwork that has
+       * been slept against for twenty years does not stand true.
+       */
+      const j = Math.sin(z * 3.7) * 0.5 + 0.5;
+      const lean = (j - 0.5) * 0.09;
+      const hUp = 0.34 + j * 0.05;
+      const base = new THREE.Vector3(side * (w + 0.02), y + 0.24, z);
+      const knee = new THREE.Vector3(side * (w + 0.02 + lean), y + 0.24 + hUp, z + lean * 0.4);
+      const armEnd = new THREE.Vector3(side * (w + 0.25), knee.y + 0.035, z + lean * 0.6);
+      ir.spar(base, knee, 0.019, 0.016, 5);
+      ir.spar(knee, armEnd, 0.016, 0.013, 5);
     }
     // The hammocks themselves: a pale canvas roll.
     bins.buff.setColorHexLinear(0xd8d2c2, 1.0);

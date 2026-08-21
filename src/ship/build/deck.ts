@@ -176,9 +176,82 @@ function buildHatches(bins: Bins, hull: HullResult, quality: number): void {
   void hull;
 }
 
+/** Deterministic 0..1 from an integer, so a pin looks the same every boot. */
+function pinRand(i: number): number {
+  const s = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/**
+ * One belaying pin, and why it is not a box any more.
+ *
+ * A blind critic described the old ones as "identical Gamma glyphs with no
+ * gradient across them, no variation between pins at different orientations",
+ * and a following agent proved that is not a lighting problem: at the 2-6 m a
+ * pin is viewed from, the aerial term is 1e-4 and the bounce term lifts it about
+ * one code. It was the geometry. Every one of the 130-odd pins was the same
+ * axis-aligned `box(0.035, 0.2, 0.035)` — so an axis-aligned box has exactly two
+ * lit faces at any sun angle, every pin presents the identical pair, and a flat
+ * face has no gradient across it by construction.
+ *
+ * Three changes, in the order they matter at that range:
+ *
+ * 1. ROUND, so curvature carries a gradient. A `spar` is a tube: the normal
+ *    sweeps across it and the shading follows. This alone is why a fitting reads
+ *    as turned wood rather than as a sticker.
+ * 2. CANTED and JITTERED, deterministically from the index. Real pins lean where
+ *    the rope pulls them and no two sit alike; identical spacing and a shared
+ *    axis is what made the row read as a repeated glyph rather than as objects.
+ * 3. A SHOULDER. A pin is a handle above the rail and a shank below, thicker at
+ *    the shoulder where the turns bear. The taper is the whole silhouette at
+ *    this size; individual turnings are not renderable on a 35 mm shaft at 2 m.
+ *
+ * Deliberately NOT a lathed profile with rings, and not a coil of rope on every
+ * pin: a 35 mm shaft is about 15 px across at 2 m, so a taper reads and a
+ * turning does not, and 130 coils would cost more than the whole rig's ribbons.
+ * A coil goes on a fraction of them instead, which is what makes a rail read as
+ * worked rather than as a fixture.
+ */
+function belayingPin(
+  oak: MeshBuilder, x: number, yTop: number, z: number, i: number, coil: boolean,
+): void {
+  const a = pinRand(i);
+  const b = pinRand(i + 977);
+  const c = pinRand(i + 5051);
+  // Cant: a few degrees each way, more athwartships than fore-and-aft because
+  // that is the direction the turns pull.
+  const leanX = (a - 0.5) * 0.16;
+  const leanZ = (b - 0.5) * 0.10;
+  const hUp = 0.135 + c * 0.045;    // handle proud of the rail
+  const hDn = 0.10 + a * 0.03;      // shank below it
+  const rMid = 0.019 + b * 0.004;   // shoulder
+  const head = new THREE.Vector3(x + leanX * hUp, yTop + hUp, z + leanZ * hUp);
+  const mid = new THREE.Vector3(x, yTop, z);
+  const foot = new THREE.Vector3(x - leanX * hDn, yTop - hDn, z - leanZ * hDn);
+  oak.spar(mid, head, rMid, 0.0135, 5);
+  oak.spar(foot, mid, 0.0125, rMid, 5);
+  if (!coil) return;
+  // A hank of rope hung over the pin: two turns falling to a bight. Four short
+  // spars, which is cheaper than a revolve and reads the same at this size.
+  const w = 0.055 + c * 0.02;
+  const drop = 0.16 + a * 0.09;
+  const s = leanX >= 0 ? 1 : -1;
+  const p0 = new THREE.Vector3(x - s * w, yTop - 0.01, z);
+  const p1 = new THREE.Vector3(x + s * w, yTop - 0.03, z + 0.012);
+  const p2 = new THREE.Vector3(x + s * w * 0.7, yTop - drop * 0.6, z - 0.01);
+  const p3 = new THREE.Vector3(x - s * w * 0.5, yTop - drop, z + 0.008);
+  oak.spar(p0, p1, 0.011, 0.011, 4);
+  oak.spar(p1, p2, 0.011, 0.010, 4);
+  oak.spar(p2, p3, 0.010, 0.010, 4);
+}
+
 function buildBelayingPins(bins: Bins, frame: RigFrame, quality: number): void {
   const oak = bins.oak;
   const n = quality >= 2 ? 11 : 7;
+  // Every third pin carries a coil, offset per rail so the pattern does not
+  // line up across the ship.
+  const coilAt = (i: number) => quality >= 2 && i % 3 === 1;
+  let pin = 0;
   oak.setColorHexLinear(0xffffff, 0.78);
   for (const m of frame.masts) {
     const y = deckY(m.spec.z);
@@ -189,8 +262,10 @@ function buildBelayingPins(bins: Bins, frame: RigFrame, quality: number): void {
       oak.box(side * r, y + 0.5, m.spec.z + r * 0.7, 0.08, 0.5, 0.08);
       oak.box(side * r, y + 0.5, m.spec.z - r * 0.7, 0.08, 0.5, 0.08);
       for (let i = 0; i < n; i++) {
-        const z = m.spec.z + ((i + 0.5) / n - 0.5) * r * 1.5;
-        oak.box(side * r, y + 0.92, z, 0.035, 0.22, 0.035);
+        const z = m.spec.z + ((i + 0.5) / n - 0.5) * r * 1.5
+          + (pinRand(pin + 311) - 0.5) * 0.035;
+        belayingPin(oak, side * r, y + 1.03, z, pin, coilAt(i));
+        pin++;
       }
     }
   }
@@ -202,8 +277,10 @@ function buildBelayingPins(bins: Bins, frame: RigFrame, quality: number): void {
     for (const side of [1, -1] as const) {
       oak.box(side * w, sheerY(t) - 0.85, m.spec.z, 0.1, 0.1, 1.5);
       for (let i = 0; i < n; i++) {
-        const z = m.spec.z + ((i + 0.5) / n - 0.5) * 2.7;
-        oak.box(side * w, sheerY(t) - 0.96, z, 0.035, 0.2, 0.035);
+        const z = m.spec.z + ((i + 0.5) / n - 0.5) * 2.7
+          + (pinRand(pin + 733) - 0.5) * 0.06;
+        belayingPin(oak, side * w, sheerY(t) - 0.82, z, pin, coilAt(i + 2));
+        pin++;
       }
     }
   }
