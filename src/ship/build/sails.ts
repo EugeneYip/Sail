@@ -541,7 +541,10 @@ function makeSailMaterial(
     // makes the map's measured slope a lie: '.tmp/clothprobe.mjs' reports on the
     // texture, and this is the only thing between the texture and the shading.
     normalScale: new THREE.Vector2(1, 1),
-    dithering: true,
+    // No `dithering: true`. It added a fixed +-0.00196 of scene-linear radiance
+    // on the magenta-green axis, auto-exposure multiplied it by 22.6 at dusk and
+    // at night, and it was the owner's "purple and green pepper" on the canvas.
+    // See the note above `makeShipMaterial` in materials/materials.ts.
   });
   const trans = { value: CLOTH_TRANSMISSION };
 

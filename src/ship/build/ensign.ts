@@ -415,7 +415,8 @@ export function buildEnsign(
     roughness: 0.92,
     metalness: 0,
     side: THREE.DoubleSide,
-    dithering: true,
+    // No `dithering: true` — see the note above `makeShipMaterial` in
+    // materials/materials.ts.
   });
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, u);

@@ -131,6 +131,33 @@ ${DETAIL_DECL}
 `;
 
 /**
+ * NO `dithering: true` ON ANY SHIP MATERIAL, and this is the reason.
+ *
+ * three's `dithering` flag compiles `dithering_fragment`, which is the LAST
+ * chunk in the built-in fragment shader — after `tonemapping_fragment` and
+ * `colorspace_fragment` — and it adds a fixed +-(0.5, -0.5, 0.5)/255. Those are
+ * DISPLAY codes: the chunk is written on the assumption that the renderer
+ * finishes with a tonemap and an sRGB encode, so half an LSB is half an LSB.
+ *
+ * Here both of those chunks are no-ops (`NoToneMapping`, and the post stack owns
+ * the encode — non-negotiable 6), so what the chunk actually adds is 0.00196 of
+ * SCENE-LINEAR RADIANCE, per channel, with the sign of green opposed to red and
+ * blue. Auto-exposure then multiplies it by whatever the frame needs. On `orbit`
+ * the applied multiplier is 0.151 and it is invisible; at dusk and at night the
+ * multiplier is pinned to its ceiling, 2^4.5 = 22.63, which is **7.2 stops more**
+ * — and the sail's own radiance there is of the same order as the dither, so
+ * every sail pixel was being pushed a large fraction of its own value up or
+ * down, on the magenta-green axis, by a hash of `gl_FragCoord`. That is the
+ * "purple and green pepper across the sails" the owner reported (DIAGNOSIS §73).
+ * The negative half of the swing clips at the floor, so it also LIFTED the
+ * canvas: 0.85 stops of the sails' night luminance was rectified noise.
+ *
+ * Nothing is lost by removing it. `COMPOSITE_FRAG` already ends with one LSB of
+ * triangular-PDF dither, monochrome, immediately before the 8-bit write — which
+ * is what this flag was reaching for, in the one place it is correct.
+ */
+
+/**
  * Patch a standard material. Kept in one place so every family gets the same
  * treatment and there is exactly one code path to debug.
  */
@@ -153,7 +180,6 @@ export function makeShipMaterial(
     color: o.color ?? 0xffffff,
     aoMapIntensity: 1,
     normalScale: new THREE.Vector2(o.normalScale ?? 1, o.normalScale ?? 1),
-    dithering: true,
   });
   // The builders already divide by TILE_ALONG/TILE_ACROSS, so the UVs arrive in
   // tile space and no texture `repeat` is involved; `uTileM` below multiplies

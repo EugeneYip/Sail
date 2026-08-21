@@ -179,7 +179,10 @@ export function makeLineMaterial(
     // tarred rope at full coverage blends to the same near-black anyway.
     depthWrite: false,
     side: THREE.DoubleSide,
-    dithering: true,
+    // No `dithering: true` — see the note above `makeShipMaterial` in
+    // materials/materials.ts. It is display-code noise injected into
+    // scene-linear radiance, and on the rigging it survived the sails' fix as a
+    // green and purple crawl along every rope at dusk.
   });
 
   m.onBeforeCompile = (shader) => {
