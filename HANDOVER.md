@@ -130,37 +130,60 @@ this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
   cover material shaders** (`ocean/surface`, `ship/{parts,sail,line}`, `vfx`,
   `world`) — those need a real engine boot.
 - `node scripts/capture.mjs` — the only instrument for material shaders (zero
-  `ERROR:`/`Material Name:` in console) and the only source of frames.
+  `ERROR:`/`Material Name:` in console) and the only source of frames. **Its p25
+  varies 13–14 ms run-to-run on byte-identical code**, so a single-run timing
+  difference under ~14 ms means nothing; use a paired multi-sample run or
+  `ext.post.profile()`. For pixel statistics prefer **`--scene shadow`**, which runs
+  at cloudCover 0 and is six times more repeatable (p10 spread 1.4 sRGB vs 9.0)
+  because the cloud field no longer advects between runs — drifting cloud shadow has
+  invalidated two measurements here.
+- `npm run preflight` gates on the GLSL parse now, so it will refuse a tree that will
+  not build. It deliberately does **not** run `tsc` (24 s), and says so.
 
 **Known open, roughly in priority order.**
-1. **Hard rectangular shadow blocks on the sails.** 5.2–5.6% of sail pixels, stable
-   across two captures 15 hours apart, so **not** a regression. The weakest thing in
-   the frame. Spans `src/sky` (shadow map) and `src/ship` (sail depth material) —
-   the boundary is why it stalled before, so give it one owner.
-2. **Cumulus render as flat-topped mesas, and the cause is diagnosed.** 77–80% of
-   cloud mass sits below `h`=0.6 because at `cloudType` 0.75 the stratocumulus term
-   of `heightGradient` is identically zero above `h`=0.68. Redistributing mass upward
-   must hold **total** mass constant or it walks the `CLOUD_COLUMNS_PER_RAY = 4.1`
-   coverage calibration backwards.
-3. **Framing.** The chase camera does not adapt to a phone aspect ratio — at 390×844
-   the ship fills the left half with the bow cut off, and directive 4 makes that a
-   real target. The `helm` view contains no identifiable ship's wheel and keeps the
-   horizon only in the left third.
-4. **Frame pacing.** ~19–31 ms p25 against a 16.6 ms target, but the *minimum* is
-   5.9–9.6 ms with 14–35% of frames inside one vsync — the engine can render the
-   frame and something intermittently prevents it. `dt` values are exact multiples of
-   16.67 ms: vsync beat aliasing. **There is no code regression** (§31 retracts an
-   earlier claim of one).
+1. **Frame pacing** — the longest-open item and the one the owner feels, as a
+   "two-frame stutter". p25 runs 19–31 ms against a 16.6 ms target but the *minimum*
+   is 5.9–9.6 ms with 14–47% of frames inside one vsync, and observed `dt` values are
+   exact multiples of 16.67 ms: vsync beat aliasing, not steady cost. **There is no
+   code regression** (§31 retracts an earlier claim). Note that every timing ever
+   taken here had `adaptiveResolution` false and `renderScale` 1, because the harness
+   pins them — and the owner does not play that way, so if the stutter is in that
+   controller no capture has been able to see it.
+2. **Sail shadow edge hardness.** The two substantive causes are fixed (§54): canvas
+   was an opaque occluder while casting nine tenths of the ship's shadow, and the VSM
+   depth test was quantised to 0.33 m against a 0.16 m bias budget. But edge hardness
+   **did not measurably change** (§54a), and the metric that says so is contaminated.
+   The untested hypothesis is on `wip/free-leech`: a shadow's edge is its caster's
+   silhouette, and the leech is currently pinned flat, so it casts a straight edge.
+3. **TAA's near-field share is unquantified.** With velocity ~50 px wrong, `clipAabb`
+   pulls history to the 3×3 mean against a `uFeedbackMin` of 0.7 — a 70% box blur.
+   Giving TAA the ship-frame velocity is the obvious next move and the risky one,
+   because the ocean and sky in the same buffer still need the world velocity.
+4. **Near-field DOF alpha saturates instantly.** `DOF_COMBINE_FRAG` ramps the far
+   field over 1.4 px of CoC but the near field saturates to 1.0 the moment CoC clears
+   1.2 px, so a deck pixel wanting 1.2 px of defocus loses its full-res colour to a
+   half-res gather. Ablated at 0.2–0.7 sd, and it is an approved look, so it needs
+   quantifying rather than switching off.
 5. **Vessels read thinly inside 200 m** — 12 px of freeboard at working range, so the
-   gunport stripe is invisible and the shrouds are sub-pixel. Fine for the intended
-   range, not for a close pass.
+   gunport stripe is invisible and the shrouds sub-pixel. Fine for the intended range.
 6. **Boston is a town on a headland, not recognisably Boston** until ~2 km.
-7. The `reefed` trim is the worst state for line piercings (92), dominated by
+7. **The `reefed` trim is the worst state for line piercings** (92), dominated by
    buntlines and leechlines crossing the furled bundle. Pre-existing.
-8. Near geometry is smeared while distant geometry is sharp — a TAA history problem
-   on **near** surfaces. The shrouds moiré.
-9. No gull perches on a yard: `src/ship` would need to publish yard-arm anchors on
+8. **From the helm the wheel's two discs overlap nearly along their own axis**, so it
+   reads as spokes and handles rather than obviously a wheel. Framing, not geometry.
+9. **No gull perches on a yard**: `src/ship` would need to publish yard-arm anchors on
    the blackboard, and guessing coordinates would put a gull inside a sail.
+
+**Branches that are not on main, deliberately.**
+- `wip/sail-canvas` — a first attempt at the cloth that traded isotropic popcorn for a
+  hard sawtooth chevron. Superseded on main by a version measured at the generator
+  (relief slope 48.4° → 4.9°, anisotropy 0.48 → 0.09, dominant wavelength landing on
+  the 610 mm bolt), but its diagnosis is worth reading.
+- `wip/free-leech` — see open item 2.
+
+**The rule these branches encode:** a stopped agent's work being green (`tsc` 0,
+`check-glsl` clean) is not the same as being right. Main stays publishable, so a change
+that trades one defect for another goes on a branch with the diagnosis written down.
 
 **Open question for the owner.** `KN` and `PRO` are the weakest HUD marks (ink
 221/237 against 255 for `MINIMAL`/`NNE`), because K, N, P, R and O at 9 px are
