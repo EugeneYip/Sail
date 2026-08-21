@@ -50,6 +50,9 @@ import {
  * the estimate meters a sky-model luminance and the shader meters a
  * centre-weighted percentile band of the real frame, ship and sea included.
  * **Do not calibrate anything against it** — see the note on `PostExt.exposure`.
+ * §73 recorded that the two agree to seven digits at dusk and night; that was
+ * an artefact of both sitting on the old 4.5-stop clamp, and now that the clamp
+ * is unreachable they disagree there too (dusk: estimate 85.6, applied 54.6).
  * Under `settings.debugStalls` it is reconciled against the real value every
  * `DEBUG_READBACK_INTERVAL` frames. That flag is deliberately NOT
  * `settings.debug`: the reconcile is a synchronous readback costing 0.2 ms idle
@@ -60,9 +63,52 @@ import {
  * Adaptation is asymmetric and *compressive*. Full compensation would map a
  * moonlit sea to the same middle grey as noon, which is exactly the "night is
  * grey mush" failure; above a knee the compensation is only partially applied,
- * so a six-stop-darker scene ends up about two and a half stops darker on
- * screen instead of identical. The curve lives in the shader; these constants
- * are its single source of truth and are uploaded as uniforms.
+ * so a six-stop-darker scene ends up about two stops darker on screen instead
+ * of identical. The curve lives in the shader; these constants are its single
+ * source of truth and are uploaded as uniforms.
+ *
+ * ## Where a scene lands on screen, and why the clamp is not the lever
+ *
+ * Above the knee the whole curve collapses to one line. Writing `raw` for the
+ * uncompressed demand `log2(KEY_VALUE) - metered`, the metered band's distance
+ * from middle grey on screen is
+ *
+ *     screenOffset = (1 - COMPENSATION_SLOPE) * (COMPENSATION_KNEE - raw)
+ *
+ * so the slope alone sets how dark night gets, and the knee only slides the
+ * whole compressed branch. Measured off `expStateB` on all fourteen capture
+ * scenes (never off `exposure` on this class — see above), `raw` is **5.86 at
+ * sunset, 8.79 at night, 9.31 at dusk**, and between **-2.13 (orbit) and -0.06
+ * (golden)** for the other eleven. So eleven of fourteen sit below the knee, are
+ * exposed to exactly middle grey, and cannot be moved by any knee/slope/clamp
+ * change at all — the nearest of them still has 1.46 stops of margin. Only
+ * sunset, dusk and night take this branch.
+ *
+ * `MAX_GAIN_STOPS` used to be 4.5, and dusk and night were both pinned hard
+ * against it — `expStateA.r` read 4.4999990 and the applied multiplier was
+ * 22.627417, i.e. 2^4.5 to seven digits. That reads like the cause of "blue
+ * hour is too dark" and it is not: the curve was asking for 4.96 stops at dusk
+ * and 4.71 at night, so the clamp was costing **0.46 and 0.21 stops**. The
+ * other 4.35 stops were the slope. What the clamp *was* doing is worse than
+ * darkening: every scene from `raw` 8.29 to the histogram floor got exactly 4.5
+ * stops, so across the last two stops of nightfall the controller stopped
+ * responding to the scene entirely.
+ *
+ * The slope is now 0.55 and the ceiling is 6.5, which is chosen so that the
+ * clamp is a rail rather than an operating point: the darkest scene the
+ * histogram can represent (`EXPOSURE_MIN_LOG`) demands
+ * `KNEE + (log2(KEY) - MIN_LOG - KNEE) * SLOPE` = 6.42 stops, so nothing can
+ * reach 6.5. Night cannot become grey mush by construction either — the same
+ * identity bounds the screen offset at `0.45 * (1.4 - 10.53)` = **4.11 stops
+ * below middle grey** for a scene at the histogram floor.
+ *
+ * Measured effect, one frozen frame per scene, curve poked on the adapt pass so
+ * before and after share a wave phase, a cloud field, a sun and a heading:
+ * dusk -4.83 -> -3.58 stops, night -4.34 -> -3.35, sunset -2.40 -> -1.97, and
+ * every other scene inside its own null. See DIAGNOSIS §77. This is exposure,
+ * applied to scene-linear radiance before AgX, so black stays black: it is
+ * deliberately NOT a black-point lift or a grade, both of which §71 removed for
+ * crushing the darks.
  */
 
 /** Reflectance the metered band is exposed to. Middle grey. */
@@ -72,8 +118,14 @@ const PERCENTILE_LOW = 0.45;
 const PERCENTILE_HIGH = 0.8;
 /** Stops of gain above which compensation stops being one-for-one. */
 const COMPENSATION_KNEE = 1.4;
-const COMPENSATION_SLOPE = 0.45;
-const MAX_GAIN_STOPS = 4.5;
+const COMPENSATION_SLOPE = 0.55;
+/**
+ * A rail, not an operating point. The curve's own maximum demand at
+ * `EXPOSURE_MIN_LOG` is 6.42 stops, so this cannot be reached; see the class
+ * comment for why the 4.5 it replaces was pinned at dusk and night and why that
+ * was a symptom rather than the cause.
+ */
+const MAX_GAIN_STOPS = 6.5;
 const MIN_GAIN_STOPS = -7.0;
 /** Per-second damping rates. 1/rate is the 63% response time. */
 const RATE_BRIGHTEN = 1 / 0.4;
