@@ -188,9 +188,22 @@ experiment returns a convincing null. Two agents walked into this.
    over the same CoC ramp the far field uses. The DoF lead had measured as a null
    because the step sits at 1.49 m at the helm where the nearest deck pixel is 2.6 m —
    the scene it was tested in could not contain the thing being tested.
-5. **Vessels read thinly inside 200 m** — 12 px of freeboard at working range, so the
-   gunport stripe is invisible and the shrouds sub-pixel. Fine for the intended range.
-6. **Boston is a town on a headland, not recognisably Boston** until ~2 km.
+5. ~~Vessels read thinly inside 200 m~~ — **largely CLOSED** (§61). The fix was
+   temporal, not ink: frame-to-frame change at 554 m went from 45% of the box shifting
+   more than 12 sRGB to 8.7%, with nothing moving but the camera. Triangles went *down*
+   (23,954 → 22,188) while detail went up, because a rope ribbon is 2 triangles where a
+   capped cone was 16. **Residual:** yards are still opaque cylinders and go sub-pixel
+   past ~400 m — same defect, unfixed, and it needs a fifth `aAux` channel for a rope's
+   pivot. No ratlines, because they cross their own shrouds at the same depth and would
+   z-fight.
+6. ~~Boston is not recognisably Boston~~ — **largely CLOSED** (§61). Her 2600 m long
+   axis subtended **one pixel at 8 km**: `place()` yawed her a quarter turn, so the
+   900 m depth axis spread across the frame while the length ran away. Frontage 1 px →
+   235 px. **Residual:** at 8 km the dome reads and the three humps are present but the
+   shoulders are subtle; the mast thicket registers as texture rather than as masts, and
+   Old North is structurally right but not legible as an individual. All four read at
+   4.2 km. And from landward the town loses up to 54% of its waterline ink (§60) — real
+   but mild, and the test could not separate depth order from aspect.
 7. **The `reefed` trim is the worst state for line piercings** (92), dominated by
    buntlines and leechlines crossing the furled bundle. Pre-existing.
 8. **From the helm the wheel's two discs overlap nearly along their own axis**, so it
