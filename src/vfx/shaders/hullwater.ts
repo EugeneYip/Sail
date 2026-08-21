@@ -425,6 +425,29 @@ uniform float uSpeedN;
 uniform float uOpacity;
 uniform float uChop;
 
+/**
+ * Depth, in metres below the local water, over which what the band draws has to
+ * be gone. Two scales because they are two different physical things: the
+ * entrained air alongside a hull at speed is a free-surface effect a few tens of
+ * centimetres deep, while the plating stays visibly wet and dark a little
+ * further under. Both are ABSOLUTE depths and not fractions of the froth reach —
+ * how high a hull throws its bow wave says nothing about how far the surface
+ * drags bubbles down.
+ */
+const float FROTH_SINK_M = 0.35;
+const float WETTED_SINK_M = 0.55;
+
+/**
+ * The froth threshold's three stops, in units of 'streakField' and chosen
+ * against its measured histogram (see the note at the threshold itself).
+ * THR_WET is the wetted line, THR_TORN the top of the froth reach, THR_DRY the
+ * value the submerged ramp climbs to — which must clear the field's maximum of
+ * 1.006 by more than the 0.075 ramp half-width.
+ */
+const float THR_WET = 0.20;
+const float THR_TORN = 0.72;
+const float THR_DRY = 1.15;
+
 varying vec3  vWorld;
 varying float vT;
 varying float vD;
@@ -459,13 +482,24 @@ void main(){
   // finer one unconditional, because at +-14 cm of wobble on a soft ramp the
   // edge was still smooth at the rail.
   float wetEdge = (grain - 0.5) * (0.16 + 0.26 * uChop) + (fd.b - 0.5) * 0.09;
-  // The lower limit used to be 'step(-1.6, vD)' — a hard discontinuity at a
-  // CONSTANT 1.6 m below the water, i.e. one more dead-level horizontal line,
-  // visible through the sea whenever a trough opened beside the hull. Feathered
-  // against the band's own floor instead.
+  // NOTHING THIS BAND DRAWS BELONGS MORE THAN A FOOT UNDER THE WATER.
+  //
+  // The band straddles the local surface by 'uSkirtDrop' (2.4 m) so that a crest
+  // lifting the water cannot expose a straight cut along its bottom. That is the
+  // only job the submerged rows have: below the wetted line the SEA is drawing
+  // the water and the hull is drawing the hull, and anything this band adds there
+  // is paint over both. This limit has now been wrong twice in the same way: it
+  // was 'step(-1.6, vD)', a hard cut at a constant depth, and the fix for that
+  // was a FEATHER between a constant 2.05 and a constant 1.25 m — softer, still
+  // dead level, and with 1.25 m of solid band standing above it. 'submerged' then
+  // ran at a flat 1.0 from 0.9 m down to the floor on top of that. Softening a
+  // ruled line does not stop it being ruled; putting it where the water is does.
+  // Both are now spent inside the strip the surface has actually wetted, and the
+  // same textured displacement rides the lower boundary as the upper one.
+  float wetSink = saturate1((-vD + wetEdge) / WETTED_SINK_M);
   float wetBand = (1.0 - smoothstep(0.0, 0.13 + uChop * 0.22, vD + wetEdge))
-                  * smoothstep(-2.05, -1.25, vD);
-  float submerged = 1.0 - smoothstep(-0.9, 0.05, vD);
+                  * (1.0 - wetSink);
+  float submerged = (1.0 - smoothstep(-0.9, 0.05, vD)) * (1.0 - wetSink);
 
   // FOAM STREAKS, AND AN EDGE THAT IS NOT A LINE.
   //
@@ -485,7 +519,34 @@ void main(){
   float reach = max(vEnv * (0.45 + 1.05 * undulate), 0.05);
   float above = saturate1(vD / reach);
   float streakField = s1 * 0.36 + s2 * 0.26 + s3 * 0.20 + s4 * 0.24;
-  float thr = mix(0.20, 0.94, pow(above, 0.68));
+  // THE THRESHOLD HAS TO KEEP CLIMBING BELOW THE WATER, AND IT HAS TO STAY
+  // INSIDE THE FIELD ABOVE IT. THIS IS THE FIX FOR THE FLAT PALE PLATE ALONG THE
+  // WATERLINE, AND IT IS §40's MECHANISM ONE MODULE OVER.
+  //
+  // 'above' saturates, so it returned 0 for EVERY fragment at or below the local
+  // water — 52.9% of the band's area, measured — and the whole submerged strip
+  // was thresholded at the ramp's floor. Integrated against the real 256^2 bake
+  // ('.tmp/skirtint.mjs'), 0.20 is this field's own 25th PERCENTILE: 75% of it
+  // clears the threshold, and the submerged strip rendered a mean alpha of 0.72
+  // at sd 0.29 — a near-uniform three-quarter wash of whitewater 2.4 m deep and
+  // 53 m long, bounded underneath by the 'uSkirtFloor' clamp, which is a
+  // dead-level line in ship-local Y. A uniform partial wash inside a smooth
+  // contour is a flat pale plate; a threshold that lands outside the field's
+  // informative range is not a threshold, it is a constant, and then the
+  // silhouette falls through to the geometry's own boundary.
+  //
+  // Measured quantiles of streakField over 57600 samples of the real bake:
+  //   p05 0.043  p25 0.200  p50 0.331  p75 0.465  p95 0.661  max 1.006
+  // so the old top of 0.94 was past the maximum: the froth 'frothReach' places
+  // ABOVE the water rendered 0.06 coverage at half a metre and 0.003 above
+  // 1.6 m — nothing at all. Every scrap of white this band produced was under
+  // the water, where it had no business being, and none of it was where the
+  // reach put it. THR_TORN is inside the field so the reach renders; THR_DRY
+  // clears the field's maximum by more than the ramp's half-width, so the
+  // submerged tail is EXACTLY zero and not merely nearly zero. Nearly zero over
+  // 53 m of hull is what a plate is made of.
+  float sink = saturate1(-vD / FROTH_SINK_M);
+  float thr = mix(THR_WET, THR_TORN, pow(above, 0.68)) + sink * (THR_DRY - THR_WET);
   // Intensity follows the reach too: bright where the water is being torn at the
   // shoulders, thin along the midbody. The old 'bowGain' floored at 0.35 for
   // everything aft of t = 0.25, which is what made the band uniform end to end.
