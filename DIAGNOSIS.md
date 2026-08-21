@@ -3830,6 +3830,12 @@ truth about the shadows, and §56's conclusion needed no revision after all. I h
 two findings that share a symptom and not a cause.
 
 ### The residual is in the composite, not the ship: ~3.5 octaves of extra shadow crush
+> **Superseded by §71 — the conclusion held, both of the numbers below did not.** The crush
+> was the look LUT's linear pivot contrast clipping to black, and it is fixed. The `cos⁴`
+> vignette was innocent, ablated in the same frame. And the calibration under it was 2.1
+> stops out, because `uExposure` is a sky-model estimate and not the multiplier `prepare`
+> applies. Read §71 before quoting anything in this subsection.
+
 Calibrated by injecting a known additive radiance through `material.emissive`: **1e-2 of
 radiance renders as sRGB code 1** (4.3e-2 → 6, 1.7e-1 → 36). AgX alone predicts **13**
 for 1e-2, and AgX alone is right at the top — sky 0.28 predicts 129 against a measured
@@ -3903,3 +3909,142 @@ would cost more than the whole rig's ribbons.
 Cost: ship triangles 49,996 → 56,508 (+13%), **zero extra draw calls**, since both merge
 into existing bins. The lighting half of the complaint was already fixed by the iron F0
 correction, so what remained was only ever geometry.
+
+## 71. §68a's shadow crush was the look LUT's contrast, not the vignette — and the calibration it was measured with was 2.1 stops out
+
+§68a left a residual: "1e-2 of radiance renders as sRGB code 1, AgX alone predicts 13, so
+about 3.5 octaves of extra crush live in the composite's shadow response", with the `cos^4`
+vignette named as prime suspect. **The crush is real and is now fixed. The vignette was
+innocent, and both of §68a's calibration reference points were wrong.**
+
+### The instrument first, because it is the transferable part
+
+`material.emissive = E` really does deliver E of scene-linear radiance —
+`readRenderTargetPixels` on the `scene` target gives d(radiance)/dE = **0.984** over three
+decades, so §68's injection method is sound. What is not sound is the exposure it was
+divided by.
+
+**`world.uniforms.uExposure` and `world.ext.post.exposure` are not the multiplier the frame
+is multiplied by.** `PREPARE_FRAG` multiplies by `texture2D(tExposure, vec2(0.5)).g`, a 1x1
+target the adapt pass writes on the GPU. On the `orbit` preset, read back in the same frame:
+
+| | value |
+|---|---|
+| `world.uniforms.uExposure` / `ext.post.exposure` | 0.668 |
+| `expStateB.g`, the multiplier `prepare` applies | **0.151** |
+| ratio, in stops | **2.14** |
+
+`AutoExposure`'s own comment claimed the estimate "tracks the GPU value to within about a
+stop". It does not, and it never could: the estimate meters a **sky-model luminance**, the
+shader meters a **centre-weighted percentile band of the real frame**. Both comments are
+now corrected in place. Pinning `uExposure` — which §68's probe did, and reported doing —
+**changes nothing on screen**. To get the real number, read
+`renderHook.pipeline.targets.map.get('expStateB')` (`.g`), or set `settings.debugStalls`.
+
+§68a's other reference was worse. It took the sky as 0.28 of radiance, from `uSkyColor`.
+The sky **pixels** read back at **4.77**. Two errors of 4.4x and 20x in opposite directions
+are why "AgX is right at the top" appeared to hold, and the synthesis chained them.
+
+### The measurement that needs no calibration at all
+
+Ablate every operator after `agx()` — `uLookAmount`, `uVignette`, `uGrain`,
+`uBloomStrength`, `uSplitAmount` all 0 — and the composite reduces to AgX exactly. Pair
+that frame against the shipping frame **pixel for pixel, in one frozen frame**, and the
+histogram of one against the other IS the post-AgX transfer, with no model and no radiance
+assumption anywhere in it. `.tmp/H68abl.mjs`, whole 1600x900 `orbit` frame, median shipping
+code per AgX code:
+
+| AgX code | 12 | 16 | 17 | 20 | 24 | 28 | 32 | 48 | 96 | 128 | 160 | 178 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **before** | 0.1 | 0.4 | 0.6 | 2.4 | 5.1 | 9.1 | 13.5 | 35.4 | 93.0 | 131.6 | 173.5 | 194.4 |
+| **after** | 8.4 | 10.4 | 11.4 | 14.1 | 18.1 | 21.3 | 24.6 | 41.3 | 93.4 | 131.5 | 173.6 | 194.5 |
+
+Exactly-black pixels in the frame **1216 → 0**; share below L = 4 **0.85% → 0.00%**. The
+darkest code anywhere in that frame is AgX 8–12, so **every dark pixel in the frame was
+inside the clipped region** — which is why §68 needed an aerial term thirty times the hull's
+own signal just to clear code 0.
+
+### Attribution: same frozen frame, one ablation each
+
+| ablated | transfer at AgX 17 | verdict |
+|---|---|---|
+| nothing (shipping) | 0.6 | — |
+| **`uLookAmount` 0** | **16.6** | **the whole of it** |
+| `uVignette` 0 | 0.9 | nothing |
+| `uGrain` 0 | 0.9 | nothing |
+| `uSplitAmount` 0 | 0.9 | nothing |
+| `uBloomStrength` 0 | 0.6 | nothing |
+
+`uLookAmount` 0.5 halves the crush, as a linear blend must. **The vignette is not the
+suspect and could not have been**: it multiplies scene-linear radiance *before* the tonemap,
+which is the correct side of the transfer, and at `VIGNETTE_STRENGTH` 0.045 it is worth
+0.06 stops where the hull sits (`cos^4` = 0.949 at the mask centroid) and 0.5 stops in the
+extreme corner. §68a reached for it because the hull sits low and left of centre; that is a
+plausible story about a real operator, and it was wrong.
+
+### The cause: contrast as a straight line has an x-intercept
+
+`LookLut.ts::applyLook` did `r = (r - pivot) * contrast + pivot`. That line crosses zero at
+`pivot * (1 - 1/contrast)`:
+
+| look | pivot | contrast | intercept | as an sRGB code |
+|---|---|---|---|---|
+| Blue Hour | 0.30 | 1.12 | 0.032 | 8 |
+| Cold Morning | 0.44 | 1.16 | 0.061 | 15 |
+| Amber Reach | 0.45 | 1.18 | 0.069 | 17 |
+| **Open Sea** | 0.46 | 1.22 | **0.083** | **21** |
+
+Everything below that came out **negative**, and the `clamp01` in the black-floor line —
+`r = f + clamp01(r) * (1 - f)` — turned it into black. The 32-node lattice then quantised
+the intercept up to a whole node: nodes 0, 1, 2 sit at codes 0, 8.2, 16.5, all below the
+intercept, all baked to the same floor, so the transfer is **flat to code 16 and then ramps
+linearly to node 3 at code 24.7**. That predicts 2.5 at code 20; measured 2.4.
+
+The fix keeps the straight line **above** the pivot, where the looks were authored and where
+it is well behaved, and below the pivot continues it as the log-space slope it was
+approximating, `pivot * (x/pivot)^contrast`. The two branches meet at the pivot with the
+same value **and the same slope** — the derivative of the power form is exactly `contrast`
+at `x = pivot` — so there is no kink, and by construction nothing above the pivot moves.
+Measured, it moves by 0.1 code at AgX 128, 160 and 178.
+
+**Cost: zero per frame.** The shader is untouched; only the contents of a texture baked once
+at init change. `makeLookTexture()` goes from 38 ms to 46 ms, once, measured as the median
+of seven in-page runs.
+
+### The top end survived, and here is the number §68a was reaching for
+
+Mean 8-bit code over three bright regions, each run measured against **its own** AgX-alone
+frame so no statistic crosses a frozen frame:
+
+| region | AgX alone | shipping, before | shipping, after |
+|---|---|---|---|
+| sky band, y 30–150 | 128.8 | 135.8 (×1.055) | 136.4 (×1.059) |
+| sunlit cloud, y 0–250 | 145.4 | 155.6 (×1.070) | 155.7 (×1.072) |
+| sunlit sea, y 620–700 | 99.5 | 95.9 (×0.964) | 97.2 (×0.978) |
+
+The grade lifts the sky about 5% and that is intentional; it is unchanged by this fix. Note
+that **AgX alone on the sky band is 128.8** — §68a's "predicts 129" was numerically right and
+arrived at by two compensating errors, which is the most dangerous kind of agreement.
+
+### What this does NOT fix, and one thing to watch
+
+- **The frame's black point is unchanged.** True black still maps to the look's `blackFloor`
+  (0.0012–0.003, code 0.3–0.8) exactly as before. Nothing was lifted; a clip was removed.
+- **Unclipping the shadows exposes whatever noise was in them.** The new curve's local slope
+  in the shadows is 0.75, so it cannot amplify noise — but noise that was previously being
+  clipped flat to black is now visible. Nothing new appeared on the sixteen `capture.mjs`
+  panes, but the `night` sails carry heavy chroma speckle that is worth a look; it is
+  midtone, so it predates this, and the likeliest cause is the documented gap that animated
+  vertex shaders write no velocity for TAA.
+- **`AGX_IN` in `src/util/glsl.ts` is the transpose of three's AgX inset matrix** while
+  `AGX_OUT` matches three's outset exactly, so the pair no longer round-trips. Greys come out
+  of the inset as (1.106, 0.933, 0.961), a +0.15/−0.10/−0.06 stop channel imbalance before
+  the curve. Luminance only moves 0.04 stops, so it is a tint bug and not this one, but it is
+  a bug. `src/util` is a shared library, so it is not the post agent's to change.
+- **`core/PostProcessing.ts` still says "the single sRGB encode happens by hand at the end of
+  the composite".** `COMPOSITE_FRAG` says the opposite, at length, and the composite is
+  right: `agx()` stops on the outset matrix and leaves the value display-encoded. The core
+  comment is stale and contradicts non-negotiable 6 for anyone who reads it first.
+- **The bloom composite is a lerp, not an add**: `mix(col, bloom, 0.055)` removes 5.5% of the
+  base image everywhere, a flat −0.08 stops. Defensible as energy conservation and far too
+  small to be a defect; recorded so nobody re-derives it.
