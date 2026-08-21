@@ -2286,3 +2286,168 @@ calling "blotchy shadow" for two days was the popcorn normal map, not the shadow
 instrument here can answer it — an edge-hardness statistic needs to be restricted to
 actual shadow boundaries, which means segmenting the shadow rather than thresholding
 gradients over the whole sail.
+
+## 56. The free leech is not the mechanism, and the sail shadow edges are already the right width
+
+§54a left one thing open: whether sail shadow *edges* are soft enough, and said no
+instrument here could answer it. There is one now, and the answer is **yes** — with
+the consequence that the one untested hypothesis, `wip/free-leech`, is dead.
+
+### The instrument
+
+`.tmp/leechshadow.mjs` captures and `.tmp/leechstat.mjs` measures. Two things make it
+different from every hardness statistic tried before.
+
+**It measures the shadow term, not the frame.** With time frozen — `requestAnimationFrame`
+wrapped so `Engine.tick` sees dt = 0, borrowed from `sailshadow5.mjs` — `base` and
+`shadowOff` are the same frame with `sun.shadow.intensity` set to 0, pixel-registered.
+`T = lum(base) / lum(shadowOff)` therefore cancels weave, seams, panel tone, grime,
+bolt ropes and **every piece of rigging geometry** exactly. §54a's worry that rope
+shadows contaminate the metric turns out to be doubly moot: `rigging.ts:223` sets
+`castShadow = false`, so the ropes never cast at all, and their silhouettes cancel in T.
+
+**It measures across the boundary normal.** `sailshadowdiff.mjs` walked image rows, so a
+boundary at angle t to the vertical reported width/cos(t) — a 45° edge came out 1.41x
+too soft and a near-horizontal one arbitrarily so. Here each non-max-suppressed ridge
+point of |grad T| gets its own normal, the raw T profile is sampled along it at 1/4 px
+with bilinear taps, the walk finds the lit and shadow plateaux either side, and the
+10..90 per cent crossing distance is recorded. Reported as a **distribution**, because
+the mean of a mixture of 1 px cut-outs and 12 px washes describes neither.
+
+Widths are in capture px: deviceScaleFactor 2 and `ultra`'s maxPixelRatio 2 give a real
+3200x1800 backing store, not an upsample — an 8-bit profile sampled at 1 px cannot
+resolve a 1 px transition. **Halve for a 1x frame.** Scale at the ship: 17.5 px/m.
+
+### The null, and a positive control
+
+Four runs on identical code, `shadow` scene, cloudCover 0:
+
+| run | p25 | p50 | p75 | p90 | ≤2 px | ≥8 px |
+|---|---|---|---|---|---|---|
+| L1 | 2.52 | 3.54 | 6.21 | 10.10 | 14.4% | 16.5% |
+| L2 | 2.65 | 3.62 | 5.97 | 9.87 | 10.2% | 15.5% |
+| L3 | 2.54 | 3.59 | 6.36 | 9.85 | 11.9% | 17.0% |
+| P1 | 2.51 | 3.48 | 5.90 | 9.13 | 13.4% | 14.8% |
+
+p50 repeats to **0.14 px**, p25 to 0.14, p90 to 0.97. The `≤2 px` share is the noisy
+cell at 4.2 points; quote percentiles, not shares.
+
+And the control that every previous attempt lacked — the VSM filter, ablated **inside one
+frozen frame**, so pose, wave phase and sun are bit-identical across the rows:
+
+| radius / blurSamples | p25 | p50 | p75 | p90 | ≤2 px | ≥8 px |
+|---|---|---|---|---|---|---|
+| 0.25 / 2 | 2.00 | 2.52 | 5.60 | 9.18 | 25.1% | 14.0% |
+| **2.2 / 6 — shipped** | **2.69** | **3.94** | **7.32** | **11.65** | **13.1%** | **21.9%** |
+| 4 / 8 | 3.88 | 6.13 | 9.60 | 14.29 | 8.9% | 35.2% |
+| 7 / 10 | 5.66 | 8.81 | 12.66 | 17.55 | 9.0% | 57.3% |
+| 14 / 16 | 5.75 | 13.64 | 20.67 | 24.72 | 6.7% | 69.6% |
+
+**So "map resolution, filter width and caster tessellation all measured null" is wrong on
+two of its three counts, and §54 should not be trusted on it.** Filter width moves p50 by
+5.4x; `map512` moves it from 3.48 to 8.42. The old null came from a metric whose own
+author recorded it as blind to a 3.6x change in this exact parameter — see the
+`.tmp/shadowedge.mjs` header. A null from an instrument with no positive control is not a
+result, it is a silence.
+
+### The free leech: killed, and it was a good hypothesis
+
+`wip/free-leech` argues that a shadow's edge is its caster's silhouette and the caster's
+leech is pinned flat by `sin(PI * cl^DRAFT_EXP)` going to zero at both cl = 0 and cl = 1.
+The argument's premise checks out and its code is better than its commit message: the
+message says the term fades in with "the aback flag", but `fa` is the **fore-and-aft**
+flag, and what it actually does is gate the free edge to the leech alone on a jib — whose
+luff genuinely is pinned, to its stay — while letting both leeches of a square sail belly.
+The span bell `sin(PI * sDraw)` is zero at head and foot, so nothing leaves its yard.
+
+Applied at `LEECH_FREE = 0.45`, the treatment is large and measured, not assumed. The CPU
+mirror (`ropecpu.mjs --draft`, validated at `LEECH_FREE=0` against main to the digit)
+puts the leech midpoint 0.44–1.16 m further out of plane in live trim — 1.155 m on a
+course, 8–20 screen px of caster silhouette at this scale. And it moves the shadows:
+`shaded%` and the boundary layout both shift.
+
+It does not move the edge width:
+
+| run | p25 | p50 | p75 | p90 | ≤2 px | ≥8 px |
+|---|---|---|---|---|---|---|
+| pinned ×4 | 2.51–2.65 | 3.48–3.62 | 5.90–6.36 | 9.13–10.10 | 10.2–14.4% | 14.8–17.0% |
+| free ×4 | 2.38–2.55 | 3.40–3.60 | 5.29–6.16 | 8.70–9.58 | 11.8–14.8% | 12.2–15.7% |
+
+p50 sits inside the null. p75 and p90 are at or just **below** the null's low end in two of
+the four runs — if anything slightly *harder*, which is the wrong direction for the
+hypothesis. Against a control that swings p50 from 2.52 to 13.64, this is a null with
+teeth.
+
+Nor is the boundary more bowed. Straight-chain counts (rms < 0.7 px over ≥ 60 px extent)
+are 7–13 pinned against 11–14 free; longest-chain rms 0.69–3.45 against 0.62–2.28. The
+diagonal-bow median has a null spread of 5.19–19.64 px, so **that statistic cannot resolve
+anything** and should not be quoted either way.
+
+**Why it had to fail.** A directional light has no source area, so a shadow edge here has
+no penumbra term at all: the caster's silhouette sets **where** the edge falls, never how
+wide it is. Width is the VSM moment blur, the map resolution and the post stack — which is
+exactly what the dial above measures. The premise was not the error; the inference from
+premise to width was.
+
+**And the premise really was sound**, which is worth keeping. Ablating the ship's solid
+parts as casters (see the trap below) takes the shadowed area over the sails from 30.3% to
+20.9% and the deep-shadow area from 19.6% to 14.8%: canvas casts about **two thirds of the
+shadowed area** and roughly half the boundary population on the sails. The right caster was
+identified. It just cannot do the job it was nominated for.
+
+### Cost of the change, for anyone who wants it for cloth realism instead
+
+`.tmp/ropecpu.mjs`, mirror verified against main:
+
+| | live trim (close-hauled) | all nine states |
+|---|---|---|
+| pinned leech (main) | **35** | **358** |
+| free leech 0.45 | **41** | **381** |
+
+Live trim +6: `lift` 10→13, `ratline-lower` 3→5, `buntline` 0→1. Across all states +23,
+almost all of it `lift` (49→65) — the lifts run from yardarm to masthead **past the
+leech**, which is precisely where the new belly is. So `d0101a4` is walked back, modestly
+and predictably. Not kept; `LEECH_FREE=0.45` in the probe's environment reproduces it.
+
+### Are the edges soft enough? Yes, and softening them further would be wrong
+
+The sun subtends 0.53°, so a penumbra is `d * 0.00925` m for a caster–receiver separation
+d, and at 17.5 px/m that is `d * 0.162` px. Sun elevation in this scene is 12.4°, so the
+ray from a mast, yard or sail to the canvas it strikes runs roughly the horizontal
+separation: 10–40 m on this rig, i.e. **1.6–6.5 px**. Shipped: p25 2.5–2.7, p50 3.5–3.9,
+p75 6.2–7.3. That is the physically correct band. `blurNone` (p50 2.5) is slightly too
+hard; radius 4 and above is unphysically soft, and the 1:1 strip shows what it costs —
+at radius 4 the crosstrees stop being legible in their own shadow, so the trade is
+shadow *shape* for softness, and the shape is what makes it read as rigging. **Leave
+`shadow.radius` at 2.2.**
+
+The shadow interior is not the problem either. Median sd of T inside a 9x9 window wholly
+within deep shadow is 0.0235 / 0.0255 / 0.0239 / 0.0250 across a 56x range of filter
+radius — flat, and only 2.4% of full light. Whatever still reads as blotchy on this cloth
+is the cloth, not the shadow, which is where §54a's normal-map finding already pointed.
+
+### Four instrument bugs, all of which produced a confident wrong answer first
+
+1. **The sky/sea guard read the wrong frame.** Rejecting blue-dominant pixels off `base`
+   deletes every deep-shadow sail pixel, because a sail in shadow is lit by **sky**. It
+   cost 30% of the sail area and three quarters of the edges, and returned a perfectly
+   plausible distribution describing only the shallow edges it failed to reject. The
+   guards belong on `shadowOff`, where every sail is in full sun.
+2. **`castShadow = false` is a no-op under VSM.** `WebGLShadowMap.js:515` renders an object
+   into the map when `castShadow || (receiveShadow && type === VSMShadowMap)`, and every
+   ship mesh receives. The first caster ablation moved the shadow term over the sails by
+   1.4% of area — TAA noise — and read exactly like a real null. `.tmp/sailcaster.mjs`
+   documents this trap and I walked into it anyway. Both flags must be cleared, plus
+   `material.needsUpdate`, and there is therefore **no valid ablation of the canvas as a
+   caster over the sails**: clearing `receiveShadow` on the sails destroys the measurement
+   surface. Only the complement is measurable.
+3. **A stalled boot photographs happily.** One run froze at `frame: 2` after a 14 s settle;
+   the ship did not exist, `__maskOn` threw, and the only symptom was a downstream
+   "reading 'copy' of undefined". The harness now asserts `time.frame > 90` and that the
+   sail mesh and the sun exist before it settles.
+4. **A mask threshold does not travel between scenes.** The green emissive goes through the
+   tonemap and the bloom like everything else, so a sunlit sail lands at about
+   (236, 255, 208) — 19 points of green dominance, not 55. The threshold of 40 inherited
+   from an earlier scene's exposure selected 41k px of a 600k px sail plan and threw
+   `mask too small`. Look at the mask (`--preview` writes one) before trusting a statistic
+   computed on it.
