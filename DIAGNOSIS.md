@@ -3340,3 +3340,34 @@ high-frequency energy on the same wake crop reads **6.049 at 1024 against 5.974 
 untested); the wake decay pass for ~0.9 ms, exactly free; and the ocean sim from 57 to 31
 passes for ~0.9 ms, bit-identical, because `oceanResolution` is a no-op between `high`
 and `ultra` and ultra's three 64² cascades could share one FFT over 6 MRT attachments.
+
+### 66a. Settled: 60 fps at 1600x900 CSS dpr 1 does NOT hold
+
+The fixed-cost work ended on an optimistic note — "capture.mjs at its default 1.44 Mpx
+now reads noon p25 **16.5 ms**, at the rAF cap, with one rival present; contention only
+adds time, so that bounds the truth from below." That reasoning is sound only if the
+reading is of the same workload, and it was not.
+
+Four runs on a genuinely quiet box (`rivals 0p/0b`, `quiet`), same scene, same defaults:
+
+| | p25 | p50 |
+|---|---|---|
+| run 1 | 21.2 | 28.8 |
+| run 2 | 26.3 | 30.3 |
+| run 3 | 24.5 | 30.3 |
+| run 4 | 26.1 | 31.0 |
+
+**About 40 fps, not 60.** And it agrees with the cost model: `7.86 + 14.37 × 1.44 =
+28.5 ms` against a measured p50 of 28.8–31.0. The model was right and the single
+low reading was an outlier — most likely a moment when the workload itself was lighter
+(the wildlife populations are a Poisson process, so frame content varies run to run).
+
+So the target stands unmet by about **13 ms at the median**, and `AGENTS.md` 5 is
+accurate as written. The lesson is narrower than "don't trust contended runs": a
+*single* run that lands exactly on an instrument's floor is the one reading you should
+never build a conclusion on, because the floor is where the instrument stops being able
+to disagree with you.
+
+Also confirmed here: draw calls now read **138** on the same scene where they read 68–91
+before §65's fix, and triangles 0.73 M against 0.60 M — both consistent with the update
+phase finally being counted.
