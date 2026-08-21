@@ -2,7 +2,12 @@ import { GLSL } from '../../util/glsl';
 import { POST_COMMON } from './common';
 
 /**
- * Velocity-buffer motion blur with a shutter-angle parameter.
+ * Velocity-buffer motion blur with a fixed exposure time.
+ *
+ * The velocity it is handed is measured in the SHIP's frame, not the world's —
+ * see the block comment at step 8 of 'Pipeline.render'. Without that, the deck
+ * under a first-person eye reports the camera's own translation parallax, which
+ * grows as 1/depth, and the near field smears while the rig stays sharp.
  *
  * The blur direction comes from the dilated *tile* max velocity rather than the
  * pixel's own, which is what lets a fast object smear over static background
@@ -24,7 +29,7 @@ uniform sampler2D tNeighbourMax;
 uniform sampler2D tDepth;
 uniform vec2 uResolution;
 uniform vec2 uTexelSize;
-uniform float uShutter;      // shutter angle / 360
+uniform float uShutter;      // exposure seconds / frame seconds; see MotionBlur.ts
 uniform float uMaxLength;    // pixels
 uniform float uFrame;
 uniform vec2 uDepthRange;

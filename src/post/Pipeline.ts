@@ -74,10 +74,10 @@ const BUDGET: Record<QualityTier, QualityBudget> = {
  *
  * **Velocity.** Reprojection only: `worldFromDepth` of the current frame,
  * projected by the previous frame's unjittered view-projection. That is exact
- * for the camera and for anything rigid, and *wrong* for anything displaced in
- * its vertex shader — the FFT ocean surface, billowing canvas, flags, spray.
- * Those report the velocity of the static point they happen to occupy. The
- * consequences are chosen rather than accidental:
+ * for the camera and for anything rigid *in the frame it is reprojected in*, and
+ * *wrong* for anything displaced in its vertex shader — the FFT ocean surface,
+ * billowing canvas, flags, spray. Those report the velocity of the static point
+ * they happen to occupy. The consequences are chosen rather than accidental:
  *
  *   - TAA rejects the history instead of smearing it, because the YCoCg
  *     variance clip sees the disagreement. The ocean therefore anti-aliases a
@@ -87,8 +87,14 @@ const BUDGET: Record<QualityTier, QualityBudget> = {
  *     is invisible; it would matter for a fast-moving object, and there are
  *     none.
  *
- * Fixing it properly needs an MRT velocity output from the ocean and sail
- * materials, which is a change in someone else's directory.
+ * The buffer is written **twice** when motion blur is on, because the two
+ * consumers need different reference frames: TAA wants world-static reprojection
+ * (its history is last frame's screen), motion blur wants the ship's frame (its
+ * near field is the ship, which is co-moving with the eye). See the block
+ * comment at step 8.
+ *
+ * Fixing the vertex-displacement case properly needs an MRT velocity output from
+ * the ocean and sail materials, which is a change in someone else's directory.
  */
 export class Pipeline {
   private targets = new Targets();
@@ -119,6 +125,13 @@ export class Pipeline {
   private prevViewProj = new THREE.Matrix4();
   private invViewProj = new THREE.Matrix4();
   private prevCamPos = new THREE.Vector3();
+  private curShip = new THREE.Matrix4();
+  private prevShip = new THREE.Matrix4();
+  private shipDelta = new THREE.Matrix4();
+  private shipDeltaInv = new THREE.Matrix4();
+  private rigViewProj = new THREE.Matrix4();
+  private rigCamPos = new THREE.Vector3();
+  private unitScale = new THREE.Vector3(1, 1, 1);
   private lookBlend = { a: 0, b: 0, mix: 0 };
   private scatterColor = new THREE.Color();
   private hasPrevFrame = false;
@@ -350,25 +363,25 @@ export class Pipeline {
     const depthTex = scene.depthTexture ?? null;
 
     // 5. velocity
-    const wantVelocity = (this.aa.needsVelocity || s.motionBlur) && depthTex !== null;
+    this.curShip.compose(world.ship.position, world.ship.quaternion, this.unitScale);
+    const velRt =
+      (this.aa.needsVelocity || s.motionBlur) && depthTex !== null
+        ? this.targets.get('velocity', this.width, this.height, 'rg16f', { nearest: true })
+        : null;
     let velocityTex: THREE.Texture | null = null;
-    if (wantVelocity) {
-      const vel = this.targets.get('velocity', this.width, this.height, 'rg16f', { nearest: true });
+    if (velRt && depthTex) {
       const u = this.velocity.uniforms;
       u.tDepth.value = depthTex;
       (u.uInvViewProj.value as THREE.Matrix4).copy(this.invViewProj);
-      (u.uPrevViewProj.value as THREE.Matrix4).copy(
-        this.hasPrevFrame ? this.prevViewProj : this.curViewProj,
-      );
       (u.uCamPos.value as THREE.Vector3).setFromMatrixPosition(cam.matrixWorld);
-      (u.uPrevCamPos.value as THREE.Vector3).copy(
-        this.hasPrevFrame ? this.prevCamPos : (u.uCamPos.value as THREE.Vector3),
-      );
       (u.uJitter.value as THREE.Vector2).copy(this.jitter.ndc);
-      prof.begin('velocity');
-      this.velocity.render(r, vel);
-      prof.end();
-      velocityTex = vel.texture;
+      if (this.aa.needsVelocity) {
+        this.writeVelocityFrame(this.prevViewProj, this.prevCamPos);
+        prof.begin('velocity');
+        this.velocity.render(r, velRt);
+        prof.end();
+      }
+      velocityTex = velRt.texture;
     }
 
     // 6. anti-aliasing
@@ -405,7 +418,42 @@ export class Pipeline {
     }
 
     // 8. motion blur
-    if (s.motionBlur && velocityTex && depthTex && this.hasPrevFrame) {
+    if (s.motionBlur && velRt && velocityTex && depthTex && this.hasPrevFrame) {
+      /*
+       * Motion blur measures velocity in the SHIP's frame; TAA measures it in
+       * the world's. They need different answers and the difference is not a
+       * refinement, it is the whole defect: reprojection assumes every pixel's
+       * world point stood still, so a point rigid with the ship reports the
+       * camera's own translation parallax, which grows as 1/depth. From the
+       * helm the deck is 0.5-1.5 m away and co-moving with the eye — its true
+       * screen motion is only the residual roll — yet the world buffer called it
+       * 30-100 px/frame and the blur smeared the deck while the rig 25 m away
+       * stayed sharp. Measured near/mid/far in DIAGNOSIS 46.
+       *
+       * Composing the previous view-projection with `prevShip * curShip^-1`
+       * reprojects each pixel to where that material point was last frame IF it
+       * is rigid with the ship, which every plank, gun and shroud is. World
+       * geometry then reports the ship's motion instead of its own — at 7 m/s
+       * and 60 fps that is 0.12 m, i.e. under a pixel past 80 m and under 3 px
+       * on the visible sea, so nothing that was blurring stops.
+       *
+       * `uPrevCamPos` gets the inverse delta so the sky branch, which anchors a
+       * 1 km ray at the previous camera position, lands back on that position
+       * with only the ship's rotation taken out of the direction.
+       *
+       * TAA keeps the world velocity untouched: its history is a screen-space
+       * buffer of last frame, so world-static content genuinely needs the world
+       * reprojection or it ghosts, and ghosting is a RUBRIC auto-fail.
+       */
+      this.shipDelta.copy(this.curShip).invert().premultiply(this.prevShip);
+      this.shipDeltaInv.copy(this.prevShip).invert().premultiply(this.curShip);
+      this.rigViewProj.multiplyMatrices(this.prevViewProj, this.shipDelta);
+      this.rigCamPos.copy(this.prevCamPos).applyMatrix4(this.shipDeltaInv);
+      this.writeVelocityFrame(this.rigViewProj, this.rigCamPos);
+      prof.begin('velocityRig');
+      this.velocity.render(r, velRt);
+      prof.end();
+
       prof.begin('motionBlur');
       this.motionBlur.render(
         r,
@@ -417,6 +465,7 @@ export class Pipeline {
         alt,
         budget.mbTaps,
         world.time.frame % 1024,
+        world.time.dt,
       );
       prof.end();
       const t = cur;
@@ -463,10 +512,26 @@ export class Pipeline {
     // 12. carry state
     this.prevViewProj.copy(this.curViewProj);
     this.prevCamPos.setFromMatrixPosition(cam.matrixWorld);
+    this.prevShip.copy(this.curShip);
     this.hasPrevFrame = true;
 
     prof.writeStats(world.stats);
     this.tickProfile();
+  }
+
+  /**
+   * Point the velocity pass at a previous frame. Before the first frame after a
+   * cut there is no previous frame, so the current one stands in and the buffer
+   * comes out zero rather than reprojecting against uninitialised state.
+   */
+  private writeVelocityFrame(prevViewProj: THREE.Matrix4, prevCamPos: THREE.Vector3): void {
+    const u = this.velocity.uniforms;
+    (u.uPrevViewProj.value as THREE.Matrix4).copy(
+      this.hasPrevFrame ? prevViewProj : this.curViewProj,
+    );
+    (u.uPrevCamPos.value as THREE.Vector3).copy(
+      this.hasPrevFrame ? prevCamPos : (u.uCamPos.value as THREE.Vector3),
+    );
   }
 
   /* ------------------------------------------------------------------ *

@@ -15,8 +15,23 @@ import { NEIGHBOUR_MAX_FRAG, TILE_MAX_FRAG } from './shaders/velocity';
  * frame before the cap bites, which no sane camera move reaches.
  */
 const TILE = 20;
-/** Shutter angle / 360. 126 degrees — half a stop under cinema, deliberately. */
-const SHUTTER = 0.35;
+/**
+ * Exposure time, seconds. A real shutter is a TIME, not a fraction of whatever
+ * frame the engine happened to produce, and the velocity buffer is in uv per
+ * frame — so the shutter fraction has to be `EXPOSURE_S / dt` or the blur
+ * tracks the frame rate. 0.35 of a 60 fps frame is 5.83 ms, so this is the same
+ * 126-degree look at the target frame rate and the same physical exposure away
+ * from it. Non-negotiable 9 in AGENTS.md, and it matters most in the case that
+ * hurts: a frame that took 50 ms used to get three times the smear, which is a
+ * quality spiral exactly when the frame is already struggling.
+ */
+const EXPOSURE_S = 0.35 / 60;
+/**
+ * Ceiling on the shutter fraction. The buffer only knows ONE frame of motion, so
+ * asking for more than a frame's worth of displacement is extrapolation; above
+ * ~170 fps the honest answer is to stop lengthening the streak.
+ */
+const MAX_SHUTTER = 1;
 
 export class MotionBlur {
   private tileX: FullscreenPass | null = null;
@@ -57,6 +72,7 @@ export class MotionBlur {
     dst: THREE.WebGLRenderTarget,
     taps: number,
     frame: number,
+    dt: number,
   ): void {
     const tileXRt = this.targets.get('mbTileX', this.tilesX, this.height, 'rg16f', { nearest: true });
     const tileRt = this.targets.get('mbTile', this.tilesX, this.tilesY, 'rg16f', { nearest: true });
@@ -85,7 +101,7 @@ export class MotionBlur {
     (b.uniforms.uResolution.value as THREE.Vector2).set(this.width, this.height);
     (b.uniforms.uTexelSize.value as THREE.Vector2).set(1 / this.width, 1 / this.height);
     (b.uniforms.uDepthRange.value as THREE.Vector2).set(near, far);
-    b.uniforms.uShutter.value = SHUTTER;
+    b.uniforms.uShutter.value = Math.min(MAX_SHUTTER, EXPOSURE_S / Math.max(dt, 1e-4));
     b.uniforms.uMaxLength.value = TILE;
     b.uniforms.uFrame.value = frame;
     b.render(renderer, dst);
@@ -137,7 +153,7 @@ export class MotionBlur {
           tDepth: { value: null },
           uResolution: { value: new THREE.Vector2() },
           uTexelSize: { value: new THREE.Vector2() },
-          uShutter: { value: SHUTTER },
+          uShutter: { value: EXPOSURE_S * 60 },
           uMaxLength: { value: TILE },
           uFrame: { value: 0 },
           uDepthRange: { value: new THREE.Vector2(0.25, 60000) },
