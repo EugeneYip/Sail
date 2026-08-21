@@ -140,6 +140,13 @@ this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
 - `npm run preflight` gates on the GLSL parse now, so it will refuse a tree that will
   not build. It deliberately does **not** run `tsc` (24 s), and says so.
 
+**One trap worth knowing before you measure anything about shadows.**
+`castShadow = false` is a **no-op under VSM** for any object that also *receives*
+shadow — `WebGLShadowMap.js:515` reads
+`object.castShadow || (object.receiveShadow && type === VSMShadowMap)`. The sails
+receive, so removing them from the shadow map that way does nothing, and the
+experiment returns a convincing null. Two agents walked into this.
+
 **Known open, roughly in priority order.**
 1. **Frame pacing** — the longest-open item and the one the owner feels, as a
    "two-frame stutter". p25 runs 19–31 ms against a 16.6 ms target but the *minimum*
@@ -149,12 +156,16 @@ this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
    taken here had `adaptiveResolution` false and `renderScale` 1, because the harness
    pins them — and the owner does not play that way, so if the stutter is in that
    controller no capture has been able to see it.
-2. **Sail shadow edge hardness.** The two substantive causes are fixed (§54): canvas
-   was an opaque occluder while casting nine tenths of the ship's shadow, and the VSM
-   depth test was quantised to 0.33 m against a 0.16 m bias budget. But edge hardness
-   **did not measurably change** (§54a), and the metric that says so is contaminated.
-   The untested hypothesis is on `wip/free-leech`: a shadow's edge is its caster's
-   silhouette, and the leech is currently pinned flat, so it casts a straight edge.
+2. ~~**Sail shadow edge hardness.**~~ **CLOSED — the edges are already the right
+   width** (§56). The sun subtends 0.53°, so the true penumbra for the 10–40 m
+   caster separations on this rig is 1.6–6.5 px at 17.5 px/m; measured p25 2.5,
+   p50 3.5, p75 6.2 px. That *is* the physical band, and softening further costs
+   legibility — at `shadow.radius` 4 the crosstrees stop being readable in their own
+   shadow. **Leave it at 2.2.** Shadow-interior mottle is flat at 0.024 across a 56×
+   radius range, so the residual "blotchy" reading is the **cloth, not the shadow**.
+   The free-leech hypothesis is dead and its branch retired: a directional light has
+   no source area, so the caster's silhouette sets *where* an edge falls, never how
+   wide it is. It also cost +6 piercings in live trim, almost all `lift`.
 3. **TAA's near-field share is unquantified.** With velocity ~50 px wrong, `clipAabb`
    pulls history to the 3×3 mean against a `uFeedbackMin` of 0.7 — a 70% box blur.
    Giving TAA the ship-frame velocity is the obvious next move and the risky one,
@@ -179,7 +190,8 @@ this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
   hard sawtooth chevron. Superseded on main by a version measured at the generator
   (relief slope 48.4° → 4.9°, anisotropy 0.48 → 0.09, dominant wavelength landing on
   the 610 mm bolt), but its diagnosis is worth reading.
-- `wip/free-leech` — see open item 2.
+- `wip/free-leech` — **retired.** Disproven in §56 with a physics argument, so leaving
+  it would only cost someone a session.
 
 **The rule these branches encode:** a stopped agent's work being green (`tsc` 0,
 `check-glsl` clean) is not the same as being right. Main stays publishable, so a change
