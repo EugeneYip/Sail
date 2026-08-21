@@ -3371,3 +3371,194 @@ to disagree with you.
 Also confirmed here: draw calls now read **138** on the same scene where they read 68–91
 before §65's fix, and triangles 0.73 M against 0.60 M — both consistent with the update
 phase finally being counted.
+
+## 67. §62's top defect: the horizon staircase is the cloud shadow, resolved past what a pixel can place
+
+The blind critic's #1 — "the far-field ocean dies before the horizon, and the horizon is
+a stack of hard-edged bands" — is two defects sharing one sentence. The bands are found
+and fixed. The dead far field is confirmed, has a measured cause and a measured lever,
+and is **not** fixed.
+
+### The instrument, first, because six candidates were wrong
+
+The statistic is the **column-mean luminance profile down the screen**, averaged over a
+wide x range, with a discontinuity counted wherever `|L[y+1] - 2L[y] + L[y-1]| >= 1.5`
+8-bit units. A real horizon is a smooth aerial-perspective ramp: total `|d2L|` small and
+no discontinuities. A staircase spikes at every tread. `.tmp/hzcmp.mjs` computes it.
+
+Everything below was measured by **rewriting the ocean's fragment shader from the page**
+and recompiling with `needsUpdate`, inside one browser with the sim clock pinned (`tick`
+re-stamps `lastTime`, so `dt == 0` and the rAF loop keeps presenting). Wave phase, cloud
+field, sun, heading and ship position are therefore *identical* between shots, which is
+what §43/§49 said was required and what a source edit plus two capture runs cannot give
+you. No source change is needed to price a term: `THREE.ShaderMaterial.fragmentShader`
+is a string. `.tmp/hzshade.mjs`, `.tmp/hzspec.mjs`, `.tmp/hzsun.mjs`, `.tmp/hzafter.mjs`.
+
+`orbit`, x 0–520, y 570–604. Repeated nulls in the same process read 55.9 / 56.4 / 58.9,
+so the null spread is ~3 on a signal of 45.
+
+| ablation | tot \|d2L\| | discontinuities | verdict |
+|---|---|---|---|
+| null | 55.9 | 6 | the defect |
+| `uGridM` 8 — `effCell` continuous instead of per-ring | 55.8 | 6 | **not** the clipmap |
+| cascade cell fades pushed out of range | 61.2 | 7 | not the cascade weights |
+| horizon skirt hidden | 56.8 | 7 | not the skirt |
+| `slope = 0, jac = 0` everywhere (flat sea) | 50.9 | 7 | **not the wave normal** |
+| `Nlow` replaced by straight up | 51.3 | 8 | not `Nlow` |
+| foam forced to 0 | 43.3 | 6 | not the foam |
+| reflection term removed | 46.3 | 7 | not the reflection |
+| `col = haze` (in-scatter alone) | **2.1** | **0** | the in-scatter is perfect |
+| `col = mix(vec3(0.02), haze, t)` | 16.6 | 3 | `t` is a smooth ramp |
+| aerial perspective removed | 107.9 | 13 | the haze was *hiding* it |
+| `sunSpec` removed | 20.0 | 5 | it is the sun lobe |
+| `sunVis = 1.0` | **10.9** | **0** | **it is the cloud shadow** |
+
+### The mechanism
+
+At grazing incidence a pixel's world footprint is `pxWorld` **across** and
+`pxWorld / |V.y|` **along** the view ray. In `orbit` at 4 km with the eye 25.6 m up that
+is **3.2 m by 514 m**. The cloud shadow map is `CLOUD_SHADOW_EXTENT_M` 26 km over
+`CLOUD_SHADOW_SIZE` 512 texels — **50.8 m per texel** — so one screen row near the
+horizon spans ten of its texels and a few rows span a whole cloud. `lwCloudShadow` is
+point-sampled once per pixel and the sun glitter is the dominant far-field term, so the
+answer arrives as hard horizontal bands. The clipmap ring boundaries in the same frame
+sit at y 576/578/580/586/598/621/665, and the measured discontinuities do **not** line up
+with them — which is why the ring hypothesis, the obvious one, is wrong.
+
+**Averaging along the footprint does not fix it.** Sixteen taps spread over exactly that
+514 m span measured 41.2 against a null of 51.9. A cloud shadow is *wider* than the
+footprint, so there is nothing to average out. The error is resolving it at all: once the
+footprint is longer than the shadow field's own features there is no placement left to
+render, and the expected transmittance over the footprint is the field's **mean**.
+`lwCloudShadow` is normalised so that mean is exactly 1.0 (the absolute darkening under
+overcast is already inside `uSunIntensity`), so converging to 1.0 is not "switching the
+shadow off" and a storm does not brighten.
+
+That is the same rule this shader already applies to slope variance, to the foam octaves
+and to the whitecap statistic. The cloud shadow was the one world-space field not obeying
+it.
+
+```glsl
+float shadowFootprint = pxWorld / max(abs(V.y), 1e-3);
+float shadowRes = 1.0 - smoothstep(80.0, 600.0, shadowFootprint);
+float sunVis = mix(1.0, lwCloudShadow(P), shadowRes);
+```
+
+Band chosen by measurement, not taste — 80/600 gave 17.8, 150/1200 gave 44.0, 300/2400
+gave 50.7. In `orbit` it fades the shadow out between 1.6 and 4.3 km, the last fourteen
+rows before the horizon; at 500 m the footprint is 8 m and nothing changes.
+
+### The profile, before and after
+
+Same process, clock pinned, `orbit`, x 0–520:
+
+| | tot \|d2L\| | discontinuities | max \|dL\| |
+|---|---|---|---|
+| before | 55.9 | **6** | 10.5 |
+| after | 13.4 | **0** | 2.0 |
+| after, repeat | 15.3 | **0** | 2.3 |
+| `sunVis = 1` (floor) | 10.9 | 0 | 2.2 |
+
+Over the **full width** x 0–1600 it is 24.4 with 5 discontinuities before and 12.7 with
+**zero** after. The profile that replaces the staircase is monotone: 102.3, 103.3, 104.4,
+106.4, 108.2, 109.6, 110.6, 111.6, 112.2, 112.8, 114.3, 116.1, 117.3, 117.8, 117.8 — the
+charcoal bar at y 582–583 (before: 109.3, 100.5, then 111.1 and 119.5) is gone, and so
+are its crisp edges at 1:1.
+
+No regression anywhere else, same-process pairs: `masthead` 25.2 → 25.3 (0
+discontinuities either way, so the fade contour is not visible as a ring), `golden` 23.6
+→ 19.3, `storm` 19.4 → 17.9 with the three discontinuities in identical places.
+`shadow` — `cloudCover` 0, `uCloudShadowStrength` 0 — reads 24.7 → 26.2, i.e. the change
+is **provably inert with no clouds**, which is what `lwCloudShadow`'s early return
+guarantees.
+
+Cost: one `smoothstep` and one `mix` per ocean fragment, no new texture taps. p25 over
+orbit/noon/shadow/golden/helm 24.1–33.0 ms on a quiet box, in the standing band.
+
+### The pale cyan hairline was the in-scatter's elevation lift
+
+Second item on §62's list, same fix session. `oceanInscatter` lifted the probe tap
+**0.035 rad = 2.0°** above the horizon. The env probe is `ENVMAP_W*2 x ENVMAP_H*2` =
+256x128 with `v = asin(y)/PI + 0.5`, so one texel is **1.41° of elevation** and 0.035 was
+**1.42 texels up**: the sea's last rows carried sky from two degrees higher than the sky
+immediately above them, and near the horizon that is where the atmosphere's gradient is
+steepest. Measured per channel, `orbit` x 0–520: the sea's top row ran **B−R 32.2 against
+the sky's 17.8** at *equal luminance* (102.3 vs 102.4). A pure-chroma hairline.
+
+`0.0123 = sin(PI * 0.5 / 128)` is the centre of the first texel above the horizon — the
+lowest tap whose bilinear footprint contains no below-horizon sample. Excess B−R falls
+from +14.4 to **+7.3**, luminance still monotone. Lower was measured and is worse:
+0.0060 puts the row 5.4 **below** the sky and 0.0 puts it 13 below, both hard dark lines,
+and dropping the probe entirely puts it 16 below with B−R 46.5. That contamination is
+exactly what the lift is for; it was just four times too big. The residual is the probe
+texel's own 1.41° average being bluer than the 0.02° row of sky above it, and closing it
+needs elevation resolution near the horizon that a 128-row probe has not got.
+
+### The vertical column does not reproduce
+
+§62's "vertical banded column at x 1300–1330 running y 250→600, crossing the horizon with
+the same value on both sides". Column profiles, detrended with a 123-px moving average,
+computed for a sky band and a sea band in four scenes: the correlation between the two is
+**−0.011, −0.330, +0.219, −0.109**. A screen-space composite that ignores depth would
+give ~+1 and a shared localised spike. The only strong column deviations in any frame are
+at x 650–940 — the ship's masts. At x 1240–1400 in `orbit` every band is a monotone
+gradient varying under 1 unit.
+
+The mechanism it most likely was: `cloudAirShadow` marches **the same 26 km shadow map**
+through the air with `CLOUD_SHAFT_STEPS` = 10, i.e. one sample every 2.6 km, to make
+crepuscular rays. A shadow lane darkening the air and the same lane darkening the sea is
+one shadow seen twice, which is exactly "the same value on both sides" — and it is not a
+compositing bug. Two consequences: the critic's own objection ("the horizon should
+modulate it") is now satisfied on the sea side, because past 4 km the sea no longer
+resolves the lane; and if it recurs, the 2.6 km march step is where to look, not the post
+stack. **I could not reproduce it and cannot say it shared the cause.**
+
+### The far field really is dead, and here is the lever
+
+The other half of §62's sentence is confirmed and unfixed. Per-row **mean |dL/dx|** over
+x 0–500 in `orbit` reads **1.99–2.19 from the horizon at y 576 all the way to y 660**,
+which is the interleaved-gradient dither's own floor (§62 measured it at 0.16–0.96 LSB).
+There is no horizontal structure in the far field at all. The bands were horizontal, so
+they never contributed to this statistic either — before the fix, y 580 read |dL/dx| 2.07
+with a row sd of 9.32; after, 2.07 with 3.86. **I removed a source of far-field variation
+in exchange for removing the staircase**, and that trade is worth stating plainly.
+
+The cause is one line. `lowSlope` is written only in the **cascade-0** iteration of the
+fragment sampler, so `Nlow` carries the 0.5–2 km swell and nothing else — and past a few
+hundred metres `macro = saturate(sqrt(carried)/|V.y| - 0.25)` saturates to 1.0 (at
+|V.y| = 0.006 it is 13 before the subtraction), so `Nmac = Nlow` and `Ns = mix(N, Nlow,
+0.85)`: **both** specular paths run on a normal that only knows about the swell.
+
+Measured lever, same process, repeated nulls agreeing to 0.03: building `Nlow` from the
+full multi-cascade `slope` at the same per-pixel explicit LOD raises |dL/dx| from
+1.99–2.19 to **2.22–2.65** and row sd from 5.0–6.9 to 5.6–8.6 over y 588–660 — 20–50x the
+null spread. It does *not* help the top six rows (2.10 → 2.16), so it is detail in the
+1–3 km band, not at the horizon itself.
+
+**Do not land that without the flicker instrument.** `alphaR = clamp(max(alpha,
+sqrt(lostVar + (1 - km*km) * carried)), ...)` exists to add back exactly the variance
+that blending N toward `Nlow` removes; if `Nlow` starts carrying every cascade, that
+compensation double-counts, and this is the same path §? measured for temporal band
+flicker (temporal std 0.38 with the micro normal against 0.10 with the macro normal).
+The pairing of "Nlow is cascade 0" with "the wide regime's alpha is the total rms" is
+currently self-consistent. Changing one half needs the other half re-derived and the
+temporal std re-measured with the sim clock pinned.
+
+### Two more things I could not fix
+
+- **There is no earth curvature.** With the eye at 25.6 m the true geometric horizon is
+  `sqrt(2Rh)` = **18.0 km**, and the clipmap renders sea to 49 km — 2.7x past it. The
+  rows from y 575 to y 577 in `orbit` are sea at 20–49 km that should not be visible.
+  That is most of the compressed dead band, and it is why the sea/sky ΔL at the horizon
+  is 0–1.3 (measured; §62's older build read 3.4): the last visible sea is forced to full
+  haze, so it *is* the sky. A real horizon is a definite line because the last sea is
+  only 4–18 km away and keeps most of its own colour. Adding curvature is a vertex-shader
+  drop of `d^2/(2R)`, but it collides with the skirt's rise-to-eye-height, which exists
+  to stop a sliver of sky appearing under the sea; that interaction is the whole job.
+- **The "reef in mid-ocean".** §62's cyan patches are cloud shadow at 400–2000 m, where
+  the footprint *is* small enough to place it, so the fix above deliberately leaves them.
+  They read as bathymetry because a sunlit gap is `lwCloudShadow` up to 1.35 against a
+  shadow at 0.058 — a 23:1 patch — and in the gap the glitter's sun colour dominates
+  while in shadow only the blue body survives, so the patch differs in *hue* as well as
+  value. Physically that is right; whether 23:1 is right is the sky's call, not the
+  ocean's, and changing it moves the sails too.
