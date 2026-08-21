@@ -327,7 +327,29 @@ float oceanReflectance(float NoV, float a){
  * sky around it, not by whatever lies below the horizon in the probe.
  */
 vec3 oceanInscatter(vec3 fwd){
-  vec3 lifted = normalize(vec3(fwd.x, 0.0, fwd.z) + vec3(0.0, 0.035, 0.0));
+  /* HALF A PROBE TEXEL, NOT TWO DEGREES.
+   *
+   * The lift exists so the tap cannot pick up whatever the probe holds below the
+   * horizon, and it has to be as small as that allows: the probe is a 256x128
+   * equirect with v = asin(y)/PI + 0.5, so one texel is 1.41 deg of elevation,
+   * and the old 0.035 rad was 1.42 texels UP. The sea's last rows therefore
+   * carried sky from two degrees higher than the sky immediately above them,
+   * which near the horizon is where the atmosphere's gradient is steepest.
+   * Measured in 'orbit', x 0-520: the sea's top row ran B-R 32.2 against the
+   * sky's 17.8 — a pure-chroma hairline, equal in luminance and 14 units bluer,
+   * and the 'pale cyan hairline at y 573-576' of DIAGNOSIS §62.
+   *
+   * 0.0123 is sin(PI * 0.5 / 128), i.e. exactly the centre of the first texel
+   * above the horizon: the lowest tap whose bilinear footprint contains no
+   * below-horizon sample. It halves the excess to B-R 25.5 with the luminance
+   * still continuous. Lower is worse and was measured: 0.0060 puts the row 5.4
+   * BELOW the sky and 0.0 puts it 13 below, both hard dark lines, which is the
+   * contamination the lift is for. The residual is the probe texel's own 1.41
+   * deg average being bluer than the 0.02 deg row of sky above it, and closing
+   * it needs elevation resolution near the horizon that a 128-row probe has not
+   * got.
+   */
+  vec3 lifted = normalize(vec3(fwd.x, 0.0, fwd.z) + vec3(0.0, 0.0123, 0.0));
   vec3 wide = oceanSky(lifted);
   if (uHasEnv < 0.5) return wide;
   vec3 probe = texture2D(uEnvMap, lwEquirectUv(lifted)).rgb;
@@ -602,8 +624,42 @@ void main(){
   alpha = mix(alpha, clamp(alpha * 1.25, 0.0, 0.55), uWetness * 0.7);
   alpha = clamp(mix(alpha, 0.62, foam), 0.02, 0.95);
 
-  // Cloud shadows come from the shared uniforms the sky writes every frame.
-  float sunVis = lwCloudShadow(P);
+  /* CLOUD SHADOW OBEYS THE SAME FOOTPRINT RULE AS EVERYTHING ELSE HERE.
+   *
+   * At grazing incidence a pixel's world footprint is 'pxWorld' across and
+   * 'pxWorld / |V.y|' ALONG the view ray — 3 m by 514 m at four kilometres with
+   * the eye 25 m up. The shadow map is 26 km over 512 texels, so one screen row
+   * near the horizon spans ten of its texels and a few rows span a whole cloud.
+   * Point-sampling it there answers a "where" the pixel cannot hold, and since
+   * the sun glitter is the dominant term in the far field the answer arrives as
+   * a stack of hard horizontal bands across the horizon with the sea's own
+   * detail nowhere in it. That is DIAGNOSIS §62's top defect, measured: the
+   * column-mean luminance profile over x 0-520 of 'orbit' carried SEVEN
+   * discontinuities and a total |d2L| of 58.9, against 11.0 with the shadow
+   * removed outright.
+   *
+   * Averaging the shadow ALONG the footprint does not fix it — sixteen taps over
+   * the same span measured 41.2 against a null of 51.9 — because a cloud shadow
+   * is wider than the footprint. The error is resolving it at all: once the
+   * footprint is longer than the shadow field's own features there is no
+   * placement left to render, and the expected transmittance over the footprint
+   * is the field's mean. 'lwCloudShadow' is normalised so that mean is exactly
+   * 1.0, so converging to 1.0 is not "switching the shadow off" — the absolute
+   * darkening under overcast is already inside 'uSunIntensity', which is why a
+   * storm does not brighten.
+   *
+   * The band is where a pixel stops being able to place a cloud: shadow cells
+   * run a couple of hundred metres to a few kilometres, so a footprint of 80 m
+   * can still put one down and 600 m cannot. Measured over the same profile:
+   * total |d2L| 17.8 and two discontinuities at 80/600, against 44.0 at
+   * 150/1200 and 50.7 at 300/2400; landed, the same profile reads 13.4 and 15.3
+   * on repeated nulls with ZERO discontinuities. In 'orbit' it fades out between
+   * 1.6 and 4.3 km, i.e. across the last fourteen rows before the horizon; the
+   * near field is untouched (8 m of footprint at 500 m).
+   */
+  float shadowFootprint = pxWorld / max(abs(V.y), 1e-3);
+  float shadowRes = 1.0 - smoothstep(80.0, 600.0, shadowFootprint);
+  float sunVis = mix(1.0, lwCloudShadow(P), shadowRes);
   vec3 sunIrr = uSunColor * uSunIntensity * sunVis;
 
   vec3 sunSpec = vec3(0.0);
