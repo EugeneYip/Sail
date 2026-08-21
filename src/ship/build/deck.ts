@@ -90,22 +90,50 @@ function buildWheel(bins: Bins, p: THREE.Vector3): void {
     new THREE.Vector3(1, 1, 1),
   ));
   oak.revolve([[0.17, -0.62], [0.2, -0.5], [0.2, 0.5], [0.17, 0.62]], 10);
-  // Two wheels, one each side of the barrel.
+  /*
+   * Two wheels, one each side of the barrel.
+   *
+   * This was 30 axis-aligned boxes per wheel and it read, from the helm, as a
+   * pile of scattered lumber -- which is what it was. Two separate bugs, and the
+   * helm view is the most-looked-at object in the game, so both matter.
+   *
+   * 1. WRONG PLANE. `revolve` turns about +Y (`Builder.ts:458` sets
+   *    `p.set(r*ca, y, r*sa)`), so the barrel's axis is local Y and a wheel disc
+   *    must lie in local XZ. The old code offset along X and drew its circle in
+   *    YZ, mounting both discs at 90 deg to the barrel they turn on.
+   * 2. NO ORIENTATION. `box` is centre-plus-half-extents and axis-aligned. Every
+   *    spoke was an identical Y-aligned bar merely TRANSLATED to a point on a
+   *    circle, so ten spokes were ten parallel slabs rather than ten radii.
+   *
+   * Spokes, handles and felloes are now `spar` rods between real endpoints, so
+   * each points along its own radius. The rim is chorded rather than turned, and
+   * that is not a simplification: a ship's wheel rim IS felloes, straight
+   * segments jointed at the spokes, so ten chords is the accurate shape.
+   */
+  const R = 0.86;
+  const SPOKES = 10;
+  const hubR = 0.21;
   for (const off of [-0.5, 0.5]) {
-    const R = 0.86;
-    br.setColorHexLinear(0xffffff, 0.8);
-    for (let i = 0; i < 10; i++) {
-      const a = (i / 10) * Math.PI * 2;
-      const c = Math.cos(a);
-      const s = Math.sin(a);
-      // Spoke, running out past the rim into the handle.
-      oak.box(off, c * R * 0.55, s * R * 0.55, 0.05, R * 0.55, 0.05);
-      oak.box(off, c * (R + 0.18), s * (R + 0.18), 0.045, 0.2, 0.045);
-      // Rim segment.
-      oak.box(off, c * R, s * R, 0.055, 0.16, 0.16);
-      void c;
-      void s;
+    const at = (ang: number, rad: number) =>
+      new THREE.Vector3(Math.cos(ang) * rad, off, Math.sin(ang) * rad);
+    for (let i = 0; i < SPOKES; i++) {
+      const a = (i / SPOKES) * Math.PI * 2;
+      const b = ((i + 1) / SPOKES) * Math.PI * 2;
+      oak.setColorHexLinear(0xffffff, 0.8);
+      // Spoke: hub to rim, tapering outward as a turned spoke does.
+      oak.spar(at(a, hubR), at(a, R), 0.032, 0.024, 5);
+      // Handle: the spoke carried on past the rim, which is what the helmsman
+      // actually holds.
+      oak.spar(at(a, R), at(a, R + 0.2), 0.026, 0.021, 5);
+      // Felloe: rim segment from this spoke to the next.
+      oak.spar(at(a, R), at(b, R), 0.05, 0.05, 5);
     }
+    // Brass hub band. The old code set a brass colour and then never drew in
+    // brass, so the wheel had no metal on it at all.
+    br.setColorHexLinear(0xffffff, 0.8);
+    br.pushTransform(new THREE.Matrix4().makeTranslation(0, off, 0));
+    br.revolve([[hubR, -0.045], [hubR + 0.02, -0.03], [hubR + 0.02, 0.03], [hubR, 0.045]], 12);
+    br.popTransform();
   }
   oak.popTransform();
   oak.partIndex = 0;
