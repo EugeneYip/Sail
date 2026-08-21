@@ -3605,3 +3605,180 @@ only strong column deviations in frame are the ship's masts. Most likely what th
 saw is `cloudAirShadow` marching the *same* 26 km shadow map through the air at
 `CLOUD_SHAFT_STEPS` = 10 — one sample per 2.6 km — for crepuscular rays: one shadow seen
 twice, not a compositing bug. Recorded as **not reproduced** rather than as fixed.
+
+## 68. §63 answered: the ship was the only opaque thing in the frame rendered through vacuum
+
+**The brief's hypothesis was wrong and the defect was real.** §63 blamed a missing
+sky-fill/IBL term. The IBL is there, on every ship family, and it is the right
+magnitude — the missing term was **aerial perspective**, which every other opaque thing
+in the frame already had.
+
+### What was ruled out first, with the measurement each time
+
+- **`scene.environment` is bound and reaches the ship.** `.tmp/skyfill.mjs`:
+  `sky.envMap`, `environmentIntensity` 1, and `envMap`/`envMapIntensity` live in the
+  compiled program of all twelve ship materials. The `env` option is not inert either;
+  it scales three's specular IBL as its comment claims.
+- **The probe's radiance is right.** `.tmp/envread.mjs` reads the equirect back off the
+  GPU and integrates it: mean sphere radiance 0.207/0.310/0.474 against a CPU
+  `uSkyColor` of 0.187/0.254/0.442, and cosine-weighted `E/PI` at a side normal
+  0.272/0.383/0.559 against the CPU SH's 0.220/0.314/0.503.
+- **The delivery is right.** `.tmp/G63white.mjs` forces `ship-black`'s albedo map to a
+  1x1 white texture and pins the sun off with a `defineProperty` trap. The hull then
+  reads **p50 94, p10 74** — a white Lambertian under that probe. Nothing is eating the
+  ambient.
+- **AO is not the culprit.** `aoMapIntensity` 0 on every family moves the hull band by
+  0.3 points. `lwDetAo` bottoms out at 0.45.
+- **`material.dithering` is not the culprit**, though it is still wrong. three runs
+  `dithering_fragment` AFTER `tonemapping_fragment`, so its ±0.25/255 is written for a
+  display-encoded 8-bit output; these materials write scene-linear radiance into an HDR
+  target, which makes it ±1.96e-3 of LINEAR radiance — 40–120% of the whole ambient
+  signal on a 1.8%-albedo hull, with a negative lobe. Ablated on all twelve materials
+  inside one frozen frame: **28.0 → 27.9% below L = 4, 14.0 → 14.1% exactly black.** A
+  null. Left alone on that evidence; the post stack's own dither is the right one and
+  §63 was right to say so.
+
+### The finding: no ship material had any distance term at all
+
+`src/ocean` hazes the sea (`shaders/surface.ts`), `src/world` hazes islands, other
+vessels and wildlife (`worldAerial`), `src/vfx` hazes spray and rain (`applyAerial`), and
+`scene.fog` is never set. **`grep -rn "uFogColor\|uVisibility" src/ship` returned
+nothing.** The player's own ship was rendered as if the air in front of it were a vacuum
+while a stranger's brig at the same range was not.
+
+Priced on the `orbit` frame (`.tmp/G63fog.mjs`): camera 141 m from the hull, visibility
+32 km, `uFogDensity` 1.222e-4/m — which is exactly the Koschmieder value, so the
+`max()` against `3.912 / visibility` is a tie — height falloff 0.989, so **t = 1.71%**.
+`uFogColor` luminance is **0.632**, so the omitted in-scatter is **1.08e-2 of radiance**.
+The shaded black topsides measured **3.5e-4**. **Thirty times the whole signal.**
+
+`src/ship/shaders/aerial.ts` mirrors `worldAerial` term for term — 1350 m scale height,
+same density floor, same `cos^8`/`cos^2` forward lobe, same depth blueing, same moon
+term — so a ship and an island at equal range haze identically. Duplicated rather than
+imported because non-negotiable 2 forbids reaching into `src/world`, and because
+`GLSL.fog`'s `applyAerial` uses a flat 0.55 sun lobe that does not go out at night. It
+needs no new varying: `length(vViewPosition)` is the distance and
+`inverseTransformDirection(..., viewMatrix)` takes the direction back to world.
+
+### Result, ablated inside one frozen frame
+
+Two captures of `--scene orbit` minutes apart are two cloud fields on the same hull, and
+whether a cell happens to sit on the ship moves the exactly-black share by ten points on
+identical code. So `.tmp/G63ab.mjs` ablates in place: everything the term adds is
+multiplied by `t`, and pinning `uFogDensity` to 0 and `uVisibility` to 1e9 makes t
+exactly 0 with no recompile. `--scene shadow`, critic's band x 500–1100, y 730–840:
+
+| | before | after |
+|---|---|---|
+| share below L = 4 | 17.4% | **0.2%** |
+| share at exactly (0,0,0) | 0.1% (65 px) | **0.0% (0 px)** |
+| p0.1 | 0.1 | 3.4 |
+| p10 | 2.4 | 7.9 |
+| p25 | 15.0 | 21.9 |
+| p50 | 76.5 | 78.4 |
+
+`ship-black`'s own 20,278 pixels (masked by flashing its emissive): below L = 4 from
+**55.2% to 0.1%**, p50 from 3.5 to 9.9. The sunlit median moves 2.5%, which is the point
+— this is not a black-point lift. A thick-air control row at 3 km visibility (t = 16.6%)
+lifts the same mask to p10 66.7, confirming the term is wired and scales as designed.
+
+Fresh captures repeat: `shadow` gives 0.2 / 0.3 / 0.3% below L = 4 and **0 exactly-black
+pixels in three runs** (before: 26.0% and 124 px). `orbit` goes from **17.0%
+(11,203 px)** to **2.8 / 3.4 / 3.4%** across three captures.
+
+### The second half, for close range: bounce the sky probe cannot contain
+
+At two metres t is 1e-4, so aerial does nothing for the deck, the fife rails or the
+belaying pins. `EnvProbe` is a **sky-only** equirect from (0, 30, 0): it contains neither
+the 3968 m² of albedo-0.62 canvas hanging over the deck — `sky/constants.ts` anchors
+sunlit canvas at ~2.5 radiance against a mean sky of 0.1–0.5, so where the sail plan
+fills a hemisphere it replaces the sky with something 5–8x brighter — nor the breaking
+bow wave. `src/ship/shaders/bounce.ts` adds both to indirect **diffuse** only (`env`
+means reflection), with only the **foam excess** for the water, because the probe's lower
+hemisphere already carries open sea within 30% of the CPU SH. The view factors are named
+geometric estimates, not measurements, and say so in the file.
+
+On the `helm` frame it takes the deck's dark decile from 20.3 to 28.3 and the pin-rail
+box (x 905–1330, y 470–620) from p10 39.0 → 47.1 with exactly-black from 198 px to 31.
+The midtone p50 moves 6%.
+
+### Cost: free, and here is the ablation rather than a profiler number
+
+Both call sites replaced by no-ops (`lwShipAerial(x)` → `x`, `lwShipBounce(...)` →
+`vec3(0.0)`; commenting them out puts a template's closing backtick inside a `//`
+comment, which is the mistake non-negotiable 3 exists for). Paired captures:
+
+| | with | without |
+|---|---|---|
+| `shadow` p25 | 22.4 / 22.5 / 22.8 | 23.8 / 23.7 |
+| `orbit` p25 | 28.5 / 28.6 / 27.4 | 17.2 / 29.1 |
+
+The ablated build is if anything *slower* on `shadow`, and `orbit` spans 17–29 either
+way — the documented same-scene spread. Below the instrument's resolution, as ~25 ALU
+ops on the ship's ~15% of the frame should be.
+
+### What this says about the frame's floor, which is NOT mine to change
+
+`.tmp/G63emis.mjs` calibrates the whole pipeline with a known additive radiance:
+`material.emissive` enters `totalEmissiveRadiance` in scene-linear units with nothing
+between it and the post stack. On `orbit`, `uExposure` pinned at 0.6656, measured inside
+an eroded `ship-black` mask:
+
+| added radiance | p50 code |
+|---|---|
+| 0 | 0.1 |
+| 2.68e-3 | 0.1 |
+| **1.07e-2** | **1.1** |
+| 4.28e-2 | 5.9 |
+| 1.71e-1 | 36.1 |
+
+**1e-2 of radiance renders as sRGB code 1.** AgX alone predicts 13 for that value, and
+AgX alone is *right at the top* — sky radiance 0.28 predicts code 129 against a measured
+mean of 137 — so the extra 3.5 octaves of crush is in the composite's own shadow
+response (the `cos^4` vignette is the prime suspect: the hull sits low and left of
+centre). Two consequences worth writing down:
+
+1. **The residual 3% of exactly-black pixels on `orbit` cannot be removed from inside
+   `src/ship`.** They are pixels sitting at code 0.5–1 where the dither splits them
+   either side of zero. Clearing them needs roughly one more octave, and no honest
+   ship-local term is worth an octave.
+2. **"Pure black under a bright sky" is only half a diagnosis.** For a 1.8%-albedo
+   surface to read as a *visible* dark grey in this frame it needs 0.05–0.15 of radiance
+   — a fifth to a half of the sky's own. That is not an ambient term; it is the grade.
+
+### The sibling class: the pins do NOT share the cause, the yards do
+
+`.tmp/G63who.mjs` attributes the exactly-black population by flashing one family's
+emissive at a time (no recompile — the uniform is always in the program): **93.6%
+`ship-black`**, then iron 6.8%, oak 5.7%, rigging 5.7%, sail-cloth 0%. After the fix the
+population is 52% smaller and still 93.8% `ship-black`.
+
+- **The yards in `orbit` share the cause.** They are `oak`, at 130–150 m, and get the
+  same t = 1.71%.
+- **The belaying pins in `helm` do not.** At 2–6 m aerial contributes 1e-4 and bounce
+  only lifts them ~1 code. They are shaded oak seen against sunlit canvas, which is a
+  near-silhouette in a photograph too. The critic's other half of that complaint —
+  "identical Γ glyphs, no variation between pins at different orientations" — is
+  **modelling, not lighting**: `build/deck.ts::buildBelayingPins` emits every one of the
+  25+ pins as the same axis-aligned `box(0.035, 0.2, 0.035)`, with no cant, no jitter and
+  no rope coil. That is a real defect and it is still open.
+- **"Sail shadows as hard-edged black stickers" does not reproduce on main.** On `shadow`
+  (full sun, no cloud) the sail area x 600–1000, y 400–640 has p10 = 101 and p0.1 = 10.4
+  before the fix, 18.1 after; the shadows read as soft blue-grey with visible penumbra.
+  The claim was made on the OLD panes. §56's "leave `shadow.radius` at 2.2" stands and
+  was not touched.
+
+### Two things this leaves for someone else
+
+- **A dead loop in `materials/materials.ts`.** `for (const t of [map, normalMap, ormMap]) { void t; }`
+  under a comment saying "the repeat converts to tile space". It converts nothing; the
+  builders already emit tile-space UVs and the detail shader multiplies back to metres.
+  Harmless, and the comment is a lie.
+- **The metals are authored as if they were dielectrics.** `makeIron` sets albedo
+  `l = 0.1 + facet*0.07` in **sRGB** (linear 0.01–0.03) with `metal = mix(0.9, 0.2, rust)`,
+  so wrought iron's F0 is ~0.013 — an order of magnitude below any real metal, and a
+  metal has no diffuse term to fall back on. `makeBrass` is ~2x low the same way. Either
+  the ironwork is bare metal and its albedo map must carry a real F0 (iron 0.56), or it is
+  the painted/tarred ironwork `AGENTS.md` describes and `metal` should be near 0. Both are
+  defensible; 0.9 metalness at 1% reflectance is not, and it is why an iron fitting has no
+  gradient across it.
