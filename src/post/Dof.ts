@@ -100,6 +100,7 @@ export class DepthOfField {
     depth: THREE.Texture,
     dst: THREE.WebGLRenderTarget,
     taps: number,
+    nearRamp: boolean,
   ): boolean {
     const hw = Math.max(1, this.width >> 1);
     const hh = Math.max(1, this.height >> 1);
@@ -121,7 +122,7 @@ export class DepthOfField {
     nm.render(renderer, nearMaxRt);
 
     const farPass = this.getFar(taps);
-    const nearPass = this.getNear(taps);
+    const nearPass = this.getNear(taps, nearRamp);
     const frame = world.time.frame;
     for (let i = 0; i < 2; i++) {
       const g = i === 0 ? farPass : nearPass;
@@ -186,14 +187,16 @@ export class DepthOfField {
     return this.far;
   }
 
-  private getNear(taps: number): FullscreenPass {
+  private getNear(taps: number, ramp: boolean): FullscreenPass {
     if (!this.near) {
       this.near = new FullscreenPass('dof/near', DOF_GATHER_FRAG, this.gatherUniforms(), {
         DOF_TAPS: taps,
         DOF_NEAR: 1,
+        DOF_NEAR_RAMP: 1,
       });
     }
     this.near.setDefine('DOF_TAPS', taps);
+    this.near.setDefine('DOF_NEAR_RAMP', ramp ? 1 : 0);
     return this.near;
   }
 

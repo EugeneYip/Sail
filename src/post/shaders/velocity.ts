@@ -10,13 +10,42 @@ import { POST_COMMON } from './common';
  * view-projection, which keeps the buffer in jitter-free screen space — both
  * TAA and motion blur want that.
  *
- * KNOWN ARTEFACT: this is camera reprojection only. Anything displaced in its
- * vertex shader (the FFT ocean surface, billowing canvas, flags, spray
- * particles) reports the velocity of the *static* point it happens to occupy,
- * not its true motion. TAA's neighbourhood clamp turns that into a rejected
- * history sample (slight aliasing) rather than a smear, which is the failure
- * mode we want; motion blur simply under-blurs moving water. Fixing it properly
- * needs an MRT velocity output from the ocean and ship materials.
+ * ## Two reference frames, chosen per pixel
+ *
+ * Reprojection answers "where was this pixel's material point last frame?", and
+ * that has two different answers in a first-person view bolted to a moving
+ * ship. A world-static point (sea, sky, an island) needs the previous camera's
+ * view-projection. A point rigid with the ship — every plank, gun, spar and
+ * shroud — needs it composed with the ship's own inverse motion, because the
+ * eye moved with the ship and the deck did not move relative to it.
+ *
+ * Getting that wrong is not a refinement. The disagreement between the two
+ * answers grows as 1/depth, and from the helm it is **95 px at 0.8 m, 53 px at
+ * 1.5 m, 27 px at 3 m** and 7 px at 6 m (measured at 14 kn, 16.5 ms, 1600x900).
+ * A history fetched 95 px away is unrelated content, so TAA's `clipAabb` pulls
+ * it to the 3x3 neighbourhood mean and blends ~64% of that in: a box blur on
+ * exactly the surface the player is standing on.
+ *
+ * So the frame is a per-pixel decision. The classifier is a padded box in SHIP
+ * LOCAL space, taken from the geometry under `world.shipRoot`, with one
+ * exception: a point near world sea level and outside the hull's waterline
+ * footprint is water, not ship, however deep inside the rig's envelope it sits
+ * (the sea under the jibboom, under the spanker boom, under the yardarms).
+ * Without that exception the sea alongside is claimed by the ship and picks up
+ * 2.4 px of velocity error. Water *inside* the waterline footprint stays ship:
+ * the bow wave and the wake are ship-locked phenomena.
+ *
+ * The asymmetry matters when choosing the padding. A false "ship" costs the
+ * disagreement on water, which is a couple of pixels; a false "world" costs it
+ * on the deck, which is the whole defect. So the box is generous.
+ *
+ * KNOWN ARTEFACT: within a frame this is still camera reprojection only.
+ * Anything displaced in its vertex shader (the FFT ocean surface, billowing
+ * canvas, flags, spray particles) reports the velocity of the point it happens
+ * to occupy, not its true motion. TAA's neighbourhood clamp turns that into a
+ * rejected history sample (slight aliasing) rather than a smear, which is the
+ * failure mode we want; motion blur simply under-blurs moving water. Fixing it
+ * properly needs an MRT velocity output from the ocean and ship materials.
  */
 export const VELOCITY_FRAG = /* glsl */ `
 precision highp float;
@@ -25,6 +54,12 @@ ${POST_COMMON}
 uniform sampler2D tDepth;
 uniform mat4 uInvViewProj;
 uniform mat4 uPrevViewProj;
+uniform mat4 uShipViewProj;   // uPrevViewProj * prevShip * curShip^-1
+uniform mat4 uWorldToShip;    // curShip^-1
+uniform vec3 uShipBoxMin;     // ship local, already padded
+uniform vec3 uShipBoxMax;
+uniform vec4 uShipWaterline;  // (minX, minZ, maxX, maxZ) of the hull, padded
+uniform float uSeaBand;       // metres either side of world sea level; 0 disables
 uniform vec3 uCamPos;
 uniform vec3 uPrevCamPos;
 uniform vec2 uJitter;
@@ -38,12 +73,21 @@ void main() {
   if (d >= 0.9999995) {
     // Sky: unprojecting the far plane is numerically hopeless and translation
     // parallax is irrelevant out there, so reproject the ray direction only.
+    // Always the world frame — the sky is the most world-static thing there is,
+    // and a ship-frame sky would offset the whole dome during a turn.
     vec3 dir = normalize(worldFromDepth(ndc, 0.5, uInvViewProj) - uCamPos) * 1000.0;
     vec4 pc = uPrevViewProj * vec4(uPrevCamPos + dir, 1.0);
     prevUv = (pc.xy / pc.w) * 0.5 + 0.5;
   } else {
     vec3 wp = worldFromDepth(ndc, d, uInvViewProj);
-    vec4 pc = uPrevViewProj * vec4(wp, 1.0);
+    vec3 lp = (uWorldToShip * vec4(wp, 1.0)).xyz;
+    bool inside = all(greaterThanEqual(lp, uShipBoxMin)) && all(lessThanEqual(lp, uShipBoxMax));
+    bool water = abs(wp.y) < uSeaBand
+      && (lp.x < uShipWaterline.x || lp.x > uShipWaterline.z
+       || lp.z < uShipWaterline.y || lp.z > uShipWaterline.w);
+    vec4 pc;
+    if (inside && !water) pc = uShipViewProj * vec4(wp, 1.0);
+    else pc = uPrevViewProj * vec4(wp, 1.0);
     prevUv = (pc.xy / pc.w) * 0.5 + 0.5;
   }
 

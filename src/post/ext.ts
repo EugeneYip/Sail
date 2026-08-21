@@ -24,6 +24,23 @@ export interface PostExt {
   /** Throw away TAA history on the next frame. Call after a teleport or cut. */
   resetHistory(): void;
   /**
+   * Reference frame the velocity buffer reprojects in. `perPixel` is the
+   * shipping behaviour and the only correct one — see `VELOCITY_FRAG`. The two
+   * globals exist because the per-pixel result was established by A/B against
+   * them, and a claim about the near field that cannot be re-measured is not
+   * worth much. Flipping this is also the rollback lever if the classifier ever
+   * misbehaves on new geometry.
+   */
+  velocityFrame: 'perPixel' | 'world' | 'ship';
+  /**
+   * Whether the near depth-of-field field fades in over the same CoC ramp the
+   * far field uses. False restores the old step at 1.2 px of circle of
+   * confusion — see `DOF_RAMP_GLSL`. Same purpose as `velocityFrame`: the change
+   * was established by A/B against the old behaviour, and both are looks
+   * someone may want to compare again. Toggling recompiles one pass.
+   */
+  dofNearRamp: boolean;
+  /**
    * Serialising per-pass GPU timing. Costs a `finish()` between every pass, so
    * never call it in normal play. Resolves with mean ms per pass.
    */

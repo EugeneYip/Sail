@@ -33,6 +33,35 @@ const SPLIT_TONE_AMOUNT = 0.16;
 /** Radiance ceiling in exposed units. +6 stops over white. */
 const FIREFLY_CLAMP = 64;
 
+/* ------------------------------------------------------------------ *
+ *  Ship-frame classifier for the velocity buffer. See VELOCITY_FRAG.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Metres of slack on the ship's geometric envelope, and the asymmetry is the
+ * reason for the number: the rigging and the sails are drawn from instance
+ * attributes and displaced in the vertex shader, so their CPU-side bounding
+ * boxes are unit templates and the envelope we can actually measure is the
+ * spars'. Canvas billows a metre or two outside the yard it hangs from and the
+ * ensign streams aft of its staff. 3 m covers that, and over-claiming is the
+ * cheap direction: a false "ship" costs a couple of pixels of velocity error on
+ * water, a false "world" costs 95 px on the deck.
+ */
+const SHIP_BOX_PAD_M = 3;
+/**
+ * Half-width of the band around world sea level in which a point outside the
+ * hull's waterline footprint is treated as water rather than as ship. Wide
+ * enough for a storm crest relative to a heaving hull; narrow enough that no
+ * part of the rig ever falls inside it.
+ */
+const SEA_BAND_M = 4;
+/**
+ * Frames between rebuilds of the envelope. The hull is static geometry, so this
+ * only has to catch a rebuilt or re-tiered ship; every-frame would be a traverse
+ * of the whole ship for nothing.
+ */
+const SHIP_BOX_REFRESH_FRAMES = 120;
+
 interface QualityBudget {
   dofTaps: number;
   mbTaps: number;
@@ -73,25 +102,29 @@ const BUDGET: Record<QualityTier, QualityBudget> = {
  * zeroed whenever TAA is off, so the subtraction is always safe.
  *
  * **Velocity.** Reprojection only: `worldFromDepth` of the current frame,
- * projected by the previous frame's unjittered view-projection. That is exact
- * for the camera and for anything rigid *in the frame it is reprojected in*, and
- * *wrong* for anything displaced in its vertex shader — the FFT ocean surface,
- * billowing canvas, flags, spray. Those report the velocity of the static point
- * they happen to occupy. The consequences are chosen rather than accidental:
+ * projected by the previous frame's unjittered view-projection — with the
+ * reference frame of that reprojection chosen *per pixel* between the world's
+ * and the ship's, because the eye is bolted to a moving ship and the two answers
+ * differ by 95 px at 0.8 m. See `VELOCITY_FRAG` for the classifier and step 5
+ * for why one buffer serves both consumers.
+ *
+ * Within a frame it is still *wrong* for anything displaced in its vertex shader
+ * — the FFT ocean surface, billowing canvas, flags, spray. Those report the
+ * velocity of the point they happen to occupy. The consequences are chosen
+ * rather than accidental:
  *
  *   - TAA rejects the history instead of smearing it, because the YCoCg
  *     variance clip sees the disagreement. The ocean therefore anti-aliases a
- *     little worse than the rigging does, and does not ghost.
+ *     little worse than the rigging does, and does not ghost. That holds because
+ *     the orbital error is under a pixel; do not generalise it. The variance clip
+ *     only protects you where the neighbourhood DISAGREES, and on a self-similar
+ *     surface a badly displaced history lands on plausible content, passes the
+ *     clip and blends in as a streak — which is exactly what the deck did when
+ *     its velocity was 95 px wrong.
  *   - Motion blur under-blurs a wave crest sliding under a static camera. At
  *     0.35 shutter and 2 m/s of orbital velocity that is under a pixel, so it
  *     is invisible; it would matter for a fast-moving object, and there are
  *     none.
- *
- * The buffer is written **twice** when motion blur is on, because the two
- * consumers need different reference frames: TAA wants world-static reprojection
- * (its history is last frame's screen), motion blur wants the ship's frame (its
- * near field is the ship, which is co-moving with the eye). See the block
- * comment at step 8.
  *
  * Fixing the vertex-displacement case properly needs an MRT velocity output from
  * the ocean and sail materials, which is a change in someone else's directory.
@@ -127,10 +160,14 @@ export class Pipeline {
   private prevCamPos = new THREE.Vector3();
   private curShip = new THREE.Matrix4();
   private prevShip = new THREE.Matrix4();
+  private worldToShip = new THREE.Matrix4();
   private shipDelta = new THREE.Matrix4();
-  private shipDeltaInv = new THREE.Matrix4();
-  private rigViewProj = new THREE.Matrix4();
-  private rigCamPos = new THREE.Vector3();
+  private shipViewProj = new THREE.Matrix4();
+  private shipBox = new THREE.Box3();
+  private shipBoxPart = new THREE.Box3();
+  private shipWaterlineBox = new THREE.Box3();
+  private shipBoxMat = new THREE.Matrix4();
+  private shipBoxFrame = -1e9;
   private unitScale = new THREE.Vector3(1, 1, 1);
   private lookBlend = { a: 0, b: 0, mix: 0 };
   private scatterColor = new THREE.Color();
@@ -161,6 +198,12 @@ export class Pipeline {
       tDepth: { value: null },
       uInvViewProj: { value: new THREE.Matrix4() },
       uPrevViewProj: { value: new THREE.Matrix4() },
+      uShipViewProj: { value: new THREE.Matrix4() },
+      uWorldToShip: { value: new THREE.Matrix4() },
+      uShipBoxMin: { value: new THREE.Vector3(-1, -1, -1) },
+      uShipBoxMax: { value: new THREE.Vector3(1, 1, 1) },
+      uShipWaterline: { value: new THREE.Vector4(-1, -1, 1, 1) },
+      uSeaBand: { value: SEA_BAND_M },
       uCamPos: { value: new THREE.Vector3() },
       uPrevCamPos: { value: new THREE.Vector3() },
       uJitter: { value: new THREE.Vector2() },
@@ -200,6 +243,8 @@ export class Pipeline {
       far: world.camera.far,
       exposure: 1,
       jitter: this.jitter.ndc,
+      velocityFrame: 'perPixel',
+      dofNearRamp: true,
       resetHistory: () => {
         this.aa.reset = true;
         this.hasPrevFrame = false;
@@ -362,25 +407,54 @@ export class Pipeline {
 
     const depthTex = scene.depthTexture ?? null;
 
-    // 5. velocity
+    /*
+     * 5. velocity — ONE buffer, with the reference frame chosen per pixel.
+     *
+     * TAA and motion blur used to want different answers here and the buffer was
+     * written twice: world reprojection for TAA, the ship's frame for motion
+     * blur. That was two half-right answers. Reprojection asks where a pixel's
+     * material point was last frame, and world-static content and
+     * ship-rigid content have genuinely different answers — but they are
+     * different PIXELS, so one buffer can carry both. `VELOCITY_FRAG` classifies
+     * them against the ship's geometric envelope; both consumers now read a
+     * buffer that is right everywhere, and the second full-screen write is gone.
+     *
+     * `uShipViewProj` composes the previous view-projection with
+     * `prevShip * curShip^-1`, which sends a point rigid with the ship to where
+     * that material point was on the previous frame's screen.
+     */
     this.curShip.compose(world.ship.position, world.ship.quaternion, this.unitScale);
+    this.worldToShip.copy(this.curShip).invert();
     const velRt =
       (this.aa.needsVelocity || s.motionBlur) && depthTex !== null
         ? this.targets.get('velocity', this.width, this.height, 'rg16f', { nearest: true })
         : null;
     let velocityTex: THREE.Texture | null = null;
     if (velRt && depthTex) {
+      this.updateShipEnvelope(world);
       const u = this.velocity.uniforms;
       u.tDepth.value = depthTex;
       (u.uInvViewProj.value as THREE.Matrix4).copy(this.invViewProj);
       (u.uCamPos.value as THREE.Vector3).setFromMatrixPosition(cam.matrixWorld);
       (u.uJitter.value as THREE.Vector2).copy(this.jitter.ndc);
-      if (this.aa.needsVelocity) {
-        this.writeVelocityFrame(this.prevViewProj, this.prevCamPos);
-        prof.begin('velocity');
-        this.velocity.render(r, velRt);
-        prof.end();
-      }
+      (u.uWorldToShip.value as THREE.Matrix4).copy(this.worldToShip);
+      this.shipDelta.copy(this.worldToShip).premultiply(this.prevShip);
+      this.shipViewProj.multiplyMatrices(
+        this.hasPrevFrame ? this.prevViewProj : this.curViewProj,
+        this.shipDelta,
+      );
+      (u.uPrevViewProj.value as THREE.Matrix4).copy(
+        this.hasPrevFrame ? this.prevViewProj : this.curViewProj,
+      );
+      (u.uShipViewProj.value as THREE.Matrix4).copy(
+        this.hasPrevFrame ? this.shipViewProj : this.curViewProj,
+      );
+      (u.uPrevCamPos.value as THREE.Vector3).copy(
+        this.hasPrevFrame ? this.prevCamPos : (u.uCamPos.value as THREE.Vector3),
+      );
+      prof.begin('velocity');
+      this.velocity.render(r, velRt);
+      prof.end();
       velocityTex = velRt.texture;
     }
 
@@ -407,7 +481,15 @@ export class Pipeline {
     // 7. depth of field
     if (s.depthOfField && depthTex) {
       prof.begin('dof');
-      const wrote = this.dof.render(r, world, curTex, depthTex, alt, budget.dofTaps);
+      const wrote = this.dof.render(
+        r,
+        world,
+        curTex,
+        depthTex,
+        alt,
+        budget.dofTaps,
+        this.ext.dofNearRamp,
+      );
       prof.end();
       if (wrote) {
         const t = cur;
@@ -417,43 +499,8 @@ export class Pipeline {
       }
     }
 
-    // 8. motion blur
+    // 8. motion blur — reads the same per-pixel buffer TAA does; see step 5.
     if (s.motionBlur && velRt && velocityTex && depthTex && this.hasPrevFrame) {
-      /*
-       * Motion blur measures velocity in the SHIP's frame; TAA measures it in
-       * the world's. They need different answers and the difference is not a
-       * refinement, it is the whole defect: reprojection assumes every pixel's
-       * world point stood still, so a point rigid with the ship reports the
-       * camera's own translation parallax, which grows as 1/depth. From the
-       * helm the deck is 0.5-1.5 m away and co-moving with the eye — its true
-       * screen motion is only the residual roll — yet the world buffer called it
-       * 30-100 px/frame and the blur smeared the deck while the rig 25 m away
-       * stayed sharp. Measured near/mid/far in DIAGNOSIS 46.
-       *
-       * Composing the previous view-projection with `prevShip * curShip^-1`
-       * reprojects each pixel to where that material point was last frame IF it
-       * is rigid with the ship, which every plank, gun and shroud is. World
-       * geometry then reports the ship's motion instead of its own — at 7 m/s
-       * and 60 fps that is 0.12 m, i.e. under a pixel past 80 m and under 3 px
-       * on the visible sea, so nothing that was blurring stops.
-       *
-       * `uPrevCamPos` gets the inverse delta so the sky branch, which anchors a
-       * 1 km ray at the previous camera position, lands back on that position
-       * with only the ship's rotation taken out of the direction.
-       *
-       * TAA keeps the world velocity untouched: its history is a screen-space
-       * buffer of last frame, so world-static content genuinely needs the world
-       * reprojection or it ghosts, and ghosting is a RUBRIC auto-fail.
-       */
-      this.shipDelta.copy(this.curShip).invert().premultiply(this.prevShip);
-      this.shipDeltaInv.copy(this.prevShip).invert().premultiply(this.curShip);
-      this.rigViewProj.multiplyMatrices(this.prevViewProj, this.shipDelta);
-      this.rigCamPos.copy(this.prevCamPos).applyMatrix4(this.shipDeltaInv);
-      this.writeVelocityFrame(this.rigViewProj, this.rigCamPos);
-      prof.begin('velocityRig');
-      this.velocity.render(r, velRt);
-      prof.end();
-
       prof.begin('motionBlur');
       this.motionBlur.render(
         r,
@@ -520,18 +567,76 @@ export class Pipeline {
   }
 
   /**
-   * Point the velocity pass at a previous frame. Before the first frame after a
-   * cut there is no previous frame, so the current one stands in and the buffer
-   * comes out zero rather than reprojecting against uninitialised state.
+   * The ship's geometric envelope in ship-local metres, for the velocity pass's
+   * per-pixel reference-frame decision.
+   *
+   * Two boxes come out of one traverse. The **envelope** is everything under
+   * `world.shipRoot`; that is the volume in which a pixel may be ship. The
+   * **waterline** box is the union of only those parts that reach below the
+   * design waterline — the copper, the topsides, the keel — which is a
+   * data-driven way of asking "how wide and how long is the hull where it meets
+   * the sea", with no knowledge of the ship module's dimension tables. Together
+   * they say: inside the envelope is ship, except at sea level outside the
+   * hull's own footprint, which is water.
+   *
+   * Read off the blackboard (`world.shipRoot`), so no subsystem is imported. The
+   * rigging, sails and ensign draw from instance attributes and are displaced in
+   * the vertex shader, so their CPU bounding boxes are unit templates and
+   * contribute nothing — the measurable envelope is the hull's and the spars',
+   * which is why `SHIP_BOX_PAD_M` exists.
    */
-  private writeVelocityFrame(prevViewProj: THREE.Matrix4, prevCamPos: THREE.Vector3): void {
+  private updateShipEnvelope(world: World): void {
+    const frame = world.time.frame;
+    if (frame - this.shipBoxFrame >= SHIP_BOX_REFRESH_FRAMES) {
+      this.shipBoxFrame = frame;
+      this.shipBox.makeEmpty();
+      this.shipWaterlineBox.makeEmpty();
+      world.shipRoot.traverse((o) => {
+        const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (!g) return;
+        if (!g.boundingBox) g.computeBoundingBox();
+        if (!g.boundingBox) return;
+        this.shipBoxPart.copy(g.boundingBox);
+        this.shipBoxPart.applyMatrix4(
+          this.shipBoxMat.multiplyMatrices(this.worldToShip, o.matrixWorld),
+        );
+        this.shipBox.union(this.shipBoxPart);
+        if (this.shipBoxPart.min.y < 0) this.shipWaterlineBox.union(this.shipBoxPart);
+      });
+      if (!this.shipBox.isEmpty()) {
+        this.shipBox.expandByScalar(SHIP_BOX_PAD_M);
+        this.shipWaterlineBox.expandByScalar(SHIP_BOX_PAD_M);
+      }
+    }
+
+    // Written every frame, not just on a rebuild, so the ext override takes
+    // effect on the next frame rather than at the next rebuild.
     const u = this.velocity.uniforms;
-    (u.uPrevViewProj.value as THREE.Matrix4).copy(
-      this.hasPrevFrame ? prevViewProj : this.curViewProj,
-    );
-    (u.uPrevCamPos.value as THREE.Vector3).copy(
-      this.hasPrevFrame ? prevCamPos : (u.uCamPos.value as THREE.Vector3),
-    );
+    const min = u.uShipBoxMin.value as THREE.Vector3;
+    const max = u.uShipBoxMax.value as THREE.Vector3;
+    const mode = this.ext.velocityFrame;
+    if (mode === 'world' || this.shipBox.isEmpty()) {
+      // An inverted box is never entered, so every pixel takes world.
+      min.setScalar(1e30);
+      max.setScalar(-1e30);
+      u.uSeaBand.value = 0;
+    } else if (mode === 'ship') {
+      min.setScalar(-1e30);
+      max.setScalar(1e30);
+      u.uSeaBand.value = 0;
+    } else {
+      min.copy(this.shipBox.min);
+      max.copy(this.shipBox.max);
+      // No part of the hull reaching the waterline means there is no footprint
+      // to protect and the sea-level exception could only misfire.
+      u.uSeaBand.value = this.shipWaterlineBox.isEmpty() ? 0 : SEA_BAND_M;
+      (u.uShipWaterline.value as THREE.Vector4).set(
+        this.shipWaterlineBox.min.x,
+        this.shipWaterlineBox.min.z,
+        this.shipWaterlineBox.max.x,
+        this.shipWaterlineBox.max.z,
+      );
+    }
   }
 
   /* ------------------------------------------------------------------ *

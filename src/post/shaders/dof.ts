@@ -31,6 +31,54 @@ float cocFromDepth(float depth) {
 }
 `;
 
+/**
+ * The blend-in ramp, shared by both fields.
+ *
+ * A gather at half resolution has a floor on how sharp its result can be: one
+ * bilinear tap of a half-res buffer is already a 2 px box, and the full-res
+ * upsample adds a 2 px triangle on top. So a pixel asking for 1.2 px of defocus
+ * receives about 2.6 px if its full-res colour is fully replaced. Both fields
+ * therefore have to fade in over the first couple of pixels of CoC instead of
+ * switching, or there is a visible depth at which blur turns on.
+ *
+ * The far field always did this. The near field did NOT: its alpha reached 1.0
+ * the instant the gather's own threshold let it run, so it was a **step** from 0
+ * to 1 at 1.2 px of CoC. Evaluating this arithmetic against the lens uniforms
+ * the camera rig actually publishes, rather than measuring it off a capture:
+ *
+ *     CoC px   near alpha, was   near alpha, now   far alpha
+ *      0.60          0.000             0.000         0.000
+ *      0.80          0.000             0.157         0.140
+ *      1.00          0.000             0.325         0.280
+ *      1.19          0.000             0.495         0.413
+ *      1.40          1.000             0.692         0.560
+ *      1.60          1.000             0.888         0.700
+ *      1.84          1.000             1.000         0.868
+ *      2.33          1.000             1.000         1.000
+ *
+ * 'DOF_RAMP_START_PX' is also the gather's own cut-off, so a field switches on
+ * and begins to ramp at the same CoC instead of at two different ones.
+ *
+ * Nothing at or beyond 2.03 px of CoC changes by a single bit, which is the whole
+ * of the near-field look that has been reviewed. Where the step sat in metres
+ * depends on the lens: 1.49 m at the helm (16.8 mm f/5.6 focused at 22 m), 1.64 m
+ * at the masthead, 3.28 m on the bowsprit at f/2.8, 5.85 m in orbit. At the helm
+ * that is closer than anything actually in frame — the nearest deck pixel is
+ * about 2.6 m — which is why ablating the whole DoF pass there measured 0.2-0.7
+ * sd and why this looked like nothing. On the bowsprit the jibboom, martingale
+ * and headsail tacks span it.
+ */
+const DOF_RAMP_GLSL = /* glsl */ `
+#ifndef DOF_RAMP
+#define DOF_RAMP
+#define DOF_RAMP_START_PX 0.6
+float cocRamp(float cocPx) { return saturate1((cocPx - DOF_RAMP_START_PX) * 0.7); }
+#endif
+#ifndef DOF_NEAR_RAMP
+#define DOF_NEAR_RAMP 1
+#endif
+`;
+
 /** Half-res colour + CoC. Alpha holds the signed CoC normalised by uMaxCoc. */
 export const DOF_PREPARE_FRAG = /* glsl */ `
 precision highp float;
@@ -92,11 +140,16 @@ void main() {
  * NEAR: search radius comes from the dilated near-CoC map, not from the centre
  * pixel, so out-of-focus foreground genuinely spreads *outward* over sharp
  * background instead of being clipped to its own silhouette (the classic
- * "foreground has a hard edge" DoF tell). Coverage accumulates into alpha.
+ * "foreground has a hard edge" DoF tell). Coverage accumulates into alpha, and
+ * each sample claims coverage in proportion to how defocused *it* is — see
+ * `DOF_RAMP_GLSL`. Keying the ramp to the covering sample rather than to this
+ * pixel's own CoC is what keeps the outward spread: a sharp background pixel
+ * under a strongly blurred foreground still gets fully covered.
  */
 export const DOF_GATHER_FRAG = /* glsl */ `
 precision highp float;
 ${GLSL.common}
+${DOF_RAMP_GLSL}
 uniform sampler2D tHalf;
 uniform sampler2D tNearMax;
 uniform vec2 uHalfTexel;
@@ -125,7 +178,13 @@ void main() {
   float searchPx = max(centre.a * uMaxCoc, 0.0) * 0.5;
 #endif
 
-  if (searchPx < 0.6) {
+  // A field switches on exactly where its ramp starts, so there is no CoC at
+  // which the combine asks for a blur the gather declined to compute.
+  float cutPx = DOF_RAMP_START_PX;
+#if defined(DOF_NEAR) && !DOF_NEAR_RAMP
+  cutPx = 1.2;   // the old near-field step; reachable via ext.post.dofNearRamp
+#endif
+  if (searchPx < cutPx * 0.5) {   // searchPx is a half-res radius
     gl_FragColor = vec4(centre.rgb, 0.0);
     return;
   }
@@ -153,7 +212,12 @@ void main() {
     float w = saturate1((reach - r) * 0.75 + 0.6);
     accum += s.rgb * w;
     wsum += w;
+#if defined(DOF_NEAR) && DOF_NEAR_RAMP
+    // 'reach' is half-res pixels; the ramp is in full-res ones.
+    coverage += w * cocRamp(reach * 2.0);
+#else
     coverage += w;
+#endif
   }
 
   vec3 col = wsum > 1e-4 ? accum / wsum : centre.rgb;
@@ -172,6 +236,7 @@ precision highp float;
 ${GLSL.common}
 ${POST_COMMON}
 ${COC_GLSL}
+${DOF_RAMP_GLSL}
 uniform sampler2D tColor;
 uniform sampler2D tDepth;
 uniform sampler2D tFar;
@@ -182,10 +247,10 @@ void main() {
   vec3 sharp = max(texture2D(tColor, vUv).rgb, vec3(0.0));
   float coc = cocFromDepth(texture2D(tDepth, vUv).x);
 
-  // Ramp the far field in over the first pixel and a half of CoC so there is no
-  // visible boundary where blur switches on.
-  float farAlpha = saturate1((coc - 0.6) * 0.7);
-  vec3 col = mix(sharp, texture2D(tFar, vUv).rgb, farAlpha);
+  // Both fields ramp in over the same pixel and a half of CoC, so there is no
+  // depth at which blur switches on. The near field's share of that ramp is
+  // already baked into its alpha by the gather.
+  vec3 col = mix(sharp, texture2D(tFar, vUv).rgb, cocRamp(coc));
 
   vec4 near = texture2D(tNear, vUv);
   col = mix(col, near.rgb, near.a);

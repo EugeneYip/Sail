@@ -4,10 +4,10 @@ import { POST_COMMON } from './common';
 /**
  * Velocity-buffer motion blur with a fixed exposure time.
  *
- * The velocity it is handed is measured in the SHIP's frame, not the world's —
- * see the block comment at step 8 of 'Pipeline.render'. Without that, the deck
- * under a first-person eye reports the camera's own translation parallax, which
- * grows as 1/depth, and the near field smears while the rig stays sharp.
+ * The velocity it is handed is measured in the SHIP's frame where the pixel is
+ * ship and the world's where it is not — see 'VELOCITY_FRAG'. Without that, the
+ * deck under a first-person eye reports the camera's own translation parallax,
+ * which grows as 1/depth, and the near field smears while the rig stays sharp.
  *
  * The blur direction comes from the dilated *tile* max velocity rather than the
  * pixel's own, which is what lets a fast object smear over static background
