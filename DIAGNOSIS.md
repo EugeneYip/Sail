@@ -2183,3 +2183,72 @@ horizontal ribbing again — the axis fix may have gone in inverted.
 being right. Main stays publishable, so a change that trades one defect for another
 goes on a branch with the diagnosis written down, not onto main. Both halves stay
 recoverable and the owner can still push at any time.
+
+## 54. The sail shadows were black because canvas was an opaque occluder
+
+The defect that survived three dispatches. Neither of its two causes is any of the
+three things everyone reaches for first — map resolution, filter width and caster
+tessellation **all measured null**.
+
+**Canvas is a lampshade.** Removing the sails from the shadow map takes the darkest
+decile over the ship from 56 to 111 sRGB, against 123 with no shadow at all — so
+canvas casts about **nine tenths** of the shadow that lands on this ship. Flax duck
+passes about a third of the light, so a sail's shadow on another sail belongs at
+roughly a quarter of full sun; as an opaque occluder it was at 5%.
+
+**The depth test was quantised coarser than its own bias.** VSM keeps its two depth
+moments in a half-float RG target — three creates both `map` and `mapPass` with
+`HalfFloatType`, `WebGLShadowMap.js:229` and `:393` — so the mean every comparison is
+made against carries 11 significant bits. The range was `[1, 680]` to hold a ship 60 m
+across, and casters landed at window-space z 0.52–0.72 where the half-float step is
+2⁻¹¹: a quantum of **0.33 m**, against a total bias budget of 0.16 m of caster push
+plus the receiver bias. The comparison the whole shadow rested on was coarser than the
+slack protecting it.
+
+Two things shrink that and the fix uses both. The obvious one is a shorter range. The
+less obvious one is keeping the **values** small, because a half-float step halves with
+every binade — so `near` is tight to the front of the ship and `far` carries all the
+margin, putting the ship in the near half of the range and buying another bit for
+nothing. Quantum now 0.02–0.08 m. And `shadow.bias` is derived from metres, because as
+a window-space fraction it silently changed meaning every time the range did.
+
+### Where the transmission correction belongs
+First attempt: a per-**light** `shadow.intensity` floor. It lifted the canvas shadows
+and lifted the honest shadows of hull, deck and spars with them. Now on the
+**receiver** — the sail material already computes a shadow term for backlit
+translucency, so this is the same translucency seen from the other side. It goes into
+`indirectDiffuse` rather than three's direct-light path, because the shadow multiply
+and the accumulation both happen inside `lights_fragment_begin` and dividing the result
+back out is unstable as the shadow term approaches zero.
+
+Still an approximation: assuming every occluder is canvas is wrong for the tenth that
+is spar and top, which now read a third too light. Smaller error, smaller area, and the
+alternative is a per-caster opacity a shadow map has nowhere to put.
+
+### No measured improvement is claimed, and that is the finding
+Three captures of the same scene on **identical code** gave a deep-shadow share of
+22.11 / 28.69 / 26.99 % over the hull and 11.31 / 12.91 / 11.77 % over the sails —
+spreads of **6.58** and **1.60** points. The differences between the two versions were
+5.07 and 1.28. Both inside the noise.
+
+The confound is cloud shadow: every scene ran at cloudCover 0.3–0.5 and the field
+advects with wall-clock time, so two captures are two different cloud fields on the
+same sails. `capture.mjs` now has a **`shadow` scene at cloudCover 0**, and it fixes
+the instrument: three runs give sail p10 111.1 / 112.5 / 111.6 and p50
+178.6 / 177.8 / 177.8, spreads of **1.4** and **0.8** sRGB against 9.0 before. A
+percentile is now usable as evidence; a share statistic still wants a paired run,
+because 2.1 points of spread survive as wave phase and TAA convergence.
+
+So the case for the committed version is that it is **correct by construction**, not
+that it photographed better. That distinction is worth stating rather than blurring.
+
+## 55. My own checker caught me committing the recurring build-breaker
+
+Writing the sail transmission term, I put backticks around `lights_fragment_begin` and
+`sh` inside a GLSL template comment — the exact mistake `AGENTS.md` rule 3 exists for,
+which has broken this build more times than anything else. `check-glsl` named both
+lines and the parse error before I ran anything else.
+
+Worth recording plainly: the rule is not that agents make this mistake. Everyone
+working in these files makes it, including me, in the very commit that fixed something
+else. The checker pays for itself on its author.
