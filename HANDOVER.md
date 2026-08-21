@@ -140,6 +140,17 @@ this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
 - `npm run preflight` gates on the GLSL parse now, so it will refuse a tree that will
   not build. It deliberately does **not** run `tsc` (24 s), and says so.
 
+**Instruments that lie, and what to use instead.** `world.ext.post.profile()` does
+**not** report GPU time here — `gl.finish()` does not block under ANGLE-on-Metal, so it
+times CPU submission (2.31–2.61 ms against frames of 24.8–55.8), and an earlier revision
+of the build contract recommended it. To price a change, **ablate it and measure at two
+render scales**: a saving equal at 1.115 and 3.327 Mpx is fixed cost. `drawCalls`
+undercounted by half until §65 — 138 real, 68 of them in the module-update phase — so any
+draw-call figure quoted before that is wrong. The `rivals` counter matches command lines
+and can count your own shells, so `CONTENDED` is sometimes a false alarm, though
+contention can only *add* time. And a single run landing exactly on the harness's rAF
+floor is the one reading never to build on (§66a).
+
 **One trap worth knowing before you measure anything about shadows.**
 `castShadow = false` is a **no-op under VSM** for any object that also *receives*
 shadow — `WebGLShadowMap.js:515` reads
@@ -148,6 +159,16 @@ receive, so removing them from the shadow map that way does nothing, and the
 experiment returns a convincing null. Two agents walked into this.
 
 **Known open, roughly in priority order.**
+0. **The banded horizon, and the ship's missing sky fill** — the two defects a blind
+   critic ranked above everything I was tracking, neither of which was on this list
+   (§62, §63). The far-field ocean dies before the horizon and the horizon is a stack of
+   hard-edged bands, in **all eight frames** of a four-scene sheet across two builds:
+   in `orbit` at x 0–520 a hard charcoal bar with crisp edges and a ΔL 47 step across
+   1–2 px; in `noon` the ocean between y 328 and 356 is 4–6 flat stripes with no wave
+   detail. And the ship receives **no sky fill**: 16.1% of the hull band is exactly
+   RGB(0,0,0) under a sky at luminance 137 — which is why a well-proportioned hull reads
+   as a paper cut-out, *and* why sail shadows read as black stickers even though §56
+   proved their penumbra width correct. The width was right; the fill was missing.
 1. ~~**The "stutter" is a 4× pixel overload**~~ — **CLOSED, on main** (§57, §59). It was
    never a stutter: on a Retina panel the backing store is 3200×1800 = 5.76 Mpx against
    the 1.44 Mpx every measurement here used. `capture.mjs --dpr 2 --adaptive` reproduces
