@@ -33,14 +33,43 @@ const INTERACTION_WORLD_SIZE = 128;
 const MAX_RIPPLES = 384;
 const MAX_STAMPS = 128;
 
+/**
+ * Edge length of the persistent field, per tier. The field always spans
+ * `WAKE_WORLD_SIZE`, so this is really a texel size: 1024 is 1 m/texel.
+ *
+ * ULTRA IS 1024, NOT 1536, AND THAT IS A MEASURED TRADE. The whole target is
+ * decayed by one pass every frame and the foam ribbon is re-stamped into it, so
+ * the cost is quadratic in this number and **none of it scales with the backing
+ * store**. Paired A/B at 1600x900 dpr 2, ultra, noon, on a quiet box
+ * (`.tmp/fixedsplit.mjs --only wake1024,wake768,wake512 --paired 4`) puts
+ * 1536 -> 1024 at **1.75 ms of FIXED frame cost** — 22 per cent of the whole
+ * 7.9 ms non-pixel term the engine pays before a pixel of the main render, and
+ * the second largest single item in it after the sun's shadow map. 768 and 512
+ * buy only 0.45 ms more between them, so 1024 is the knee of the curve.
+ *
+ * What it costs is the texel of the PERSISTENT field only, 0.67 m -> 1.0 m, and
+ * that field carries nothing sub-metre in the first place. Two reasons, both
+ * already in the code:
+ *   - the fine near-hull detail is not here. It is in `interaction`, 128 m over
+ *     `interactionRes` = 0.25 m/texel, which this does not touch.
+ *   - the foam channel is a COVERAGE, and `ocean/shaders/surface.ts` thresholds
+ *     the ocean's own high-frequency field against it
+ *     ('linstep(thr - wThr, thr + wThr, decide)') rather than drawing it as an
+ *     alpha, exactly as the contract in `index.ts` demands. The wake's texel
+ *     therefore sets the envelope, never the edge.
+ * What is left in the persistent field is the Kelvin pattern, whose divergent
+ * arms are tens of metres apart, and `high` has always shipped 1024. See
+ * DIAGNOSIS 64 for the whole fixed/variable split this came out of, and for the
+ * measured null: the same 1300x540 wake crop reads a high-frequency energy of
+ * 6.049 at 1024 against 5.974 at 1536, 1.3 per cent apart and in the wrong
+ * direction for a resolution loss.
+ */
 function wakeRes(quality: string): number {
   switch (quality) {
     case 'low':
       return 512;
     case 'medium':
       return 768;
-    case 'ultra':
-      return 1536;
     default:
       return 1024;
   }
