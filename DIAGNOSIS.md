@@ -4334,3 +4334,172 @@ clamp*. That is the third time on this project that a calibration agreeing at on
 concealed something, and the pattern is now explicit enough to be a rule: **agreement at
 one operating point is not validation; check a second point that exercises a different
 branch.**
+
+## 75. §67's dead far field: the footprint is 3 m by 514 m, and `Nlow` was answering with one number
+
+§62's top defect was two things in one sentence. The hard-edged bands are fixed (§67).
+The other half — **the far-field ocean dies before the horizon** — is now fixed from
+~900 m inwards, and the reason it cannot be fixed further out is itself a measurement.
+
+### The lever §67 left on the table is the flicker, wearing a disguise
+
+§67 proposed replacing `Nlow` (cascade 0 only, the 0.5–2 km swell) with the full
+multi-cascade `slope`, and measured that it lifts per-row mean `|dL/dx|`. It does. It
+also **is** §17C. Same process, sim clock pinned, camera static, every non-ocean module's
+`update()` a no-op, so the wave phase and cloud field are identical across variants
+(`.tmp/hznlow.mjs`). Splitting the lever by specular path, `orbit`:
+
+| variant | mean \|dL/dx\| y 576–660 | flick 600–1000 m | flick 1–3 km |
+|---|---|---|---|
+| null | 2.068 | 0.16 | 0.26 |
+| `Ns` gets the raw slope (sun lobe) | 2.142 | 0.20 | 0.28 |
+| `Nmac` gets the raw slope (reflection) | 2.263 | 0.29 | 0.27 |
+| null, repeated | 2.067 | 0.16 | 0.26 |
+
+and in `noon`, on §17C's own instrument and in its own scene, the raw-slope reflection
+normal reproduces §17C's number to the digit: temporal std of the per-row band signal
+**0.38** beyond 3 km, 0.32 at 1–3 km, 0.22 at 600–1000 m, against a null of
+0.23/0.08/0.11. §17C recorded "0.38 with the micro normal against 0.10 with the macro
+normal". So the detail that lever buys past a kilometre is the grazing rectification of
+`dot(Nmac, V)` — the owner's flickering horizontal streaks, sold back as texture.
+
+### The real cause: one isotropic LOD for a footprint that is not square
+
+At grazing incidence a pixel covers `pxWorld` **across** the view ray and
+`pxWorld / |V.y|` **along** it — 3.2 m by 514 m at four kilometres. The fragment
+sampler's explicit LOD uses `pxWorld` for both, and `lostVar` — the bookkeeping that
+turns unresolvable slope variance into roughness — is evaluated at `pxWorld` for both.
+One footprint, two very different answers, and only one was being asked for.
+
+Which axis matters is not a judgement call. To first order
+
+    dot(N, V)  ∝  V.y − dot(slope, normalize(V.xz))
+
+so the **along-ray** slope component is the entire content of `dot(N, V)`, and the
+**across-ray** component does not appear in it at all. The along axis is therefore
+exactly the one that rectifies `dot(N, V)` negative and flickers (§17C), and the across
+axis is exactly the one whose detail a 3.2 m footprint can still place. `Nlow` now keeps
+the across component whole and cuts the along component by `kAlong`, the fraction of the
+along-axis slope rms that survives the along-ray footprint — the same `lostVar`
+schedule, asked a second time at `pxAlong`:
+
+```glsl
+float pxAlong = pxWorld / max(abs(V.y), 1e-3);
+// ... alongLost accumulates the same smoothstep per cascade, at pxAlong
+float kAlong = sqrt(clamp(max(slopeVarTotal - alongLost, 0.0) / carried, 0.0, 1.0));
+vec2 vDir = V.xz / max(length(V.xz), 1e-5);
+vec2 lowSlope = slope - vDir * (dot(slope, vDir) * (1.0 - kAlong));
+```
+
+Cascade 0 was not merely a coarse approximation to this, it was the wrong shape: it holds
+**3.6% of the variance the footprint still carries** at 4 km (1.01e-4 against 2.82e-3),
+and its 32 m texel spans nineteen pixels there, so it can make a gradient *down* the
+screen and nothing at all *across* it. That is why the defect showed up in a per-row
+`|dL/dx|` statistic and not in the column profile.
+
+### §67's hazard, discharged: the compensation was the same expression with kAlong = 0
+
+`alphaR` exists to add back the variance that blending N toward `Nlow` removes. Blending
+now scales the along axis by `kRef` and leaves the across axis alone, and slope variance
+splits evenly between the axes, so what the blend removes is **half** of `carried` times
+`(1 - kRef²)`:
+
+```glsl
+float kRef = mix(1.0, kAlong, macro);
+float alphaR = clamp(max(alpha, sqrt(lostVar + 0.5 * carried * (1.0 - kRef * kRef))), 0.02, 0.95);
+```
+
+The old form is this expression with `kAlong` pinned to 0 and the 0.5 dropped — i.e. it
+assumed the blend flattened *both* axes completely, which is what blending toward
+cascade 0 very nearly did. That is why the old pairing was self-consistent, and it is why
+keeping it would now count the across-ray half twice. The sun lobe's wide regime gets the
+same treatment at its own blend weight (`kSun = mix(1.0, kAlong, glit * 0.85)`) in place
+of `aWide = uSlopeRms`.
+
+**The re-derivation is provably inert, and that is worth stating.** Landed `Nlow` with the
+old alpha bookkeeping measures 2.209 against 2.216 for the correct one, on a null spread
+of 0.004 — indistinguishable. The reason is that `uSlopeVarTail` is 47% (sea state 7) to
+86% (sea state 3) of the total slope variance and no blend can reach it, so both forms
+land within 2% of `uSlopeRms`. It is a correctness statement, not a visible change; the
+visible change is entirely `Nlow`.
+
+### What it buys, and what it costs
+
+Landed source as the baseline, the change patched back out inside the same process:
+
+| scene | mean \|dL/dx\| before → after | null spread |
+|---|---|---|
+| `orbit` y 576–660 | 2.063 → **2.232** | 0.017 |
+| `noon` y 330–440 | 2.305 → **2.696** | 0.004 |
+| `golden` y 330–440 | 2.348 → **2.816** | 0.009 |
+| `storm` y 340–450 | 3.118 → 3.166 | 0.033 — inert, 5.2 km visibility |
+
+Row sd rises with it (`orbit` 5.34 → 6.27), and the column profile does not regress:
+`orbit` total `|d2L|` 19.9 → 16.7 with the discontinuity count 4 → 3, i.e. §67's first
+half is untouched or slightly better.
+
+The cost is one band, and it is the same term as the gain — reverting only the reflection
+path removes **both** (`golden`: 2.816 → 2.340 and flick 0.25 → 0.11), while reverting
+only the sun path changes neither (2.809, 0.25). There is no split that keeps one without
+the other.
+
+| `golden`, temporal std | before | after | raw slope (§17C's defect) |
+|---|---|---|---|
+| beyond 1000 m | 0.10 / 0.14 | 0.09 / 0.14 | 0.29 / 0.17 |
+| 600–1000 m | 0.05 | 0.10 | 0.41 |
+| 240–600 m | 0.10 | 0.25 | 0.36 |
+| 130–240 m | 0.22 | 0.26 | 0.25 |
+
+So the band §17C measured and fixed — beyond 600 m — is **preserved**, and the cost lands
+at 240–600 m, where the after value (0.25) is the level the *same frame's* 130–240 m band
+already sits at (0.22–0.26) rather than the level of the defect (0.36). It is honest
+detail, not aliasing: at 400 m in `golden` the along-ray footprint is 7.8 m and the waves
+it admits are 8–16 m, which the pixel genuinely resolves. `noon` says the same at 0.16 →
+0.21. The owner's own band, 130–240 m, moves 0.22 → 0.26 against a raw-slope 0.25 — i.e.
+the macro blend was already doing almost nothing there.
+
+### Why the last kilometre cannot be fixed this way
+
+The gain stops at ~900 m, and `kAlong` says why. For the along axis to carry the
+cascades that make pixel-scale structure, `pxAlong` has to be inside their pixel fades —
+9 m for cascade 2, 0.56 m for cascade 3. At 2 km in `orbit`, `pxAlong` is **460 m**:
+every cascade is fully faded and `kAlong` is 0, so the only along-ray slope left anywhere
+in the schedule is the swell, which varies over 300 px and cannot make a gradient. Capping
+the along footprint was priced too — at the dominant wavelength (76 m) `kAlong` is 0.148,
+at 32x `pxWorld` it is 0.174 — because at 2 km `carried` is held by cascades 2 and 3,
+whose fades end at 9 m. **Past ~900 m there is no along-ray placement left to render, and
+no slope filter can invent one.** §67 saw the same wall from the other side: its lever
+"does not help the top six rows".
+
+What is actually missing there is not a filtered slope but **grazing self-occlusion**: at
+0.7° the sea hides its own troughs behind its own crests, so the visible surface is a
+biased sample whose structure is the crest lines, and which crest is visible varies at the
+wave scale — a few pixels. That is a different mechanism (horizon mapping, or a masking
+term that carries local phase), not a normal-map question. The other route is the one §67
+already named: **earth curvature**. With the eye at 25.6 m the true horizon is 18.0 km and
+the clipmap draws to 49 km, so rows y 575–577 in `orbit` are sea that should not be
+visible at all; deleting them deletes most of the dead band. It collides with the skirt's
+rise-to-eye-height, and that interaction is the whole job.
+
+### Two instrument notes
+
+- **`masthead` is not a usable bed for this instrument.** Repeated nulls read 0.06 and
+  0.50 on the same statistic in the same process. The frame is 90% rigging and sails
+  (see the capture) and the rows that bucket as "sea" by depth are mast — the camera and
+  its spars move even with every non-ocean `update()` stubbed. §67's `masthead` 25.2 →
+  25.3 was measuring rigging, not sea.
+- **flick.mjs's row bands are the `noon` chase camera's, hardcoded.** In `orbit` the
+  horizon is at y 576, so its "far >600m" band (rows 352–392) is *sky*, and every variant
+  reads the same 0.03 there. `.tmp/hznlow.mjs` buckets rows by their own world distance
+  instead. Any earlier `orbit` or `helm` reading off those fixed bands is void.
+
+### 75a. This landed inside another agent's commit
+
+The source change is on `main` inside **`def7ecc` "fix(rendering): refine ocean horizon
+and ship materials"**, which also carries `src/ship/materials/*` and `src/ui/styles.css`
+— a blanket add from the shared tree, the pattern AGENTS.md's standing note is about. I
+did not write that commit and have not rewritten it: other agents' work is in it and this
+tree is shared. Recorded here so `git log` for `src/ocean/shaders/surface.ts` is not
+misleading. The committed content **is** the measured content — the before/after table
+above was re-run against the committed file after the fact and reproduces (`orbit`
+2.063 → 2.232, null spread 0.017).
