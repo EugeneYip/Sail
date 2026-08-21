@@ -3564,3 +3564,44 @@ temporal std re-measured with the sim clock pinned.
   while in shadow only the blue body survives, so the patch differs in *hue* as well as
   value. Physically that is right; whether 23:1 is right is the sky's call, not the
   ocean's, and changing it moves the sails too.
+
+### 67a. Independent confirmation, and the trade is the right way round
+
+Measured myself on a fresh `orbit` capture, x 0–520 across the horizon:
+
+| | tot \|d2L\| | discontinuities | max \|dL\| |
+|---|---|---|---|
+| as the critic found it | 55.9 | 6 | **10.51** |
+| now | **17.9** | **1** | **2.32** |
+
+(The agent reported 13.4 / 0 / 1.99 on its own frozen frame; the small difference is a
+different cloud field and a one-row-different window. The charcoal bar with crisp edges
+is gone and the crop shows a soft gradient.)
+
+**And the trade it declared is the right way round, which is worth stating explicitly.**
+It removed a source of far-field variation to remove the staircase — row sd at y 580 fell
+9.32 → 3.86 — and said so rather than hiding it. A blind critic ranked the *bands* as the
+single worst thing in the image, so trading some far-field texture for their removal is
+the correct direction. The residual dead band is now the visible problem, and it is
+already diagnosed with a measured lever and a named hazard, which is a far better place
+to be than where this started.
+
+**Two causes for the dead far field, and they interact:**
+1. `lowSlope` is written only in the **cascade-0 iteration**, so `Nlow` knows only the
+   0.5–2 km swell, while `macro` saturates past a few hundred metres — so *both*
+   specular paths run on the same coarse field. Measured lever: a full multi-cascade
+   `slope` raises per-row mean `|dL/dx|` to 2.22–2.65 over y 588–660, against a dither
+   floor of 1.99–2.19. **Hazard:** `alphaR`'s variance compensation would then
+   double-count, and this is the path §17C's flicker measurement lives on.
+2. **No earth curvature.** True horizon at a 25.6 m eye is **18.0 km**; the clipmap
+   draws to **49 km**. Rows y 575–577 are sea that should not be visible at all, which
+   is most of the compressed dead band and why sea/sky ΔL at the horizon is 0–1.3.
+   Collides with the skirt's rise-to-eye-height.
+
+### The critic's vertical column does not reproduce
+Detrended sky-band against sea-band column correlation, four scenes: **−0.011, −0.330,
++0.219, −0.109**. A depth-ignoring screen-space composite would give about **+1**. The
+only strong column deviations in frame are the ship's masts. Most likely what the critic
+saw is `cloudAirShadow` marching the *same* 26 km shadow map through the air at
+`CLOUD_SHAFT_STEPS` = 10 — one sample per 2.6 km — for crepuscular rays: one shadow seen
+twice, not a compositing bug. Recorded as **not reproduced** rather than as fixed.
