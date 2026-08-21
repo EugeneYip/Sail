@@ -163,19 +163,25 @@ function parseArgs(argv) {
     if (!a.startsWith('--')) continue;
     const key = a.slice(2);
     const next = argv[i + 1];
-    if (key === 'console') {
-      out.console = true;
-      continue;
-    }
-    if (key === 'allow-contention') {
-      out.allowContention = true;
+    /*
+     * Value-less flags are handled BEFORE the "does a value follow?" guard, or
+     * the guard eats them: `--adaptive --wait-quiet 300` silently dropped
+     * `--adaptive` and measured with the controller off, at renderScale 1,
+     * reporting p50 88.6 ms — the cost of 5.76 Mpx — as if it were an adaptive
+     * run. `--dpr 2 --adaptive` worked only because nothing followed it, which
+     * is the worst kind of instrument bug: correct in the one form the docs
+     * happen to show.
+     */
+    if (['console', 'allow-contention', 'adaptive'].includes(key)) {
+      if (key === 'console') out.console = true;
+      else if (key === 'allow-contention') out.allowContention = true;
+      else out.adaptive = true;
       continue;
     }
     if (next === undefined || next.startsWith('--')) continue;
     i++;
     if (key === 'wait-quiet') out.waitQuiet = Number(next);
     else if (['w', 'h', 'settle', 'timeout', 'dpr'].includes(key)) out[key] = Number(next);
-    else if (key === 'adaptive') { out.adaptive = true; i -= 1; }
     else out[key] = next;
   }
   return out;
