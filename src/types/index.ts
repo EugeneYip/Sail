@@ -250,7 +250,7 @@ export interface Settings {
   quality: QualityTier;
   /** Device pixel ratio cap. */
   maxPixelRatio: number;
-  /** Internal render scale multiplier, 0.5..1.0 — adaptive. */
+  /** Internal render scale multiplier, 0.25..1.0 — adaptive. See `core/AdaptiveResolution`. */
   renderScale: number;
   /** FFT cascade resolution, 128 | 256 | 512. */
   oceanResolution: number;
