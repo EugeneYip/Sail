@@ -133,10 +133,23 @@ deliberately **no canonical tag** until the deploy URL is known.
 
    Two consequences for you. A sub-60 reading is **not evidence you broke
    something** — do not spend a session hunting a regression that is the
-   standing state of the engine. And the highest-leverage perf work is the
-   **fixed** 9.44 ms, not the per-pixel slope, because cutting it raises the
-   resolution the controller can afford on every machine and at every tier.
-   If you do regress fps, fix it; but quote the pixel count with the number.
+   standing state of the engine. And if you do regress fps, fix it; but quote
+   the pixel count with the number.
+
+   **How to price a change, and what not to use.** Do NOT use
+   `world.ext.post.profile()` for frame cost: it is built on a `gl.finish()`
+   between passes, `finish()` does not block under ANGLE-on-Metal, and its
+   passes sum to 2.31–2.61 ms against frames costing 24.8–55.8 — so it reports
+   **CPU submission**, not GPU time. An earlier version of this file effectively
+   recommended it; that was wrong.
+
+   What works: **ablate one candidate and measure the saving at two or three
+   render scales.** A saving that is the same at 1.115 and 3.327 Mpx is fixed
+   cost; one that scales with pixels is not. Use paired A/B in short alternating
+   bursts, because the baseline's own spread at the low rung is ±1 ms, the size
+   of the effects. The fixed term is only 7.9–9.4 ms in total and **6.3–7.6 ms
+   of it is CPU**, so both terms of the model have to move — see
+   `DIAGNOSIS.md` §66 for the per-pass split and what is still on the table.
 6. **Scene-linear radiance everywhere.** Materials output linear values; the
    post stack owns tonemapping and the sRGB encode. Never call
    `convertSRGBToLinear` on a value that is already linear, and always call it
