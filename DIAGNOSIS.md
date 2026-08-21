@@ -2252,3 +2252,37 @@ lines and the parse error before I ran anything else.
 Worth recording plainly: the rule is not that agents make this mistake. Everyone
 working in these files makes it, including me, in the very commit that fixed something
 else. The checker pays for itself on its author.
+
+### 54a. Correction: what the before/after actually shows
+
+With the zero-cloud scene making percentiles repeatable to ~1 sRGB, I took a real
+before/after against `880d0bc` in a scratch worktree. It does **not** say what my
+commit message said.
+
+| | sail p10 | p50 | deep-shadow share | hard edges (3 px step > 20 sRGB) |
+|---|---|---|---|---|
+| before ×2 | 140.2, 145.1 | 179.9, 180.9 | 15.96%, 13.87% | 12.88%, 12.64% |
+| after ×3 | 111.1, 112.5, 111.6 | 178.6, 177.8, 177.8 | 21.00%, 21.26%, 23.11% | 12.88%, 11.63%, 12.46% |
+
+The shadows are **darker and more extensive** — which is the depth-quantum fix
+recovering shadow the 0.33 m quantum was losing, and is a correctness win. But
+**edge hardness did not measurably change**: 12.6–12.9% before, 11.6–12.9% after.
+
+I had written that the shadows "read as mast-and-rigging shaped rather than as slabs."
+That is a visual impression and I should not have stated it as a result. Two caveats
+on my own metric, both of which cut against using it at all: it counts any steep step
+among sail pixels, so it is contaminated by sail-against-sail edges and by rope
+shadows — and the rigging fix in `1cd65b5` made the ropes *crisper*, which pushes this
+number the wrong way for an unrelated reason.
+
+**And the biggest visible change in that pair is not the shadows at all — it is the
+canvas.** Before, the cloth carries a heavy dark granular speckle across every sail;
+after, it is clean with vertical seams. That was measured properly at the generator
+(48.4° → 4.9° RMS slope, anisotropy 0.48 → 0.09, dominant wavelength across the chord
+landing on the 610 mm bolt), and it is very likely that a good part of what I had been
+calling "blotchy shadow" for two days was the popcorn normal map, not the shadow map.
+
+**Still open, honestly stated:** whether sail shadow *edges* are now soft enough. No
+instrument here can answer it — an edge-hardness statistic needs to be restricted to
+actual shadow boundaries, which means segmenting the shadow rather than thresholding
+gradients over the whole sail.
