@@ -72,9 +72,18 @@ export class SunLight {
     if (size === this.lastMapSize) return;
     this.lastMapSize = size;
     this.sun.shadow.mapSize.setScalar(size);
-    // Force three to rebuild the map at the new resolution.
+    // Force three to rebuild the map at the new resolution. `mapPass` — the VSM
+    // blur's ping-pong target — must go with it: `WebGLShadowMap.VSMPass` only
+    // rebuilds that target when it is null, so nulling `map` alone left the two
+    // blur passes running at the OLD size against a new map, and every shadow in
+    // the scene was wrong for the rest of the session. Latent at the default
+    // tiers, because high and ultra are both 2048 and the early-out above then
+    // never lets the size change; it bites the moment a player moves the quality
+    // slider off 1024.
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
+    this.sun.shadow.mapPass?.dispose();
+    this.sun.shadow.mapPass = null;
     this.sun.shadow.needsUpdate = true;
   }
 
