@@ -175,6 +175,7 @@ function parseArgs(argv) {
     i++;
     if (key === 'wait-quiet') out.waitQuiet = Number(next);
     else if (['w', 'h', 'settle', 'timeout', 'dpr'].includes(key)) out[key] = Number(next);
+    else if (key === 'adaptive') { out.adaptive = true; i -= 1; }
     else out[key] = next;
   }
   return out;
@@ -458,15 +459,30 @@ for (const name of sceneNames) {
   const scene = SCENES[name];
 
   await page.evaluate(
-    ({ scene, quality }) => {
+    ({ scene, quality, adaptive }) => {
       const eng = window.__leeward;
       const w = eng.world;
       if (quality && w.settings.quality !== quality) {
         w.settings.quality = quality;
       }
-      // Deterministic capture: pin resolution, no adaptive drift.
-      w.settings.adaptiveResolution = false;
-      w.settings.renderScale = 1;
+      /*
+       * Deterministic capture: pin resolution, no adaptive drift.
+       *
+       * `--adaptive` opts out, and it exists because this default hid the
+       * owner's stutter for the entire project. The backing store is
+       * `min(devicePixelRatio, maxPixelRatio) * renderScale * cssSize`, and
+       * `--dpr` defaults to 1 — so every measurement taken here has been
+       * 1600x900 = 1.44 Mpx, while a Retina panel at the same window size is
+       * 3200x1800 = 5.76 Mpx. Four times the pixels, with the adaptive
+       * controller that exists to handle it switched off. Neither half of the
+       * owner's actual condition was ever in the measurement.
+       *
+       * Pinning is still the right default for A/B work: an adaptive controller
+       * changes the pixel count mid-run, which makes two runs incomparable. Use
+       * `--dpr 2 --adaptive` to reproduce what a player on a Retina panel gets.
+       */
+      w.settings.adaptiveResolution = adaptive;
+      if (!adaptive) w.settings.renderScale = 1;
       w.settings.showHud = true;
       Object.assign(w.env, scene.env ?? {});
       Object.assign(w.cam, scene.cam ?? {});
@@ -475,7 +491,7 @@ for (const name of sceneNames) {
       if (scene.showcase) w.bus.emit('world:showcase', scene.showcase);
       w.bus.emit('capture:scene', scene);
     },
-    { scene, quality: args.quality },
+    { scene, quality: args.quality, adaptive: !!args.adaptive },
   );
 
   /*
