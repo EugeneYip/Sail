@@ -2373,10 +2373,11 @@ It does not move the edge width:
 | pinned ×4 | 2.51–2.65 | 3.48–3.62 | 5.90–6.36 | 9.13–10.10 | 10.2–14.4% | 14.8–17.0% |
 | free ×4 | 2.38–2.55 | 3.40–3.60 | 5.29–6.16 | 8.70–9.58 | 11.8–14.8% | 12.2–15.7% |
 
-p50 sits inside the null. p75 and p90 are at or just **below** the null's low end in two of
-the four runs — if anything slightly *harder*, which is the wrong direction for the
-hypothesis. Against a control that swings p50 from 2.52 to 13.64, this is a null with
-teeth.
+p50 sits inside the null in all four. The upper tail leans the other way: p75 is below the
+null's low end in three of four runs (5.29, 5.46, 5.88 against a null floor of 5.90) and
+p90 in two (8.70, 8.90 against 9.13). So if the free leech does anything at all it makes
+the edges slightly **harder**, which is the wrong direction for the hypothesis. Against a
+control that swings p50 from 2.52 to 13.64, this is a null with teeth.
 
 Nor is the boundary more bowed. Straight-chain counts (rms < 0.7 px over ≥ 60 px extent)
 are 7–13 pinned against 11–14 free; longest-chain rms 0.69–3.45 against 0.62–2.28. The
