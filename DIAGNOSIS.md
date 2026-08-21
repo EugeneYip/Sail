@@ -4504,7 +4504,7 @@ misleading. The committed content **is** the measured content — the before/aft
 above was re-run against the committed file after the fact and reproduces (`orbit`
 2.063 → 2.232, null spread 0.017).
 
-## 75. §67's last item: earth curvature is in, and the skirt's hack was generalised rather than removed
+## 76. §67's last item: earth curvature is in, and the skirt's hack was generalised rather than removed
 
 §67 closed with "there is no earth curvature" and "that interaction is the whole job".
 Both halves held up. The drop is landed, the skirt's rise-to-eye-height is now the
