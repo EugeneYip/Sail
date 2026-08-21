@@ -148,21 +148,30 @@ receive, so removing them from the shadow map that way does nothing, and the
 experiment returns a convincing null. Two agents walked into this.
 
 **Known open, roughly in priority order.**
-1. **The "stutter" is a 4× pixel overload, and it is half fixed** (§57). It was never
-   a stutter: on a Retina panel the backing store is 3200×1800 = 5.76 Mpx against the
-   1.44 Mpx every measurement here used, and at `--dpr 2` the raw cost is p25 82.9 ms
-   with **3% of frames on time** — about 12 fps. `capture.mjs --dpr 2 --adaptive` now
-   reproduces it; pinning stays the default because an adaptive controller makes two
-   runs incomparable.
-   The controller rewrite on `wip/adaptive-resolution` takes the **title screen from
-   15 fps to 45 fps** — an opening cap of 2 Mpx and a boot grace counted in
-   milliseconds, since a frame-counted grace is unbounded in time exactly when the
-   frame rate is worst. But it over-corrects the steady state to 960×540 at ~157 fps
-   where the old one settled at 1984×1116 and ~63 fps, so it is not on main.
-   **The blocker is the instrument: headless Chromium has no vsync**, so the
-   hit-rate this controller steers by reads ≈1.0 at any scale. Verify the control law
-   against synthetic vsync-quantised period streams (`.tmp/adaptsim.mjs`), and
-   validate that against a fixed-scale sweep at `--dpr 2`.
+1. ~~**The "stutter" is a 4× pixel overload**~~ — **CLOSED, on main** (§57, §59). It was
+   never a stutter: on a Retina panel the backing store is 3200×1800 = 5.76 Mpx against
+   the 1.44 Mpx every measurement here used. `capture.mjs --dpr 2 --adaptive` reproduces
+   the owner's condition; pinning stays the default because an adaptive controller makes
+   two runs incomparable.
+   The control law now lives in `src/core/AdaptiveResolution.ts` as a **pure function of
+   frame periods**, because a vsync-driven controller cannot be tested by rendering here:
+   this headless Chromium is a 60 Hz **rate limiter**, `period ≈ max(16.67, cost)`, where a
+   panel gives `ceil(cost/16.67)·16.67`. `.tmp/adaptsim.mjs` **imports that module** and
+   drives it with a measured fixed-scale sweep, quantised as a display would; it agrees
+   with a brute-force search of the ladder in nine machine/panel/target combinations,
+   including two this box cannot produce at all.
+   Two things to carry forward. **Frame cost is `9.44 ms + 13.83 ms/Mpx` of backing store
+   and does not depend on the panel's dpr** — so the old law's 0.62 floor was a clamp that
+   happened to be right at dpr 1 (0.55 Mpx) and unreachable at dpr 2 (2.21 Mpx = 36 ms),
+   and the "regression" that kept the fix off a branch was a unit error. And **57% of a
+   16.67 ms budget is spent before the first pixel**, so resolution can only ever attack
+   the rest: `capture.mjs` on a quiet box reads noon **p50 28.5 ms at dpr 1 scale 1**, so
+   the "60 fps at 1600×900 at ultra" bar is not met by the engine at either dpr. That is
+   the next performance item, and it is not a controller problem.
+   Still open, and stated plainly: **the steady state cannot be verified on real
+   hardware from here.** The simulation's jitter model is this box's, with other agents in
+   it. And whether `maxPixelRatio: 2` should mean 2× device pixels at all is a visual
+   judgement nobody has made — §59H has the argument and the numbers.
 2. ~~**Sail shadow edge hardness.**~~ **CLOSED — the edges are already the right
    width** (§56). The sun subtends 0.53°, so the true penumbra for the 10–40 m
    caster separations on this rig is 1.6–6.5 px at 17.5 px/m; measured p25 2.5,
@@ -196,7 +205,10 @@ experiment returns a convincing null. Two agents walked into this.
   the 610 mm bolt), but its diagnosis is worth reading.
 - `wip/free-leech` — **retired.** Disproven in §56 with a physics argument, so leaving
   it would only cost someone a session.
-- `wip/adaptive-resolution` — see open item 1. Half a fix, and the good half is real.
+- `wip/adaptive-resolution` — **superseded and mergeable-into-nothing.** Its boot fix (an
+  opening cap of 2 Mpx, a boot grace in milliseconds) is on main; its steady state was
+  measured against the old law in the wrong units. Keep it only for the commit message,
+  which is an honest record of a half-fix.
 
 **The rule these branches encode:** a stopped agent's work being green (`tsc` 0,
 `check-glsl` clean) is not the same as being right. Main stays publishable, so a change
