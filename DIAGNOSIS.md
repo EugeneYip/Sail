@@ -2186,9 +2186,17 @@ recoverable and the owner can still push at any time.
 
 ## 54. The sail shadows were black because canvas was an opaque occluder
 
+> **Corrected by §56 — read that first.** The "all measured null" below is **wrong for
+> two of the three**. With an instrument that has a positive control, filter width
+> moves edge width p50 by **5.4×** and a 512 map moves it 3.48 → 8.42 px. The null came
+> from a metric whose own author had documented it as blind to a 3.6× radius change,
+> and I repeated it as a finding in this file and in three agent briefs. Only caster
+> tessellation survives as a genuine null. The two causes named below are still real
+> and still fixed; it is the exclusions that were unearned.
+
 The defect that survived three dispatches. Neither of its two causes is any of the
 three things everyone reaches for first — map resolution, filter width and caster
-tessellation **all measured null**.
+tessellation all measured null (**but see the correction above**).
 
 **Canvas is a lampshade.** Removing the sails from the shadow map takes the darkest
 decile over the ship from 56 to 111 sRGB, against 123 with no shadow at all — so
