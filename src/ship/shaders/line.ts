@@ -11,8 +11,9 @@
  *     over these spans and much cheaper), scalloped per bay for ratlines
  *   - wind sway with an envelope that is exactly zero at both ends and scales
  *     with the unsupported span
- *   - sub-pixel lines are widened to ~1.4 px and their alpha reduced to match,
- *     so a shroud at 80 m is a faint continuous line instead of aliased dashes
+ *   - the ribbon is drawn a pixel wider than the rope on each side and the
+ *     fragment shader computes the rope's EXACT area inside each pixel, so a
+ *     shroud at 80 m fades instead of flickering (`lwLineCoverage` below)
  *
  * It is a patched MeshStandardMaterial rather than a hand-written shader so the
  * ropes are lit by exactly the same lights, fog and shadows as the hull.
@@ -21,6 +22,7 @@
 import * as THREE from 'three';
 import { PARTS_DECL } from './parts';
 import { sailDecl } from './sail';
+import { lwFloat } from '../../util/glsl';
 import { GLSL_COMMON_SAFE, type PartUniforms } from '../materials/materials';
 import type { SharedUniforms } from '../../types';
 import type { TexSet } from '../materials/textures';
@@ -52,7 +54,7 @@ export interface LineMatUniforms {
  * `iBind.x == 0` is the ordinary straight-and-sagging rope, which is all but a
  * few dozen of the nine hundred instances.
  */
-const COMMON = (sailCount: number): string => /* glsl */ `
+const COMMON = (sailCount: number, seg: number): string => /* glsl */ `
 attribute vec3 iA;
 attribute vec3 iB;
 attribute vec4 iParam;   // sag, radius, bays, kind (0 = tarred, 1 = manila)
@@ -64,25 +66,62 @@ uniform float uViewportH;
 uniform vec3 uWind;
 uniform float uWindSpeed;
 uniform float uTime;
-varying float vSide;
-varying float vFade;
+varying float vEdgePx;
+varying float vRPx;
 varying vec3 vRightL;
 varying vec3 vViewL;
 varying float vKind;
 ${PARTS_DECL}
 ${sailDecl(sailCount, false)}
 
+/**
+ * Most scallops a ${seg}-segment ribbon can carry.
+ *
+ * A lower gang has 8 or 9 shrouds, so a ratline seized across it has 7 or 8
+ * bays — and the ribbon has ${seg} segments, i.e. 1.5 samples per bay. A
+ * per-bay sawtooth sampled below Nyquist is not a scallop, it is per-vertex
+ * noise, and it is what made every ratline a ragged polyline with a random
+ * 0-3 cm kink at each of its thirteen vertices. Four samples a droop is the
+ * least that reads as a curve, so the count is clamped there: a slack chain
+ * over three bays instead of a scallop over eight, which is at least a shape.
+ */
+const float LW_MAX_BAYS = ${lwFloat(Math.max(1, Math.floor(seg / 4)))};
+
 vec3 ropePoint(vec3 A, vec3 B, float s, float sag, float bays, vec3 windOff){
   vec3 P = mix(A, B, s);
   float e;
   if (bays > 0.5) {
-    float sp = fract(s * bays);
+    float sp = fract(s * min(bays, LW_MAX_BAYS));
     e = sp * (1.0 - sp) * 4.0;
   } else {
     e = s * (1.0 - s) * 4.0;
   }
   P.y -= sag * e;
   return P + windOff * e;
+}
+
+/**
+ * Exact area of a strip of half-width 'r' inside a one-pixel box centred 'd'
+ * from the strip's axis. Both in pixels.
+ *
+ * This is the whole rigging antialiasing story, so it is worth being precise
+ * about why the obvious alternative does not work. The renderer asks for NO
+ * MSAA ('Engine.ts': we do our own AA in post), so a ribbon narrower than a
+ * pixel rasterises with BINARY coverage — it lands on one pixel or on two, and
+ * which one flips as the camera moves a fraction of a pixel. Two hundred
+ * shrouds and ratlines doing that at once is the crawling black net two
+ * observers reported. Widening the quad to 1.4 px and scaling its alpha by the
+ * true width, which is what this did before, conserves the average but leaves
+ * the EDGE hard, so the flicker survives at reduced amplitude; and the 0.25
+ * alpha floor it clamped to made a 0.2 px ratline four times too dark, which is
+ * the other half of the same report.
+ *
+ * The integral of this over d is 2r for every r, so total ink is preserved at
+ * any distance and no floor is needed: a rope thinner than a pixel simply gets
+ * fainter, which is what a rope thinner than a pixel does.
+ */
+float lwLineCoverage(float d, float r) {
+  return clamp(min(d + 0.5, r) - max(d - 0.5, -r), 0.0, 1.0);
 }
 
 /** A point on the cloth, 'standoff' metres proud of its forward face. */
@@ -118,6 +157,7 @@ export function makeLineMaterial(
   extra: LineMatUniforms,
   sailU: SailUniforms,
   sailCount: number,
+  seg: number,
 ): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({
     map: tex.map,
@@ -125,7 +165,18 @@ export function makeLineMaterial(
     roughness: 0.86,
     metalness: 0,
     transparent: true,
-    depthWrite: true,
+    // NO DEPTH WRITE, and this is the second half of the crawling-net fix.
+    //
+    // Every rope in the rig is one instance in one draw call, so where two of
+    // them cross they blend in buffer order — and with depthWrite on, whichever
+    // was drawn first also wrote depth and DISCARDED the other. A ratline gang
+    // crosses its own shrouds a hundred times, so a hundred crossings each
+    // either dropped a line or doubled it depending on which happened to be
+    // nearer, and that decision flips as the camera moves. Depth TESTING is
+    // untouched, so the hull, the spars and the sails still occlude the rig
+    // correctly; all that is given up is rope-over-rope occlusion, and a
+    // tarred rope at full coverage blends to the same near-black anyway.
+    depthWrite: false,
     side: THREE.DoubleSide,
     dithering: true,
   });
@@ -143,7 +194,7 @@ export function makeLineMaterial(
 
     shader.vertexShader = /* glsl */ `
       ${GLSL_COMMON_SAFE}
-      ${COMMON(sailCount)}
+      ${COMMON(sailCount, seg)}
       ${shader.vertexShader
         .replace('#include <common>', '#include <common>')
         .replace(
@@ -193,17 +244,22 @@ export function makeLineMaterial(
             float rl = length(right);
             right = rl > 1e-3 ? right / rl : normalize(cross(tangent, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
 
-            // Widen sub-pixel lines and drop their alpha to keep the coverage.
+            // The ribbon is drawn one pixel WIDER than the rope on each side and
+            // the fragment shader takes the exact box-filter coverage of the
+            // rope's own strip inside it — see 'lwLineCoverage'. 'right' is
+            // perpendicular to the view direction by construction, so it lies
+            // in the screen plane and 'ppm' converts it to pixels exactly.
             float viewZ = -(modelViewMatrix * vec4(P, 1.0)).z;
             float ppm = projectionMatrix[1][1] * 0.5 * uViewportH / max(0.08, viewZ);
-            float px = iParam.y * 2.0 * ppm;
-            float grow = px < 1.4 ? 1.4 / max(px, 1e-3) : 1.0;
-            vFade = px < 1.4 ? max(0.25, px / 1.4) : 1.0;
+            float rPx = iParam.y * ppm;
+            float wPx = max(rPx + 1.0, 1.0);
+            float grow = wPx / max(rPx, 1e-4);
 
             vPosL = P + right * side * iParam.y * grow;
+            vEdgePx = side * wPx;
+            vRPx = rPx;
             vRightL = right;
             vViewL = viewL;
-            vSide = side;
             vNormalL = normalize(right * side * 0.85 + viewL * 0.6);
             vLineAlong = s * span * 2.6;
       `,
@@ -212,12 +268,15 @@ export function makeLineMaterial(
 
     shader.fragmentShader = /* glsl */ `
       ${GLSL_COMMON_SAFE}
-      varying float vSide;
-      varying float vFade;
+      varying float vEdgePx;
+      varying float vRPx;
       varying vec3 vRightL;
       varying vec3 vViewL;
       varying float vKind;
       uniform float uLineFade;
+      float lwLineCoverage(float d, float r) {
+        return clamp(min(d + 0.5, r) - max(d - 0.5, -r), 0.0, 1.0);
+      }
       ${shader.fragmentShader
         .replace(
           '#include <normal_fragment_begin>',
@@ -225,7 +284,14 @@ export function makeLineMaterial(
           {
             // Reconstruct a cylindrical normal across the ribbon so a rope
             // reads round rather than as a flat tape.
-            float c = clamp(vSide, -1.0, 1.0);
+            //
+            // Faded out below a two-pixel rope, because a pixel that contains
+            // the WHOLE cylinder has one honest normal — the average one, which
+            // faces the camera. Sweeping a full -1..1 cylinder across two pixels
+            // of ribbon instead puts a second high-contrast signal at the
+            // sampling limit, on top of the coverage problem, and it was
+            // brightening one side of every distant shroud.
+            float c = clamp(vEdgePx / max(vRPx, 1e-3), -1.0, 1.0) * clamp(vRPx, 0.0, 1.0);
             vec3 nl = normalize(vRightL * c * 0.94 + vViewL * sqrt(max(0.04, 1.0 - c * c * 0.88)));
             normal = normalize((viewMatrix * vec4(nl, 0.0)).xyz);
             nonPerturbedNormal = normal;
@@ -238,11 +304,11 @@ export function makeLineMaterial(
           vec3 tar = vec3(0.055, 0.052, 0.05);
           vec3 manila = vec3(0.46, 0.38, 0.25);
           diffuseColor.rgb *= mix(tar, manila, vKind) * 2.0;
-          diffuseColor.a *= vFade * uLineFade;`,
+          diffuseColor.a *= lwLineCoverage(vEdgePx, vRPx) * uLineFade;`,
         )}
     `;
   };
-  m.customProgramCacheKey = () => 'ship-line';
+  m.customProgramCacheKey = () => `ship-line-${seg}`;
   return m;
 }
 

@@ -31,6 +31,31 @@ import {
 import type { Member } from './rigEnvelope';
 import { JACKSTAY_STANDOFF_M } from './sails';
 
+/**
+ * Ratline radius, metres — and why it moved.
+ *
+ * It was 0.021, i.e. a 42 mm rope. Real ratline stuff is 6 to 12 mm, so the
+ * ratlines were drawn three to four times heavier than the light line they are,
+ * and very nearly as heavy as the 73 mm lower shrouds they are seized to. That
+ * is a large part of the owner's "black aliased net": with the coverage model in
+ * `shaders/line.ts` now preserving a line's total ink exactly, ink is decided by
+ * the geometry, and a gang of ratlines four times too fat lays four times too
+ * much of it.
+ *
+ * Measured with a runtime resize of this one family (`.tmp/rigcrawl.mjs`, which
+ * rewrites `iParam.y` in place for every instance tagged `ratline*`, so nothing
+ * else in the frame moves): over the lower fore gang at helm range, halving it
+ * takes the share of pixels below 35% of the local sky from 13.70% to 12.37%
+ * and total ink from 0.2879 to 0.2810 — and the net stops reading as chain-link,
+ * because the ratlines are finally LIGHTER than the shrouds that cross them.
+ *
+ * Halved rather than quartered on purpose: a ratline carries a seizing at every
+ * shroud and a topman's boot, so it reads a little heavier than its own
+ * diameter. 21 mm is still generous. Going to the true 10 mm is one number.
+ */
+const RATLINE_R_M = 0.0105;
+const RATLINE_TOPMAST_R_M = 0.0095;
+
 /** How far abaft the yard's surface the footropes are slung, metres. */
 const FOOTROPE_ABAFT_M = 0.34;
 /** Length of the brace pendant leading aft off the yardarm, metres. */
@@ -190,7 +215,7 @@ export function buildRigging(
     uLineFade: { value: 1 },
   };
   const mat = makeLineMaterial(
-    world.uniforms, parts, rope, extra, sailU, world.ship.sails.length,
+    world.uniforms, parts, rope, extra, sailU, world.ship.sails.length, seg,
   );
   const mesh = new THREE.Mesh(g, mat);
   mesh.name = 'ship-rigging';
@@ -270,7 +295,7 @@ function shrouds(L: LineSet, m: MastFrame, chan: THREE.Vector3[], quality: numbe
       _a.lerpVectors(pts[0], top[0], fa);
       _b.lerpVectors(pts[nLower - 1], top[nLower - 1], fa);
       // Sag scallops per bay: `bays` makes the shader repeat the droop.
-      L.add(_a, _b, 0.028, 0.021, TAR, nLower - 1);
+      L.add(_a, _b, 0.028, RATLINE_R_M, TAR, nLower - 1);
     }
 
     L.family('futtock');
@@ -313,7 +338,7 @@ function shrouds(L: LineSet, m: MastFrame, chan: THREE.Vector3[], quality: numbe
         if (f > 0.9) break;
         _c.lerpVectors(a0, b0, f);
         _d.lerpVectors(a1, b1, f);
-        L.add(_c, _d, 0.022, 0.019, TAR, nTop - 1);
+        L.add(_c, _d, 0.022, RATLINE_TOPMAST_R_M, TAR, nTop - 1);
       }
     }
 
