@@ -3782,3 +3782,65 @@ population is 52% smaller and still 93.8% `ship-black`.
   the painted/tarred ironwork `AGENTS.md` describes and `metal` should be near 0. Both are
   defensible; 0.9 metalness at 1% reflectance is not, and it is why an iron fitting has no
   gradient across it.
+
+### 68a. My hypothesis was wrong, and the real cause was better
+
+I briefed §63 as a missing ambient/sky-fill term. **It was not.** The ship does receive
+sky fill, at the right magnitude, and that was ruled out properly before anything was
+changed: `scene.environment` is bound and `envMap`/`envMapIntensity` are live in the
+compiled program of all twelve ship materials; the probe's radiance integrates to
+0.207/0.310/0.474 against a CPU `uSkyColor` of 0.187/0.254/0.442; and forcing
+`ship-black`'s albedo to white with the sun pinned off puts the hull at p50 **94**. AO
+was a null. Nothing was eating the ambient.
+
+**The real cause:** `grep -rn "uFogColor\|uVisibility" src/ship` returned **nothing**, and
+`scene.fog` is never set. `src/ocean` hazes the sea, `src/world` hazes islands and other
+vessels, `src/vfx` hazes spray and rain — **the player's own ship was the only opaque
+thing in the frame rendered as if the air in front of it were vacuum.** At the orbit
+camera's 141 m the omitted in-scatter is `t = 1.71% × uFogColor 0.632 = 1.08e-2` of
+radiance, against **3.5e-4** measured on the shaded topsides. **Thirty times the whole
+signal.**
+
+Verified independently on a fresh capture:
+
+| | below L=4 | exactly (0,0,0) |
+|---|---|---|
+| `orbit` before | 31.9% | 17.0% — **11,203 px** |
+| `orbit` after | 22.4% | 0.1% — **66 px** |
+| `shadow` before | 26.0% | 0.2% |
+| `shadow` after | **0.2%** | **0.0% — 0 px** |
+
+`ship-black`'s own pixels went from 55.2% below L=4 to 0.1%. **Cost: free** — both call
+sites replaced by no-ops and re-measured, and the ablated build is if anything slower.
+The crop shows tonal variation in the planking, a legible gunport stripe and ports, and
+the bulwark separating from the topsides, where before it was one flat silhouette.
+
+**Only the yards shared the cause.** Attribution by flashing one family's emissive at a
+time: 93.6% of the exactly-black pixels were `ship-black`, and the yards are `oak` at
+130–150 m getting the same term. **The belaying pins are not** — at 2–6 m aerial is 1e-4.
+Their problem is modelling: `build/deck.ts::buildBelayingPins` emits all 25+ as the same
+axis-aligned `box(0.035, 0.2, 0.035)`, no cant, no jitter, no coil. Still open.
+
+### And a correction to my own synthesis in §63
+I wrote that the missing fill was why sail shadows read as "hard-edged black stickers".
+**That does not reproduce on `main`**: on the `shadow` scene the sail area measures p10 =
+101 and p0.1 = 10.4 *before* this fix, with visible penumbra. So the critic's observation
+was specific to `orbit` — where the hull clipped and the vignette bites — not a general
+truth about the shadows, and §56's conclusion needed no revision after all. I had chained
+two findings that share a symptom and not a cause.
+
+### The residual is in the composite, not the ship: ~3.5 octaves of extra shadow crush
+Calibrated by injecting a known additive radiance through `material.emissive`: **1e-2 of
+radiance renders as sRGB code 1** (4.3e-2 → 6, 1.7e-1 → 36). AgX alone predicts **13**
+for 1e-2, and AgX alone is right at the top — sky 0.28 predicts 129 against a measured
+137. So about **3.5 octaves of extra crush live in the composite's shadow response**, and
+the `cos⁴` vignette is the prime suspect since the hull sits low and left of centre. That
+is `src/post`, it affects every dark pixel in every frame, and it is the largest remaining
+tonal defect.
+
+### Two things filed in passing
+- A dead `for (const t of ...) { void t; }` loop in `materials.ts` under a comment that
+  claims it does something.
+- **The metals are authored with dielectric albedos.** `makeIron` gives wrought iron an
+  F0 of ~**0.013**, an order of magnitude below any real metal — which is why an iron
+  fitting has no gradient across it and reads as dark plastic.
