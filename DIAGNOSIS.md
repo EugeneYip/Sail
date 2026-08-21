@@ -4275,3 +4275,62 @@ until you vary the key too.
   still carries more colour spread than dusk's does, and this fix does not explain why.
 - The residual `m HF` of 0.47–0.57 at dusk and night against `orbit`'s 0.40 is small but not
   zero. It was not chased.
+
+### 73a. Confirmed independently, and the bug class is closed rather than the instance
+
+My own measurement on fresh captures, sail region, same metric as §71a:
+
+| scene | chroma p50 | **neighbour jump** | mean L |
+|---|---|---|---|
+| dusk before → after | 18.0 → **12.0** | **4.78 → 1.93** | 24.3 → 18.1 |
+| night before → after | 26.0 → **19.0** | **4.89 → 2.67** | 29.9 → 24.1 |
+
+The neighbour jump is the speckle statistic — spatial incoherence — and it falls 2.5× at
+dusk and 1.8× at night. The crop shows smooth cloth with the rigging, the ensign's stripes
+and the stars all legible where there was purple and green pepper.
+
+**The bug class is closed, not just this instance.** `grep -rn dithering src/` now returns
+only explanatory notes — four of them, at every site that could plausibly set the flag
+again — and nothing in `src/ocean`, `src/world`, `src/vfx` or `src/post` sets it. That
+matters because the mechanism is general: **`dithering_fragment` is the last chunk in
+three's fragment shader and assumes the renderer ends with a tonemap and an sRGB encode.**
+Under non-negotiable 6 both of those are no-ops here, so its ±(0.5, −0.5, 0.5)/255 of
+*display code* became ±0.00196 of **scene-linear radiance**, per channel, green opposed to
+red and blue — magenta/green pepper by construction. Any three flag that assumes a
+display-referred output is suspect in this engine for the same reason.
+
+The amplifier was not in the material: a **fixed absolute** quantity was injected upstream
+of auto-exposure, whose applied multiplier is 0.151 at `orbit` and **22.63** at dusk and
+night — 7.2 stops apart. And the negative half of the swing clipped at the floor, so it was
+**rectifying**: most of a stop of the sails' night luminance was noise.
+
+### Two corrections it made to my own briefs
+- **The environment probe was innocent** — my leading candidate. It is already
+  `HalfFloatType`, and removing it *entirely* moves no high-frequency statistic at any
+  light level (at `orbit`, magenta-green HF 0.40 → 0.42 while mean L 118 → 102). It
+  supplies about half the sails' dusk light, smoothly.
+- **"A near-white sail should have chroma near zero" is wrong**, and it was my premise in
+  §71a. That test only holds under a neutral illuminant. Measured in one frame, the dusk
+  sail's chromaticity is (0.250, 0.276, 0.474) against a sky of (0.258, 0.298, 0.444): the
+  cloth is the colour of the sky lighting it. Residual chroma of 82–88% of mean L is
+  therefore *correct*, and the thing that was wrong was the incoherence, not the amount.
+  (The dither was also biasing the mean hue toward magenta, so the flag was a colour error
+  as well as a noise source.)
+
+## 74. Auto-exposure is pinned to its ceiling at dusk and night
+
+`expStateA.r` reads **4.4999990** against a `MAX_GAIN_STOPS` of **4.5**, and the applied
+multiplier is 22.627417 — 2^4.5 to seven digits. **Blue hour and night are already as
+bright as this engine will make them**, and removing the dither took ~0.9 stops of
+rectified noise off the sails, which is honest but leaves them dark.
+
+So "the sails are dark at blue hour" is now a real question about the sky's fill on canvas
+and about that ceiling, and **it cannot be answered by putting noise back**.
+
+**And §72's 2.14-stop calibration gap is scene-dependent, not constant.** It reproduces
+exactly on `orbit` (0.665 estimated against 0.151 applied) but at dusk and night the
+estimate and the applied value agree to seven digits — *because both sit on the same
+clamp*. That is the third time on this project that a calibration agreeing at one end has
+concealed something, and the pattern is now explicit enough to be a rule: **agreement at
+one operating point is not validation; check a second point that exercises a different
+branch.**
