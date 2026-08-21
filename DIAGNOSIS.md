@@ -2746,3 +2746,108 @@ frame costs **29.4 ms**. To hold 60 fps there, the 9.44 ms fixed term plus 19.9 
 cost has to fit in 16.67: either the pixel term drops ~40% or the fixed term drops ~13 ms.
 **That is the concrete performance target**, and it is the same one AGENTS has always
 stated; §59D is why the controller cannot reach it for you.
+
+## 60. Boston was a quarter turn out, and four measurement instruments were wrong before the code was
+
+Direction 3's two weak spots, both flagged by the agent that built the content: vessels
+that read at 350 m and thinly inside 200 m, and a Boston that was a town on a headland
+rather than recognisably Boston. Fixed. But the reason this took a whole session is that
+**four separate instruments gave confident wrong answers first**, and that pattern is worth
+more than the fix.
+
+### A. The landfall was rendered a quarter turn out, and one number said so
+
+`vesselVert` maps town-local +Z to `(-sin θ, cos θ)` of the instance heading. `Boston.place`
+set `θ = b + PI/2`, which makes local +Z **perpendicular to the line of sight** — so the
+900 m depth axis was what spread across the frame and the 2600 m long axis ran away from
+the eye. Consequences, all of them the reported symptom:
+
+| | before | after (`θ = b + PI`) |
+|---|---|---|
+| frontage her 2600 m long axis subtends at 8 km | **1 px** | **235 px** |
+| skyline columns | 112 (the depth axis) | 240 |
+| profile shape | one broad lump | central peak + saddle + shoulder either side |
+
+Three hills laid out along `x` were stacked one behind another. The Trimountain could not
+read as three humps because it was never presented as three of anything. **A landfall
+2600 m wide measuring 1 px is a fact, not an impression** — and it took ten minutes to get,
+after two hours of trying to judge a hill profile by eye from crops.
+
+### B. The exaggeration was in the wrong place, so it bought nothing
+
+`BEACON_H = 90` against a real 45-60 m was already documented as a deliberate lie. But
+`inland = z / 700` made the ground rise monotonically to the BACK of the peninsula, and the
+hill was multiplied by `0.35 + 0.65 * inland`. So at the town's own depth the ridge was 57 m,
+not 90 — two thirds of the exaggeration was spent on ground behind everything built on it,
+and the State House at z=300 stood against **hillside**: only the top 9 m of a 52 m landmark
+had sky behind it. A silhouette is the whole of what a town is at 8 km.
+
+Crest the ridge over the town and let it fall away inland and the same 90 m buys 11 px of
+skyline instead of 7, with the dome breaking it. **The size of a lie matters less than where
+you spend it.**
+
+### C. Four instruments, four wrong answers, in order
+
+Every one of these produced a plausible number that pointed the wrong way.
+
+1. **A hull box guessed from the vertex buffer.** `rail = maxY * 0.62` took the MASTHEAD for
+   the rail and reported the liner's freeboard as 36 m / 160 px. The real number is 3.75 m
+   and 16 px. Fixed by putting the spec on `mesh.userData`.
+2. **A ladder up her side that ignored heel and pitch.** Worth up to 0.6 m of vertical error
+   on a 1.65 m freeboard — most of a hull. The stripe never appeared in the profile at all,
+   and the profile looked *plausible*: a smooth ramp, which is what an ambient gradient up a
+   hull side looks like. Two hours were spent believing the stripe did not render.
+3. **"Keep the warm pixels" to reject sea and sky.** A black hull lit almost entirely by sky
+   ambient comes out faintly BLUE, so this discarded every reference level; the fallback then
+   picked the stripe's own level as its own reference and the contrast measured **zero in both
+   builds**. Reject bright blue instead.
+4. **A fixed reference offset above and below the band.** The change under test WIDENS the
+   band, so a reference 0.4 m off centre sat on bare paint in one build and on the stripe in
+   the other — and widening the stripe made the measurement go **down**. A straight-line fit
+   through the non-stripe levels then had no levels left to fit on a two-stripe hull and
+   returned zero. Only a local peak-to-floor window inside half a metre works, and it only
+   works where that window spans several pixels.
+
+**And the box was full of the wrong ship.** Every per-vessel measurement box was part-filled
+by the PLAYER's own rig, which is identical in both builds: the chase camera puts her across
+the middle 0.38 rad of frame, so a stationed hull inside that is literally behind her. That
+dilution is why the first four rounds of rig-ink deltas came out at a few per cent. Hiding
+her (`world.shipRoot.visible = false`) is what finally made the signal visible.
+
+### D. What the numbers say once the instruments work
+
+The claim that the coverage filter *conserves* ink rather than adding it is confirmed, and
+it means single-frame ink totals are the WRONG measurement for this fix. The right one is
+temporal, because the defect is temporal.
+
+| at 554 m, above the waterline | before | after |
+|---|---|---|
+| liner, mean frame-to-frame change | 14.3 sRGB/frame | **4.4** |
+| liner, pixels changing >12 sRGB | 45% of box | **8.7%** |
+| brig, mean frame-to-frame change | 14.8 sRGB/frame | **5.4** |
+| brig, pixels changing >12 sRGB | 49% of box | **11.4%** |
+| single-frame thin-ink total | — | flat within 10% |
+
+Half of every distant rig was changing by more than 12 sRGB **between consecutive frames**
+with the hull on station and its attitude frozen, i.e. with nothing moving but the camera by
+a fraction of a pixel. That is the crawling net from §52, on the vessels, and it is gone.
+
+What could NOT be measured: the stripe's contrast on the brig, whose freeboard is 6.9 px.
+The reference window has to be wider than the widest band under test and narrower than her
+freeboard, and there is no such window. Repeat runs of identical code spread ±25 sRGB. The
+liner (16 px of freeboard) is the only hull these numbers mean anything on.
+
+### E. Instruments that now exist
+
+- `showcaseNear` **keeps station**: a showcase vessel left to sail closed 420 m -> 259 m in
+  the nine seconds a capture settles for, a 62% change of pixel scale between two runs of
+  identical code. Stationed hulls also sit upright, for the reason in C2.
+- `?showcase=far` — the same three hulls at 5.5x the range, which is where rigging goes
+  sub-pixel and the whole minification question is settled.
+- `?showcase=boston8` — the landfall at 8 km **dead on the bow**, because a silhouette
+  cannot be A/B'd from two crops taken at two different bearings.
+- `.tmp/vesselprobe.mjs` — serves `dist/` from a route handler (no dev server, no HMR to
+  invalidate it), asserts the frame counter rises, runs at cloudCover 0, and prints
+  freeboard in px, the stripe against the planking, thin-ink, and a three-frame flicker
+  statistic. `.tmp/mag.mjs` magnifies nearest-neighbour, because a 3 px gunport cannot be
+  judged at 1:1 on a screenshot of a screenshot.
