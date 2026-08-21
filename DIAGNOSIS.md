@@ -1840,3 +1840,162 @@ Projecting the geometry through the camera matrices is exact and took less code.
 `.tmp/framing.mjs` does it; three is not on `window.__leeward`, so it does the
 quaternion and matrix arithmetic by hand rather than importing a second copy of three
 into the page, which would not be the engine's three.
+
+## 46. Near geometry smeared, far geometry sharp: motion blur was blurring the deck the eye stands on
+
+The UI agent's read in §42 — "near timber heavily smeared while sails and distant
+deck are sharp" — was right, and it survived measurement, which by §43's standard is
+what separates a defect from a story. It is not TAA history and it is not depth of
+field. Motion blur was smearing the deck because the velocity buffer told it the deck
+was moving at 300 px a frame, and the deck was not moving at all.
+
+### The isolation, and the first attempt that had to be thrown away
+
+First attempt: disable one pass, capture, compare. It produced a contradiction — the
+all-passes-off variant measured *less* sharp over the sails than the one-pass-off
+variants — because the ship is sailing and the variants were captured a minute apart,
+so wave phase, cloud field, sun and heading all differed. §43 again, from the other
+side: **an ablation is an A/B, and an A/B by eye or by single frame silently compares
+three variables at once.**
+
+What works: visit the variants **round-robin, many cycles**, and carry a second
+`base` as the null. `helm`, 1600x900, ultra, HUD off, six cycles, mean |grad luma|
+over four fixed regions, `.tmp/nearsharp.mjs`.
+
+| variant | near | mid | sails | far |
+|---|---|---|---|---|
+| base | 4.42 ±0.52 | 6.83 ±0.93 | 7.71 ±2.18 | 5.91 ±1.93 |
+| motion blur off | **6.42 ±0.41** | 8.63 ±1.16 | 11.68 ±2.08 | 10.32 ±2.95 |
+| depth of field off | 4.81 ±0.51 | 6.88 ±0.96 | 8.78 ±1.56 | 7.03 ±1.59 |
+| TAA -> SMAA | 5.64 ±1.07 | 9.02 ±1.61 | 14.35 ±1.60 | 9.59 ±1.73 |
+| base again (null) | 4.74 ±0.40 | 6.50 ±0.60 | 8.91 ±0.48 | 7.60 ±0.83 |
+
+Motion blur off is the only change that moves the near number past the null: +2.00,
+3.8 sd, against the null's +0.32. Depth of field is **not resolvable** (+0.38, 0.7 sd,
+against a 0.6 sd null) — the near-field CoC is real but small, see below. Swapping TAA
+for SMAA sharpens *everything* (sails +6.65, 3.0 sd), which is what SMAA does; it
+cannot be read as a near-field effect.
+
+The crops settle it qualitatively where the numbers are noisy: the smear is
+**directional**, streaks radiating from the direction of travel. With depth of field
+off it is still striped; with TAA swapped for SMAA it is still striped; with motion
+blur off the plank seams, caulking lines and grating slats come back. A defocus disc
+does not make stripes.
+
+### The mechanism, measured rather than reasoned
+
+`velocity.ts` reprojects each pixel as if its world point stood still. In the helm
+view the deck is rigid with the ship **and the eye is bolted to the same ship**, so
+the deck's true screen motion is only the residual the camera's sway/bob springs
+allow. The buffer instead reports the camera's whole translation parallax, which grows
+as 1/depth. Computed from consecutive-frame camera and ship transforms — exact rigid
+reconstruction, no dt term — at 15 kn:
+
+| depth | what `velocity.ts` reported | true screen motion | over-report |
+|---|---|---|---|
+| 0.8 m (near grating) | 300 px | 17 px | 18x |
+| 1.5 m | 217 px | 9 px | 24x |
+| 3.0 m | 136 px | 4.6 px | 30x |
+| 6.0 m (deck run) | 42 px | 1.6 px | 26x |
+| 22 m (sails) | 7.3 px | 0.3 px | 24x |
+| 35 m (far sail) | 4.7 px | 0.3 px | 16x |
+
+(Frame period was pinned at the `FrameTime.dt` clamp of 100 ms on a loaded box; scale
+by 0.17 for 60 fps. The over-report factor varied 6x-41x across three samples because
+the *true* term is the spring residual and that changes frame to frame; the reported
+column was stable to 2%.)
+
+**64:1 near to far, purely from 1/depth.** At 60 fps the near deck reported ~51
+px/frame, which at 0.35 shutter is 18 px of smear against a `TILE` cap of 20 — while
+the sails reported 0.9 px, which is under the shader's `tileLen < 1.0` early-out, so
+they got no blur at all. The inversion was not an accident of tuning; it was
+arithmetic.
+
+### The fix: motion blur measures velocity in the SHIP's frame
+
+Compose the previous view-projection with `prevShip * curShip^-1` and the pass
+reprojects each pixel to where that material point was last frame *if it is rigid with
+the ship* — which every plank, gun and shroud is. No shader change: it is two
+uniforms, and `uPrevCamPos` gets the inverse delta so the sky branch, which anchors a
+1 km ray at the previous camera position, lands back on that position with only the
+ship's rotation taken out of the direction.
+
+**TAA keeps the world reprojection.** These are not two views of one truth: TAA's
+history is a screen-space buffer of last frame, so world-static content genuinely
+needs the world reprojection or it ghosts, and ghosting is a RUBRIC auto-fail. Motion
+blur's near field is the ship. So the buffer is written twice when motion blur is on,
+which costs 0.020 ms by `ext.post.profile(120)` against a 2.05 ms scene pass.
+
+What the ship frame gives up: world-static geometry now reports the ship's motion
+instead of its own. At 7.8 m/s and 60 fps that is 0.13 m — under a pixel past 80 m,
+2.6 px on sea 30 m off, so nothing that was blurring stops. A pan is untouched, because
+a look input is not part of the ship's rigid motion.
+
+### A second defect, found by the same instrument
+
+`SHUTTER = 0.35` was a fraction of **whatever frame the engine produced**. A 50 ms
+frame therefore got three times the smear of a 16 ms one — the blur got worse exactly
+when the frame was already struggling, which is a quality spiral, and it is
+frame-rate dependence of the kind non-negotiable 9 exists to forbid. A real shutter is
+a time. `EXPOSURE_S = 0.35/60` is 5.83 ms, so at the target frame rate the fraction
+comes back out at 0.35 and the look is unchanged up to frame-time jitter, and away from
+it the exposure is the same physical 5.83 ms.
+
+### Result, as a paired within-run comparison
+
+The honest metric is not the near number — that moves with the weather — it is **what
+motion blur costs the near field, measured against motion blur off in the same run,
+seconds apart**:
+
+| state | base near | mb-off near | what mb cost | |
+|---|---|---|---|---|
+| before | 4.42 ±0.52 | 6.42 ±0.41 | **2.00 (3.8 sd)** | 31% of near sharpness |
+| ship-frame velocity | 5.85 ±0.57 | 6.51 ±0.22 | 0.66 (1.2 sd) | 10% |
+| + fixed exposure time | 6.54 ±0.24 | 6.49 ±0.19 | **-0.04 (-0.1 sd)** | nothing measurable |
+
+The control that makes this trustworthy across runs: **the mb-off ceiling did not
+move** (6.42 / 6.51 / 6.49) while base climbed to meet it (4.42 / 5.85 / 6.54). A
+stable reference in every run is what a shared, loaded box will let you have when an
+absolute number will not survive the walk between two captures.
+
+### A measurement trap worth keeping: region ratios are contaminated by content
+
+The brief that started this compared near against mid-distance and found near half as
+sharp. After the fix, near/sails is still 0.63 — and it is 0.63 with motion blur
+switched off entirely. **Black tarred shrouds against bright sky will always
+out-gradient oiled deck planking**, whatever the post chain does. A cross-region ratio
+measures content contrast as much as focus, so it can show a defect and it cannot show
+the defect is gone. The paired same-region ablation can.
+
+### Still not good enough
+
+- **The near-field depth-of-field composite has no ramp, and the far field does.**
+  `DOF_COMBINE_FRAG` ramps the far field in over the first 1.4 px of CoC
+  (`saturate((coc - 0.6) * 0.7)`), but the near field's alpha is
+  `saturate(coverage/TAPS * 1.6)`, and because the coverage test floors at 0.6 that
+  saturates to 1.0 the instant CoC clears the gather's own 1.2 px early-out. So a deck
+  pixel asking for 1.2 px of defocus has its full-res colour **discarded entirely** and
+  replaced by a half-res gather, which is ~2 px of blur by itself. The lens is not the
+  problem: at 71 deg, f/5.6 and 22 m focus the physical CoC is 2.3 px at 0.8 m, 1.8 px
+  at 1 m, 1.2 px at 1.5 m and 0.55 px at 3 m — that is a correct amount of near
+  defocus for a real 17 mm lens and it is where the line sits. Not changed here,
+  because ablation put it at 0.2-0.7 sd and a change with no measurable effect is a
+  change to a look the owner has approved.
+- **TAA's near-field contribution is unquantified.** The only lever available was
+  swapping the whole AA mode, which changes sharpness globally, so nothing separates
+  "TAA blurs the near field" from "SMAA is sharper than TAA". The mechanism to suspect
+  is documented rather than measured: with a velocity 50 px wrong, `histUv` lands on
+  unrelated pixels, `clipAabb` pulls the sample most of the way to the 3x3 mean, and
+  `uFeedbackMin` is **0.7** — so a fully-disagreeing history still contributes 70% of
+  the output, which is a 3x3 box blur at 70% strength. If the near field ever needs
+  more, that is where to look, and giving TAA the ship-frame velocity is the obvious
+  move and the risky one.
+- **Pan blur survives by argument, not by measurement.** The ship-frame delta removes
+  only the ship's rigid motion, so a look input is preserved exactly — but the test
+  built for it is under-powered. A constant look input parks against the mode's yaw
+  limit; oscillating it gives mb-on 6% softer over the sails than mb-off, consistent
+  with the ~3 px the arithmetic predicts, and not enough to call proven.
+- **No timing claim.** Load average ran 130-160 for the whole session with two other
+  agents' renderers live, and `capture.mjs` printed p25 21.0 / p50 51.1 ms for `helm`
+  even in a window it scored `rivals 0p/0b quiet`. `ext.post.profile` is a serialising
+  per-pass measurement and is quoted above; the wall-clock frame periods are not.
