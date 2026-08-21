@@ -110,8 +110,33 @@ deliberately **no canonical tag** until the deploy URL is known.
    spans in shader comments. (Inside a `${ ... }` interpolation you are back in
    TypeScript and backticks in comments are fine.)
 4. **Zero console errors or WebGL warnings** in `node scripts/capture.mjs`.
-5. **60 fps at 1600x900 on an M2 at `ultra`.** The capture harness prints fps
-   and draw calls for every scene. If you regress fps below 60, fix it.
+5. **60 fps at 1600x900 CSS on an M2 at `ultra`** — and read the rest of this,
+   because the target is **currently unmet** and the units are the reason it
+   hid for so long.
+
+   "1600x900" is **CSS pixels**. The backing store is
+   `min(devicePixelRatio, maxPixelRatio) * renderScale * cssSize`, so on a
+   Retina panel at `renderScale` 1 the engine is really drawing **3200x1800 =
+   5.76 Mpx**, four times what `capture.mjs` measures by default (`--dpr 1`).
+   Always say which you mean. Use `--dpr 2 --adaptive` to reproduce a player's
+   machine.
+
+   Measured, and it is a straight line across 14 rungs at both ratios:
+
+       cost = 9.44 ms + 13.83 ms/Mpx     (worst residual 1.1 ms)
+
+   So **9.44 ms of a 16.67 ms budget is spent before a single pixel** of the
+   main render, 1.44 Mpx costs 29.4 ms, and 60 fps needs the frame down to
+   0.52 Mpx — which is exactly where the adaptive controller settles. **The
+   controller is correct; the budget is the problem.** The panel's dpr has no
+   effect on cost at equal backing store.
+
+   Two consequences for you. A sub-60 reading is **not evidence you broke
+   something** — do not spend a session hunting a regression that is the
+   standing state of the engine. And the highest-leverage perf work is the
+   **fixed** 9.44 ms, not the per-pixel slope, because cutting it raises the
+   resolution the controller can afford on every machine and at every tier.
+   If you do regress fps, fix it; but quote the pixel count with the number.
 6. **Scene-linear radiance everywhere.** Materials output linear values; the
    post stack owns tonemapping and the sRGB encode. Never call
    `convertSRGBToLinear` on a value that is already linear, and always call it
