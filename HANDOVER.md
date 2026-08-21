@@ -148,14 +148,21 @@ receive, so removing them from the shadow map that way does nothing, and the
 experiment returns a convincing null. Two agents walked into this.
 
 **Known open, roughly in priority order.**
-1. **Frame pacing** — the longest-open item and the one the owner feels, as a
-   "two-frame stutter". p25 runs 19–31 ms against a 16.6 ms target but the *minimum*
-   is 5.9–9.6 ms with 14–47% of frames inside one vsync, and observed `dt` values are
-   exact multiples of 16.67 ms: vsync beat aliasing, not steady cost. **There is no
-   code regression** (§31 retracts an earlier claim). Note that every timing ever
-   taken here had `adaptiveResolution` false and `renderScale` 1, because the harness
-   pins them — and the owner does not play that way, so if the stutter is in that
-   controller no capture has been able to see it.
+1. **The "stutter" is a 4× pixel overload, and it is half fixed** (§57). It was never
+   a stutter: on a Retina panel the backing store is 3200×1800 = 5.76 Mpx against the
+   1.44 Mpx every measurement here used, and at `--dpr 2` the raw cost is p25 82.9 ms
+   with **3% of frames on time** — about 12 fps. `capture.mjs --dpr 2 --adaptive` now
+   reproduces it; pinning stays the default because an adaptive controller makes two
+   runs incomparable.
+   The controller rewrite on `wip/adaptive-resolution` takes the **title screen from
+   15 fps to 45 fps** — an opening cap of 2 Mpx and a boot grace counted in
+   milliseconds, since a frame-counted grace is unbounded in time exactly when the
+   frame rate is worst. But it over-corrects the steady state to 960×540 at ~157 fps
+   where the old one settled at 1984×1116 and ~63 fps, so it is not on main.
+   **The blocker is the instrument: headless Chromium has no vsync**, so the
+   hit-rate this controller steers by reads ≈1.0 at any scale. Verify the control law
+   against synthetic vsync-quantised period streams (`.tmp/adaptsim.mjs`), and
+   validate that against a fixed-scale sweep at `--dpr 2`.
 2. ~~**Sail shadow edge hardness.**~~ **CLOSED — the edges are already the right
    width** (§56). The sun subtends 0.53°, so the true penumbra for the 10–40 m
    caster separations on this rig is 1.6–6.5 px at 17.5 px/m; measured p25 2.5,
@@ -166,15 +173,12 @@ experiment returns a convincing null. Two agents walked into this.
    The free-leech hypothesis is dead and its branch retired: a directional light has
    no source area, so the caster's silhouette sets *where* an edge falls, never how
    wide it is. It also cost +6 piercings in live trim, almost all `lift`.
-3. **TAA's near-field share is unquantified.** With velocity ~50 px wrong, `clipAabb`
-   pulls history to the 3×3 mean against a `uFeedbackMin` of 0.7 — a 70% box blur.
-   Giving TAA the ship-frame velocity is the obvious next move and the risky one,
-   because the ocean and sky in the same buffer still need the world velocity.
-4. **Near-field DOF alpha saturates instantly.** `DOF_COMBINE_FRAG` ramps the far
-   field over 1.4 px of CoC but the near field saturates to 1.0 the moment CoC clears
-   1.2 px, so a deck pixel wanting 1.2 px of defocus loses its full-res colour to a
-   half-res gather. Ablated at 0.2–0.7 sd, and it is an approved look, so it needs
-   quantifying rather than switching off.
+3. ~~TAA near-field~~ and ~~near-DoF ramp~~ — **both CLOSED** (§58). The velocity
+   reference frame is now chosen **per pixel** (a global flag was the wrong shape: the
+   ocean and sky share the buffer and need the world frame), and the near DoF fades in
+   over the same CoC ramp the far field uses. The DoF lead had measured as a null
+   because the step sits at 1.49 m at the helm where the nearest deck pixel is 2.6 m —
+   the scene it was tested in could not contain the thing being tested.
 5. **Vessels read thinly inside 200 m** — 12 px of freeboard at working range, so the
    gunport stripe is invisible and the shrouds sub-pixel. Fine for the intended range.
 6. **Boston is a town on a headland, not recognisably Boston** until ~2 km.
@@ -192,6 +196,7 @@ experiment returns a convincing null. Two agents walked into this.
   the 610 mm bolt), but its diagnosis is worth reading.
 - `wip/free-leech` — **retired.** Disproven in §56 with a physics argument, so leaving
   it would only cost someone a session.
+- `wip/adaptive-resolution` — see open item 1. Half a fix, and the good half is real.
 
 **The rule these branches encode:** a stopped agent's work being green (`tsc` 0,
 `check-glsl` clean) is not the same as being right. Main stays publishable, so a change
