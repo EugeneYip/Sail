@@ -3175,19 +3175,22 @@ the cost is quadratic in this number and none of it scales with the backing stor
 |---|---|
 | paired A/B before, 1536 -> 1024, 1.115 Mpx | **saves 1.75 ms**, pair spread 1.20, pairs 1.9 / 1.6 / 0.8 / 2.0 |
 | paired A/B after, 1024 -> 1536 (positive control), 1.115 Mpx | **costs 1.30 ms**, pair spread 1.40, pairs all one sign: -1.4 / -1.7 / -1.2 / -0.9 / -1.1 / -2.3 |
-| fixed-scale sweep, before -> after, p50 at 3.327 / 2.074 / 1.115 Mpx | 55.6 -> 53.8, 37.8 -> 36.6, 23.8 -> 24.1 |
+| base p50 at 1.115 Mpx, pooled over every clean window | **25.3-26.4 before** (one disturbed sample read 23.8), **23.9-24.5 after** |
+| re-run sweep after, four rungs, three passes, quiet: 64.5 / 55.8 / 37.2 / 23.9 at 4.064 / 3.327 / 2.074 / 1.115 Mpx | **cost = 8.46 ms + 13.95 ms/Mpx**, worst residual 0.94 |
 
 Take the conservative figure: **1.3 ms of fixed cost, about a sixth of the whole non-pixel
 term**, and confirmed by the same instrument with the sign flipped, which a one-sided
 ablation cannot do.
 
-**And the third row is why the sweep is the wrong instrument for this.** Its fitted
-intercept moves 7.86 -> 8.97 — the wrong way — because the lowest rung anchors the intercept
-and that rung's own run-to-run spread is +/- 1 ms (it has read 23.8, 24.1, 24.5, 25.5, 25.8,
-26.0 on identical code). With three rungs, ~1 ms of per-point noise and a 2.2 Mpx lever arm
-the intercept's standard error is about **+/- 1.5 ms**, so a fixed-scale sweep cannot resolve
-a 1.3 ms change in it at all. Do not read a sweep intercept as a before/after statistic
-without that error bar; the §59B figure of 9.44 carries the same one.
+**And the last row is why a sweep is the wrong instrument for a change this size.** The
+re-run puts the intercept at 8.46 against 7.86 before — nominally *worse*, which it is not.
+The lowest rung anchors the intercept and that rung's own run-to-run spread is about +/- 1 ms
+(it has read 23.8 through 26.4 on identical code); with four rungs, ~1 ms of per-point noise
+and a 3 Mpx lever arm the intercept's standard error is roughly **+/- 1.3 ms**, so the fit
+cannot resolve a 1.3 ms shift in itself. What the sweep *can* see is the per-rung median,
+and that moved by 1.5 ms at the rung where the effect is largest relative to the total. Do
+not read a sweep intercept as a before/after statistic without that error bar — the §59B
+figure of 9.44 and the 7.86 above carry the same one, which is also why they differ.
 
 **The visual cost, stated plainly**, because this is a quality-for-speed trade and not a
 free win by assertion: the *persistent* field's texel goes from 0.67 m to 1.0 m. That field
