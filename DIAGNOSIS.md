@@ -2113,3 +2113,73 @@ calling the result push-readiness, which is a bigger claim than it was testing.
 parse, so "will not build" is a fact. A full `tsc` is deliberately **not** run — it
 costs 24 s, agents run this gate repeatedly, and a slow gate gets skipped. The success
 line names what was and was not checked instead of implying both.
+
+## 52. The rigging crawled for three reasons, and it needed all three
+
+The owner's "black aliased net" was not one bug.
+
+**Binary coverage.** The renderer asks for **no MSAA** — we do our own AA in post — so
+a ribbon narrower than a pixel rasterises with binary coverage: it lands on one pixel
+or on two, and which one flips as the camera moves a fraction of a pixel. Two hundred
+shrouds and ratlines doing that at once is the crawl. The previous fix widened the quad
+to 1.4 px and scaled alpha by the true width, which conserves the *average* but leaves
+the **edge hard**, so the flicker survived at reduced amplitude — and its 0.25 alpha
+floor made a 0.2 px ratline **four times too dark**, which is the other half of the
+same report. Now the ribbon is a pixel wider than the rope each side and the fragment
+shader takes the rope's exact box-filter coverage; the integral of that over offset is
+`2r` for every `r`, so total ink is preserved at any distance and no floor is needed.
+
+**Depth write.** Every rope is one instance in one draw call, so where two cross they
+blend in buffer order — and with `depthWrite` on, whichever drew first also wrote depth
+and **discarded** the other. A ratline gang crosses its own shrouds a hundred times, so
+a hundred crossings each dropped or doubled a line depending on which happened to be
+nearer, and that decision flips with camera motion. Depth *testing* is untouched, so
+hull, spars and sails still occlude the rig; only rope-over-rope occlusion is given up,
+and a tarred rope at full coverage blends to the same near-black anyway.
+
+**Ratlines four times too fat.** 0.021 m radius is a 42 mm rope; real ratline stuff is
+6–12 mm, i.e. very nearly as heavy as the 73 mm lower shrouds they are seized to. Once
+coverage preserves total ink exactly, ink is decided by geometry. Measured by rewriting
+`iParam.y` for the ratline family only so nothing else in frame moves: over the lower
+fore gang at helm range, halving takes the share of pixels below 35% of local sky from
+13.70% → 12.37% and total ink 0.2879 → 0.2810 — and it stops reading as chain-link,
+because the ratlines are finally *lighter* than the shrouds crossing them.
+
+**And a scallop sampled below Nyquist.** A lower gang has 8–9 shrouds so 7–8 bays,
+against a 13-vertex ribbon: 1.5 samples per bay. That is not a scallop, it is
+per-vertex noise, and it gave every ratline a random 0–3 cm kink at each of its
+thirteen vertices.
+
+## 53. Two agents stopped mid-task; one result landed, one was held off main
+
+Both left green trees (`tsc` 0, `check-glsl` clean), which is why this needed judging
+rather than just committing.
+
+**Landed:** the rigging work above, verified at helm range as smooth continuous lines
+with the crawl gone. And a separate real bug found on the way to the sail shadows:
+changing shadow resolution nulled `shadow.map` but not `shadow.mapPass`, and three
+creates `mapPass` in exactly one place — `WebGLShadowMap.js:389`, `if (shadow.mapPass
+=== null)` — so the two VSM blur passes kept running at the **old** size against a new
+map, and every shadow in the scene stayed wrong for the rest of the session. Latent at
+the default tiers, because high and ultra are both 2048 so the early-out never lets the
+size change; it bites the moment a player moves the quality slider off 1024.
+
+**Held on `wip/sail-canvas`:** the sail canvas rework. Its diagnosis is excellent and
+worth keeping regardless — the baked normal map had an **RMS surface slope of 48°**
+with relief energy centred on 95 mm along the bolt and 91 mm across it, i.e. isotropic
+decimetre bumps at half a radian of tilt, which is crumpled foil and is exactly the
+owner's "bumpy, quilted, popcorn-like"; and the shader tier was authored at a 24 mm
+pitch when the helm sits 15–25 m from the courses where a pixel is 9–12 mm, so the
+antialiasing fade held it at **zero** (ablated live: removing the tier changed gradient
+energy at helm range by under 1%).
+
+But the result is **worse than what it replaced**: a dense regular sawtooth chevron on
+every sail, hard-edged and plainly geometric. The vertical flute bands are right; the
+teeth between them are not. Suspicion, for whoever picks it up: in sail UV the span is
+the *horizontal* extent of a square sail, so a high frequency in the chord term is
+horizontal ribbing again — the axis fix may have gone in inverted.
+
+**The rule this establishes.** A stopped agent's work being green is not the same as
+being right. Main stays publishable, so a change that trades one defect for another
+goes on a branch with the diagnosis written down, not onto main. Both halves stay
+recoverable and the owner can still push at any time.
