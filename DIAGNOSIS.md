@@ -3538,8 +3538,10 @@ null spread. It does *not* help the top six rows (2.10 → 2.16), so it is detai
 **Do not land that without the flicker instrument.** `alphaR = clamp(max(alpha,
 sqrt(lostVar + (1 - km*km) * carried)), ...)` exists to add back exactly the variance
 that blending N toward `Nlow` removes; if `Nlow` starts carrying every cascade, that
-compensation double-counts, and this is the same path §? measured for temporal band
-flicker (temporal std 0.38 with the micro normal against 0.10 with the macro normal).
+compensation double-counts, and this is the same path the `macro` blend was introduced
+for — §17C, the owner's flickering horizontal streaks: temporal std of the per-row band
+signal beyond 600 m was 0.38 with the micro normal against 0.10 with the macro normal on
+a film-grain floor of 0.03, measured with the sim clock pinned (`.tmp/flick.mjs`).
 The pairing of "Nlow is cascade 0" with "the wide regime's alpha is the total rms" is
 currently self-consistent. Changing one half needs the other half re-derived and the
 temporal std re-measured with the sim clock pinned.
