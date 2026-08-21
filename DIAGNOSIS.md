@@ -2460,3 +2460,93 @@ is the cloth, not the shadow, which is where §54a's normal-map finding already 
    from an earlier scene's exposure selected 41k px of a 600k px sail plan and threw
    `mask too small`. Look at the mask (`--preview` writes one) before trusting a statistic
    computed on it.
+
+## 57. The stutter was never in the measurement: every timing here used a quarter of the owner's pixels
+
+The single most consequential instrument gap in the project, and it explains two days
+of failing to reproduce a defect the owner reported from play.
+
+The backing store is `min(devicePixelRatio, maxPixelRatio) * renderScale * cssSize`.
+`capture.mjs` defaults `--dpr 1` and pins `adaptiveResolution = false, renderScale = 1`
+for determinism. So **every frame timing in this project was 1600×900 = 1.44 Mpx with
+the adaptive controller switched off**, while a Retina panel at the same window size is
+**3200×1800 = 5.76 Mpx** — four times the pixels — *with* the controller running.
+Neither half of the owner's condition was ever in the measurement.
+
+Measured now that the harness can (`--dpr 2`): p25 **82.9 ms** with **3%** of frames
+inside one vsync. That is about 12 fps. **It is not a stutter, it is a sustained
+overload**, and the "two-frame stutter" the owner described is what a 4× overload looks
+like when the adaptive controller is fighting it.
+
+`--dpr 2 --adaptive` now reproduces it. Pinning stays the default, because an adaptive
+controller changes the pixel count mid-run and makes two runs incomparable.
+
+### The controller: right diagnosis, half a fix, and an instrument that cannot see the rest
+On `wip/adaptive-resolution`, not main. What it gets right is exactly the owner's
+complaint: the old controller opened at `renderScale` 1 and needed a boot grace plus a
+full window before it could act, so **the title screen was the worst frames in the
+session**. An opening cap of 2 Mpx and a boot grace counted in *milliseconds* — a
+frame-counted grace is unbounded in time precisely when the frame rate is worst — take
+the first three seconds from **15 fps to 45 fps**.
+
+What it gets wrong: it descends past the rung it needs and does not climb back, settling
+at `renderScale` 0.30 (960×540) at ~157 fps where the old one settled at 0.62
+(1984×1116) at ~63 fps. Throwing away more than half the affordable resolution reads as
+a soft picture, so that is a visible regression traded for a real fix — branch, per §53.
+
+**Why it could not be resolved here, which is the reusable part.** Headless Chromium has
+**no vsync**, so frame periods are unthrottled and the hit-rate this controller steers by
+reads ≈1.0 at almost any scale. A vsync-driven controller cannot be faithfully tested in
+an environment without vsync, and no amount of care with the rest of the harness fixes
+that. Raising `ADAPT_SETTLE` 8 → 30 was tried on the hypothesis that the descent was
+chasing its own reallocation cost; it settled at 0.30 rather than 0.25, so that is not
+the mechanism, and the constant is left at 8.
+
+### Two probe traps found the hard way
+- **Vite HMR reloads the page when the file under test is edited**, which resets
+  `world.time.frame` and silently invalidates a probe *mid-run*. Two runs were
+  contaminated before I noticed. The tell is a **falling** frame counter — assert it
+  rises. Waiting for HMR to quiesce before the probe navigates is enough.
+- **Blocking `@vite/client` to prevent that breaks the module graph** and the app never
+  boots at all.
+
+## 58. Velocity has two right answers, and the choice is per pixel
+
+TAA reprojected everything in the world frame. Reprojection asks "where was this pixel's
+material point last frame?", and on a first-person eye bolted to a moving ship that has
+two answers: a world-static point wants the previous camera's view-projection, a point
+rigid with the ship wants it composed with the ship's inverse motion, because the eye
+moved and the deck did not move relative to it.
+
+The disagreement grows as 1/depth: **95 px at 0.8 m, 53 px at 1.5 m, 27 px at 3 m**,
+7 px at 6 m, at 14 kn and 16.5 ms. A history fetched 95 px away is unrelated content, so
+`clipAabb` pulls it to the 3×3 mean and `uFeedbackMin` 0.7 blends ~64% of that in — a box
+blur on exactly the surface the player stands on.
+
+A global flag was the wrong shape for the fix, because the ocean and sky share the buffer
+and still need the world frame. The classifier is a padded box in ship-local space with
+one exception: a point near world sea level and **outside the hull's waterline footprint
+is water**, however deep inside the rig's envelope it sits — the sea under the jibboom,
+the spanker boom, the yardarms. Water *inside* that footprint stays ship, because the bow
+wave and the wake are ship-locked. Sky is always world; a ship-frame sky would offset the
+whole dome during a turn.
+
+The padding is deliberately generous, and the asymmetry is the argument: a false "ship"
+costs a couple of pixels of error on water, a false "world" costs the whole defect on the
+deck.
+
+### The near-DoF step, and why it measured as nothing
+A half-res gather has a floor on sharpness — one bilinear tap is already a 2 px box and
+the upsample adds a 2 px triangle — so a pixel asking for 1.2 px of defocus receives
+~2.6 px if its full-res colour is fully replaced. The far field always faded in over that
+ramp; the near field **stepped** from 0 to 1 at 1.2 px of CoC.
+
+Where that step sat depends on the lens: **1.49 m at the helm**, 1.64 m at the masthead,
+**3.28 m on the bowsprit** at f/2.8, 5.85 m in orbit. At the helm it is closer than
+anything in frame — the nearest deck pixel is ~2.6 m — which is why ablating the entire
+DoF pass there measured 0.2–0.7 sd and looked like a null. On the bowsprit the jibboom,
+martingale and headsail tacks span it. **The lead was real and the scene it was tested in
+could not contain it.**
+
+Nothing at or beyond 2.03 px of CoC changes by a single bit, so the approved near-field
+look is untouched.
