@@ -125,7 +125,7 @@
      shape of itself. Six layers, none wider than 2 px, and the wide tail cut
      right back. Checked by eye at 3x in `.tmp/uizoom.mjs`, because no contrast
      ratio can tell you that a counter has closed up. */
-     Two more 1 px layers and one more 2 px layer went in after the in-engine
+     /* Two more 1 px layers and one more 2 px layer went in after the in-engine
      measurement: the darkest decile of a cap's own pixels was landing at sRGB
      26-51 over a sea of 62-130, i.e. only 59 % coverage where the stacking
      arithmetic allows ~0.9. A 1 px blur puts roughly 0.45 coverage one pixel

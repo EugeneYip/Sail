@@ -20,11 +20,12 @@ import * as THREE from 'three';
  * ring size is built once per hole displacement, all nine sharing one set of
  * vertices, and the frame picks the one that frames the level below it.
  *
- * The last ring is a flat skirt that rises to eye height at 55 km. An infinite
- * flat ocean's horizon sits exactly at eye level; a finite one leaves a
- * sub-pixel sliver of sky underneath it. Lifting the outermost edge to eye
- * height closes that seam, and it happens far enough out to be fully
- * fog-saturated, so the tilt cannot be seen.
+ * The last ring is a flat skirt out to `HORIZON_RADIUS`. The surface it and every
+ * ring carries is not flat: `surface.ts` drops it by `d^2/(2*EARTH_RADIUS_M)`, so
+ * the silhouette is the earth's own limb at `sqrt(2*R*h)` — 18.0 km from a 25.5 m
+ * eye — and the mesh reaches 2.7x past it in every direction. The skirt's edge
+ * therefore lies below the horizon rather than on it, and keeps a lift only as
+ * the fallback for an eye higher than `MAX_EYE_ON_LIMB_M`.
  */
 
 /** Half-extent of the innermost level, metres. */
@@ -38,6 +39,24 @@ export const CLIPMAP_LEVELS = 10;
  * plane.
  */
 export const HORIZON_RADIUS = CLIPMAP_H0 * Math.pow(2, CLIPMAP_LEVELS);
+/**
+ * Earth radius, metres. Deliberately `GROUND_RADIUS_KM` from
+ * `src/sky/constants.ts` and not the 6371 km mean radius: `skyRender.ts` puts the
+ * earth's limb at `horizonCos = -sqrt(r*r - RG*RG)/r` for the same eye, the sea's
+ * silhouette has to land on that same line, and a horizon that reads as a hard
+ * seam is an automatic failure in `RUBRIC.md`. The two radii differ by 11 km,
+ * which is 2.5e-6 rad of horizon dip — 0.003 px — so this is about having one
+ * number rather than about the number.
+ */
+export const EARTH_RADIUS_M = 6360000;
+/**
+ * Highest eye, metres, for which the mesh still reaches past the tangent point
+ * and the horizon is therefore the earth's limb rather than the mesh's edge.
+ * `HORIZON_RADIUS` is the skirt's half-extent along an axis, which is its
+ * shortest reach. Every camera mode but the debug fly-cam is far under this;
+ * above it `surface.ts` lifts the skirt's edge back onto the limb.
+ */
+export const MAX_EYE_ON_LIMB_M = (HORIZON_RADIUS * HORIZON_RADIUS) / (2 * EARTH_RADIUS_M);
 
 export interface ClipmapLevel {
   mesh: THREE.Mesh;

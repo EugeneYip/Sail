@@ -155,14 +155,18 @@ export function makeShipMaterial(
     normalScale: new THREE.Vector2(o.normalScale ?? 1, o.normalScale ?? 1),
     dithering: true,
   });
-  // The builders emit UVs in metres; the repeat converts to tile space.
-  for (const t of [o.tex.map, o.tex.normalMap, o.tex.ormMap]) {
-    void t;
-  }
+  // The builders already divide by TILE_ALONG/TILE_ACROSS, so the UVs arrive in
+  // tile space and no texture `repeat` is involved; `uTileM` below multiplies
+  // them back to metres for the per-pixel detail tiers. (This comment used to
+  // claim a repeat, above a loop over the three maps that did nothing at all.)
   m.userData.tile = tile;
 
   const grime = { value: o.grime ?? 0.5 };
   const envAmount = { value: o.env ?? 1 };
+  // Published so `env` can be ablated from a probe inside ONE frozen frame.
+  // Two captures minutes apart are two different cloud fields on two different
+  // wave phases, and that confound has invalidated measurements here twice.
+  m.userData.env = envAmount;
 
   const d = o.detail ?? {};
   const tileM = { value: new THREE.Vector2(tile[0], tile[1]) };

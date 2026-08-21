@@ -1,5 +1,6 @@
 import { GLSL } from '../../util/glsl';
 import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
+import { EARTH_RADIUS_M, MAX_EYE_ON_LIMB_M } from '../OceanMesh';
 
 /**
  * The ocean surface material.
@@ -21,6 +22,9 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
  * All wave-field lookups use *wrapped-absolute* XZ (`uOceanOrigin`), see
  * `Ocean.ts` for why.
  */
+
+/** GLSL ES 1.00 has no implicit int-to-float, so a whole number needs the point. */
+const f = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
 
 function cascadeDecls(n: number): string {
   let s = '';
@@ -69,10 +73,13 @@ export function surfaceShaders(
     vec4 d1 = textureLod(uDeriv${i}, uv, lod);
     slope += vec2(d0.w, d1.x);
     jac   += vec3(d1.y, d1.z, d1.w);
-${i === 0 ? '    lowSlope = vec2(d0.w, d1.x);\n' : ''}    // Slope variance the pixel footprint can no longer resolve becomes
-    // roughness instead of aliasing.
+    // Slope variance the pixel footprint can no longer resolve becomes
+    // roughness instead of aliasing. Twice, because the footprint is not
+    // square: 'pxWorld' across the view ray and 'pxAlong' along it.
     lostVar += uCascadeSlopeVar[${i}] *
       smoothstep(uCascadePxFade[${i}].x, uCascadePxFade[${i}].y, pxWorld);
+    alongLost += uCascadeSlopeVar[${i}] *
+      smoothstep(uCascadePxFade[${i}].x, uCascadePxFade[${i}].y, pxAlong);
   }`;
   }
 
@@ -173,11 +180,57 @@ void main(){
   ${vertDisp}
   ${wakeVert}
 
-  // The horizon skirt rises to eye height so the water silhouette lands exactly
-  // on the eye-level horizon line with no sliver of sky beneath it.
-  float skirtRise = isSkirt * smoothstep(0.80, 1.0, r) * max(uCameraPos.y, 0.0);
+  /*
+   * Earth curvature, and the reason the horizon is a line at all.
+   *
+   * The sea falls away as 'd^2/(2R)' from the eye's own nadir, which puts the
+   * silhouette at the tangent distance 'sqrt(2*R*h)' — 18.0 km from a 25.5 m eye,
+   * against the clipmap's 49.15 km reach — instead of at the mesh's outer edge.
+   * Without it the last visible sea was 2.7x past the true horizon, the aerial
+   * perspective had saturated it completely, and the sea/sky luminance step
+   * measured 2.0 8-bit units spread over five rows: no horizon. With it the step
+   * is 3.7 units in one row, and the pale cyan hairline the probe's elevation
+   * lift leaves behind (see 'oceanInscatter') goes with it, because the rows that
+   * carried it are sky now. Measured in 'orbit' with the sim clock pinned; at 8 m
+   * and 2.5 m eyes it is a 1 px and a 0.8 px change and reads the same, which is
+   * right — the defect scaled with eye height.
+   *
+   * Anchored on the CAMERA, not on the world origin, because 'skyRender.ts' puts
+   * the earth's limb at 'horizonCos = -sqrt(r*r - RG*RG)/r' from this same eye
+   * height and the two silhouettes have to be the same line. The price is paid
+   * near the camera and it is tiny: 0.8 mm at 100 m, 1 mm under the orbit camera's
+   * ship. The CPU wave sampler, the wake field and the near field need no matching
+   * change — but anything ELSE that sits at y = 0 a long way off does, because it
+   * no longer meets the water. Unchanged, a hull at Vessels' 12.5 km retire range
+   * floats 1.2 px and Boston at its 46 km one floats 4.5 px. See DIAGNOSIS; the
+   * drop to apply is this one, with d measured from the camera.
+   */
+  const float EARTH_R = ${f(EARTH_RADIUS_M)};
+  float dHoriz = length(rel);
+  float drop = dHoriz * dHoriz / (2.0 * EARTH_R);
 
-  vec3 pos = vec3(world.x + disp.x, disp.y + skirtRise, world.y + disp.z);
+  /*
+   * The skirt's outer edge still exists to stop a sliver of sky appearing under a
+   * finite sea, and this is the same expression it always was.
+   *
+   * A flat sea's horizon is at eye level, so the old form lifted the edge by
+   * 'max(uCameraPos.y, 0.0)' — worth a measured 1.16 px at the orbit camera, not
+   * the "sub-pixel" the comment used to claim. A curved sea's horizon is
+   * 'sqrt(2h/R)' below eye level, and the lift that lands the edge exactly on it
+   * is '(sqrt(h) - D*inversesqrt(2R))^2' — which IS that same 'h' as R goes to
+   * infinity, so this generalises the old hack rather than replacing it.
+   *
+   * Clamped at zero, so it is identically zero whenever the mesh already reaches
+   * past the tangent point: every eye up to ${MAX_EYE_ON_LIMB_M.toFixed(0)} m, which is every
+   * camera but the debug fly-cam. Above that it reappears, and it still
+   * cannot lift any part of the sea above the limb, because the limb's elevation
+   * is the thing it solves for. Measured over 860 columns of 'orbit': zero
+   * slivers, and zero columns where the curved sea sits above the flat one.
+   */
+  float lift = max(sqrt(max(uCameraPos.y, 0.0)) - dHoriz * inversesqrt(2.0 * EARTH_R), 0.0);
+  float skirtRise = isSkirt * smoothstep(0.80, 1.0, r) * lift * lift;
+
+  vec3 pos = vec3(world.x + disp.x, disp.y + skirtRise - drop, world.y + disp.z);
   float dist = length(pos - uCameraPos);
 
   vWorldDist = vec4(pos, dist);
@@ -390,20 +443,29 @@ void main(){
 
   vec3 V = normalize(uCameraPos - P);
   float pxWorld = max(dist * uPixelAngle, 1e-3);
+  // At grazing incidence the pixel's world footprint is 'pxWorld' ACROSS the
+  // view ray and this ALONG it -- 3.2 m by 514 m at four kilometres with the
+  // eye 25.6 m up. Every schedule below that asks "can the pixel still resolve
+  // this" has to be asked twice, once per axis.
+  float pxAlong = pxWorld / max(abs(V.y), 1e-3);
 
   vec2 slope = vec2(0.0);
-  vec2 lowSlope = vec2(0.0);
   vec3 jac = vec3(0.0);
   float lostVar = 0.0;
+  float alongLost = 0.0;
   float wakeFoam = 0.0;
   ${fragSample}
   ${wakeFrag}
 
-  if (isSkirt > 0.5) { slope = vec2(0.0); jac = vec3(0.0); lostVar = uSlopeRms * uSlopeRms; }
+  if (isSkirt > 0.5) {
+    slope = vec2(0.0); jac = vec3(0.0);
+    lostVar = uSlopeRms * uSlopeRms; alongLost = lostVar;
+  }
 
   // Everything above the finest cascade's Nyquist is slope variance that no
   // resolution would have rendered, so it is roughness at every distance.
   lostVar += uSlopeVarTail;
+  alongLost += uSlopeVarTail;
 
   // CAPILLARY RIPPLE. The line above is right for anything the pixel cannot
   // resolve — but within a few tens of metres the pixel CAN resolve part of that
@@ -435,6 +497,11 @@ void main(){
     vec2 rp = vAbs + uWind.xz * (uTime * 0.03);
     slope += (noise2d_d(rp * 2.2).yz + noise2d_d(rp * 5.7 + 17.3).yz) * amp;
     lostVar = max(lostVar - restore, 0.0);
+    // The ripple goes into 'slope' on both axes, so the along-ray books have to
+    // credit it too -- but only as far as the along-ray footprint reaches. At
+    // 160 m that footprint is 0.8 m long and a 25 cm ripple is already gone.
+    alongLost = max(alongLost - uSlopeVarTail * RIP_BAND *
+      (1.0 - smoothstep(0.020, 0.130, pxAlong)), 0.0);
   }
 
   if (uWetness > 0.01) slope += rainRipple(vAbs, uWetness).xz;
@@ -448,6 +515,42 @@ void main(){
     jxz * slope.y - slope.x * jzz,
     max(jxx * jzz - jxz * jxz, 0.02),
     slope.x * jxz - slope.y * jxx));
+
+  /* THE LOW-FREQUENCY NORMAL IS ANISOTROPIC, BECAUSE THE FOOTPRINT IS.
+   *
+   * 'Nlow' is what both specular paths below blend toward: the normal whose
+   * slope the pixel can still PLACE, as opposed to the slope it can only own as
+   * roughness. It used to be cascade 0 alone -- the 0.5-2 km swell -- and that
+   * is why the far field died. Cascade 0 holds 3.6% of the slope variance the
+   * footprint still carries at 4 km, and its 32 m texel spans nineteen pixels
+   * there, so it can produce a gradient down the screen and nothing at all
+   * across it: per-row mean |dL/dx| over x 0-500 in 'orbit' read 1.99-2.19 from
+   * the horizon to y 660, which is the dither's own floor (DIAGNOSIS §67).
+   *
+   * The fix is not "use the whole slope" -- that is the same point sample the
+   * macro blend below exists to reject, and it is measured: it lifts |dL/dx| by
+   * 0.39 and lifts the temporal std of the per-row band signal beyond 600 m from
+   * 0.09-0.25 to 0.29-0.41, i.e. it buys far-field detail by handing §17C's
+   * flickering streaks back.
+   *
+   * It is that the footprint is 3 m by 514 m, so the two axes have different
+   * answers. Decompose the slope along the horizontal view direction and across
+   * it: dot(N, V) is (V.y - sAlong) to first order and the ACROSS component
+   * does not enter it at all, so the along axis is exactly the one that
+   * rectifies dot(N, V) negative and flickers, and the across axis is exactly
+   * the one whose detail the pixel can hold. Keep the across component whole,
+   * and cut the along component to the rms the along-ray footprint still
+   * carries -- the same 'lostVar' schedule, asked at 'pxAlong'.
+   */
+  float slopeVarTotal = max(uSlopeRms * uSlopeRms, 1e-6);
+  float carried = max(slopeVarTotal - lostVar, 1e-6);
+  // Fraction of the along-axis slope RMS that survives the along-ray footprint.
+  // 1 near the camera (the footprint is square there), 0 past ~900 m, where the
+  // footprint is longer than every cascade's texel and there is no along-ray
+  // placement left to render.
+  float kAlong = sqrt(clamp(max(slopeVarTotal - alongLost, 0.0) / carried, 0.0, 1.0));
+  vec2 vDir = V.xz / max(length(V.xz), 1e-5);
+  vec2 lowSlope = slope - vDir * (dot(slope, vDir) * (1.0 - kAlong));
   vec3 Nlow = normalize(vec3(-lowSlope.x, 1.0, -lowSlope.y));
 
   float fold = jxx * jzz - jxz * jxz;
@@ -499,8 +602,6 @@ void main(){
   // frame. The whitecap STATISTIC does not change with distance, only our
   // ability to say where, so wherever the fold has gone sub-texel the coverage
   // is handed to Monahan's law and the breakup field below decides placement.
-  float slopeVarTotal = max(uSlopeRms * uSlopeRms, 1e-6);
-  float carried = max(slopeVarTotal - lostVar, 1e-6);
   float foldLive = saturate1(carried / slopeVarTotal * 3.3);
   cover = max(cover, uFoamCover * (1.0 - foldLive));
 
@@ -611,9 +712,19 @@ void main(){
   // lostVar/uSlopeRms^2 are the total over both axes, so alpha is their sqrt.
   // Getting the factor of root 2 wrong here spreads the sun over the whole sea
   // as a flat white wash instead of a glitter lobe.
+  //
+  // The wide end used to be the TOTAL rms, which is right only if 'Nlow' carries
+  // no slope at all -- true to within 3.6% while it was cascade 0, not true of
+  // the anisotropic 'Nlow' above, which keeps the whole across-ray half. Add
+  // back what the blend actually removes and nothing else: see 'alphaR' below
+  // for the derivation, this is the same expression at the sun lobe's own blend
+  // weight. It lands within 2% of uSlopeRms at sea state 3-7 -- the tail is 47%
+  // to 86% of the total variance and no blend can reach it -- so this is a
+  // correctness statement, not a visible change.
   float glit = smoothstep(45.0, 850.0, dist);
   float aTight = sqrt(max(lostVar, 1e-5));
-  float aWide = clamp(uSlopeRms, 0.055, 0.62);
+  float kSun = mix(1.0, kAlong, glit * 0.85);
+  float aWide = clamp(sqrt(lostVar + 0.5 * carried * (1.0 - kSun * kSun)), 0.055, 0.62);
   float alpha = mix(aTight, aWide, glit);
   vec3 Ns = normalize(mix(N, Nlow, glit * 0.85));
   // Rain does roughen the surface, but 'rainRipple' above already put its ripple
@@ -723,13 +834,21 @@ void main(){
   // rms is 13% of the grazing sine and cannot rectify anything.
   float macro = saturate1(sqrt(carried) / max(abs(V.y), 1e-3) - 0.25);
   vec3 Nmac = normalize(mix(N, Nlow, macro));
-  // Blending a normal toward its own low-pass scales the high-frequency part by
-  // (1 - macro), so it removes (1 - (1-macro)^2) of 'carried' from the geometry.
-  // Put exactly that back as lobe width or the two halves of one specular lobe
-  // disagree about the surface. At macro == 1 this lands on uSlopeRms, which is
-  // what the sun lobe's own wide regime uses, so the two agree at the limit.
-  float km = 1.0 - macro;
-  float alphaR = clamp(max(alpha, sqrt(lostVar + (1.0 - km * km) * carried)), 0.02, 0.95);
+  // Blending a normal toward its own low-pass removes variance from the
+  // geometry, and exactly that much has to come back as lobe width or the two
+  // halves of one specular lobe disagree about the surface.
+  //
+  // 'Nlow' differs from N on the ALONG-ray axis only, by a factor kAlong, so the
+  // blend scales that axis by kRef and leaves the across-ray axis alone. Slope
+  // variance splits evenly between the two axes, hence the 0.5: what the blend
+  // removes is half of 'carried' times (1 - kRef^2). The old form was this
+  // expression with kAlong pinned to 0 and no 0.5 -- i.e. it assumed the blend
+  // flattened BOTH axes completely, which is what blending toward cascade 0
+  // very nearly did. Keeping that form with the anisotropic 'Nlow' would count
+  // the across-ray half twice, once as slope in the normal and once as the
+  // roughness that exists precisely because it is not.
+  float kRef = mix(1.0, kAlong, macro);
+  float alphaR = clamp(max(alpha, sqrt(lostVar + 0.5 * carried * (1.0 - kRef * kRef))), 0.02, 0.95);
   float fres = oceanReflectance(max(dot(Nmac, V), 1e-3), alphaR);
   vec3 R = reflect(-V, Nmac);
   R.y = abs(R.y) * 0.55 + R.y * 0.45; // keep grazing rays out of the ground
@@ -844,16 +963,22 @@ void main(){
   // The sky publishes an 'aerialLUT' froxel volume and this still does not sample
   // it, for two reasons. It is rebuilt every 4th frame, so a camera cut would drag
   // stale in-scatter across the whole sea; and the volume's far plane is a few km
-  // while the clipmap runs to 49 km, so the horizon row — the one row that must
-  // match the sky exactly or the rubric fails on a hard seam — is past its range.
-  // The probe-based 'oceanInscatter' below gets the azimuthal variation, which was
-  // the thing actually missing, without either problem.
+  // while the horizon is 5-18 km out, so the horizon row — the one row that must
+  // match the sky or the rubric fails on a hard seam — is past its range. The
+  // probe-based 'oceanInscatter' below gets the azimuthal variation, which was the
+  // thing actually missing, without either problem.
   float ext = max(uFogDensity, 3.912 / max(uVisibility, 200.0));
   float t = 1.0 - exp(-dist * ext);
-  // The clipmap runs to 49 km, but a flat sea compresses everything past ~12 km
-  // into the last pixel below the horizon. Saturate across that band so the last
-  // row of water and the first row of sky are the same colour — a step there
-  // reads as a hard seam, which the rubric fails outright.
+  // A CAP on the horizon step, and no longer the thing that erases it.
+  //
+  // It was written when the sea ran flat to 49 km and compressed everything past
+  // ~12 km into the last row, which forced that row to the sky's own colour. With
+  // curvature the last sea is at 'sqrt(2*R*h)' and Koschmieder alone already has
+  // t = 0.44 at a 2.5 m eye, 0.77 at 8 m and 0.91 at 25 m, so this term is inert
+  // at every eye height a camera mode reaches (measured: removing it from the
+  // untouched build changes tot|d2L| by 0.3 on a null spread of 0.4). What it
+  // still does is bound the step when visibility is very high — at 44 km and a
+  // 25 m eye it lifts t from 0.80 to 0.84 — and that is worth one 'max'.
   t = max(t, smoothstep(6000.0, 22000.0, dist));
   vec3 haze = oceanInscatter(-V);
   col = mix(col, haze, t);

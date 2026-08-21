@@ -113,6 +113,73 @@ export function disposeTextures(): void {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Metals
+ * ------------------------------------------------------------------ */
+
+/**
+ * Encode a LINEAR reflectance for the albedo channel.
+ *
+ * `bake` marks the albedo `SRGBColorSpace`, so three decodes it on sample and
+ * `Px.r/g/b` are sRGB codes, not radiometric quantities. Every physical
+ * constant below is a linear reflectance and has to come through here — writing
+ * 0.19 straight into `p.r` asks for sRGB 0.19, which is a linear 0.029, a
+ * factor of 6.5 low. This is AGENTS.md 6 in the one direction the codebase had
+ * not yet made the mistake in: a hex typed by eye needs converting, and a
+ * computed linear value needs encoding, and both are one call.
+ */
+function l2s(x: number): number {
+  const c = clamp01(x);
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+}
+
+/**
+ * F0 of a conductor IS its colour.
+ *
+ * For a metal the base colour is the spectral reflectance at normal incidence,
+ * it is HIGH, and there is essentially no diffuse term underneath it: all of the
+ * colour arrives as coloured specular. So `metalness` and the base colour are
+ * one decision. Authored dark with `metalness` 1 you get a black mirror — which
+ * is exactly what this file used to ship: measured off the baked maps, `ship-iron`
+ * presented F0 0.019/0.019/0.020, BELOW the 0.04 dielectric floor, with a diffuse
+ * of 0.002. It had neither term. Brass was 0.256/0.176/0.050 against a true
+ * 0.91/0.78/0.42, so it was also three times too saturated; copper was 0.050,
+ * indistinguishable from paint.
+ *
+ * Every triple here is LINEAR and goes through `l2s`.
+ */
+
+/**
+ * Blacked wrought iron. NOT bare iron: the ship's ironwork is fire-blacked or
+ * tarred, and the black is magnetite (Fe3O4), which is a CONDUCTIVE oxide with
+ * n ~ 2.4, k ~ 0.6 across the visible —
+ *
+ *     F0 = ((n-1)^2 + k^2) / ((n+1)^2 + k^2) = 2.32 / 11.92 = 0.195
+ *
+ * — so the film returns a fifth of what lands on it, not the fiftieth this
+ * family used to. Where rope and hands work a fitting it wears through to bare
+ * iron, and THAT is what puts a gradient across a hinge rather than a silhouette.
+ */
+const F0_IRON_BLACKED = 0.16;
+const F0_IRON_BARE = [0.56, 0.57, 0.58] as const;
+/** Rust is a dielectric oxide: strong diffuse, and it takes the metalness down. */
+const ALB_RUST = [0.105, 0.033, 0.014] as const;
+
+/** Brass, polished; and the sulphide film that dulls it, which is a dielectric. */
+const F0_BRASS = [0.91, 0.78, 0.42] as const;
+const F0_BRASS_TARNISH = [0.20, 0.17, 0.13] as const;
+
+/**
+ * Copper, and the verdigris that eats it.
+ *
+ * Past the patina the base colour stops being a reflectance and becomes a
+ * diffuse albedo, so the metalness has to travel with it. A coppered bottom
+ * authored all one way reads as painted brown either way; the plate-to-plate
+ * mix of bright metal and chalky crust is the whole look.
+ */
+const F0_COPPER = [0.95, 0.64, 0.54] as const;
+const ALB_VERDIGRIS = [0.055, 0.105, 0.085] as const;
+
+/* ------------------------------------------------------------------ *
  *  Shared building blocks
  * ------------------------------------------------------------------ */
 
@@ -455,26 +522,32 @@ export function makeCopper(size = 256): TexSet {
     const grime = fbmC(size, u, v, 11, 9, 3, 419);
     const dent = fbmC(size, u, v, 6, 13, 3, 431) - 0.5;
 
-    // Fresh copper is a warm brown; sea water turns it green-brown then dull.
-    const green = clamp01(patina * 1.35 - 0.2);
-    let r = mix(0.4, 0.2, green) + tone * 0.075;
-    let g = mix(0.24, 0.3, green) + tone * 0.055;
-    let b = mix(0.15, 0.24, green) + tone * 0.04;
-    // Weed / dirt in the laps.
-    r = mix(r, 0.12, lap * 0.55);
-    g = mix(g, 0.15, lap * 0.55);
-    b = mix(b, 0.12, lap * 0.55);
+    // Fresh copper reflects; verdigris scatters. Both endpoints have to travel
+    // together — see F0_COPPER. `green` is biased so the bottom still reads
+    // green-brown overall (the colour scheme asks for that) with a minority of
+    // scoured plates and laps flashing real metal.
+    const green = clamp01(patina * 1.5 - 0.28);
+    const bright = 0.92 + tone * 0.14;
+    let r = mix(F0_COPPER[0] * bright, ALB_VERDIGRIS[0], green);
+    let g = mix(F0_COPPER[1] * bright, ALB_VERDIGRIS[1], green);
+    let b = mix(F0_COPPER[2] * bright, ALB_VERDIGRIS[2], green);
+    // Weed / dirt in the laps: dielectric, so it kills the reflectance there
+    // and the metalness below follows it down.
+    const dirt = clamp01(lap * 0.75);
+    r = mix(r, 0.035, dirt);
+    g = mix(g, 0.045, dirt);
+    b = mix(b, 0.030, dirt);
     const speck = grime > 0.58 ? (grime - 0.58) * 2.2 : 0;
-    r += speck * 0.07; g += speck * 0.08; b += speck * 0.04;
+    r += speck * 0.03; g += speck * 0.035; b += speck * 0.02;
 
-    p.r = r; p.g = g; p.b = b;
+    p.r = l2s(r); p.g = l2s(g); p.b = l2s(b);
     // Thin sheet over a plank seam dents and oil-cans; that slow buckle is what
     // catches the light along a coppered bottom.
     p.h = -lap * 1.3 + (patina - 0.5) * 0.25 + dent * 0.7 + tone * 0.12;
-    p.rough = 0.55 + green * 0.28 + dent * 0.22 + lap * 0.15 + speck * 0.1;
+    // Scoured sheet is smooth; the crust is chalky.
+    p.rough = 0.38 + green * 0.36 + dent * 0.22 + dirt * 0.2 + speck * 0.1;
     p.ao = 1 - lap * 0.5;
-    // Mostly-oxidised copper keeps a little metallic character.
-    p.metal = mix(0.55, 0.12, green);
+    p.metal = mix(1, 0.06, clamp01(green + dirt * 0.8));
   });
 }
 
@@ -647,7 +720,7 @@ export function makeCanvas(size = 512): TexSet {
   });
 }
 
-/** Blackened wrought iron with hammer facets and a little rust bleed. */
+/** Blacked wrought iron with hammer facets, worn high spots and a rust bleed. */
 export function makeIron(size = 256): TexSet {
   return bake(size, 2.4, (u, v, p) => {
     const facet = fbmC(size, u, v, 12, 12, 3, 907);
@@ -656,14 +729,23 @@ export function makeIron(size = 256): TexSet {
     const pit = fbmC(size, u, v, 16, 16, 3, 911);
     worleyCell(u, v, 14, 919, _cell);
     const rust = _cell.r < 0.18 ? smoothstep(0.28, 0.08, _cell.d) : 0;
-    let l = 0.1 + facet * 0.07 + (pit - 0.5) * 0.04;
-    p.r = mix(l, 0.3, rust * 0.7);
-    p.g = mix(l, 0.15, rust * 0.7);
-    p.b = mix(l * 1.05, 0.08, rust * 0.7);
+    // The blacking wears through on the raised facets, so the SAME field that
+    // drives the height drives the reflectance: the bright band then lands on
+    // the forging instead of floating over it. Mean lands near 0.15, so a
+    // fitting is mostly blacked with the peaks flashing bare iron.
+    const worn = clamp01((facet - 0.42) * 1.9 + (pit - 0.5) * 0.5);
+    p.r = l2s(mix(mix(F0_IRON_BLACKED, F0_IRON_BARE[0], worn), ALB_RUST[0], rust));
+    p.g = l2s(mix(mix(F0_IRON_BLACKED, F0_IRON_BARE[1], worn), ALB_RUST[1], rust));
+    p.b = l2s(mix(mix(F0_IRON_BLACKED, F0_IRON_BARE[2], worn), ALB_RUST[2], rust));
     p.h = (facet - 0.5) * 0.9 + (pit - 0.5) * 0.5 - rust * 0.3;
-    p.rough = 0.44 + facet * 0.2 + rust * 0.32;
+    // A forged fitting is semi-gloss where the blacking is sound and chalky
+    // where it has gone. 0.44+facet*0.2 was a near-constant 0.55, which is
+    // where a specular lobe is too wide to place a highlight anywhere.
+    p.rough = 0.33 + (1 - worn) * 0.13 + rust * 0.48;
     p.ao = 1 - rust * 0.18;
-    p.metal = mix(0.9, 0.2, rust);
+    // 0.95 rather than 1: magnetite conducts, but part of the blacking is tar,
+    // and separating the two is not worth a fourth texture channel.
+    p.metal = mix(0.95, 0.1, rust);
   });
 }
 
@@ -673,13 +755,17 @@ export function makeBrass(size = 128): TexSet {
     const swirl = fbmC(size, u, v, 10, 10, 3, 1009);
     const fine = fbmC(size, u, v, 22, 22, 2, 1013);
     const tarnish = clamp01((fbmC(size, u, v, 5, 5, 3, 1019) - 0.42) * 2.4);
-    const l = 0.62 + swirl * 0.14 + (fine - 0.5) * 0.06;
-    p.r = mix(l * 1.0, l * 0.5, tarnish);
-    p.g = mix(l * 0.8, l * 0.52, tarnish);
-    p.b = mix(l * 0.35, l * 0.42, tarnish);
+    // Polish is a gain on the whole spectral F0, not a colour: the buffed high
+    // spots read brighter and the hue stays brass. The old code scaled the R:G:B
+    // ratio 1:0.8:0.35 in sRGB, which in linear is 1:0.61:0.19 — three times
+    // more saturated than brass, so it read as dark bronze.
+    const polish = 0.88 + swirl * 0.22 + (fine - 0.5) * 0.08;
+    p.r = l2s(mix(F0_BRASS[0] * polish, F0_BRASS_TARNISH[0], tarnish));
+    p.g = l2s(mix(F0_BRASS[1] * polish, F0_BRASS_TARNISH[1], tarnish));
+    p.b = l2s(mix(F0_BRASS[2] * polish, F0_BRASS_TARNISH[2], tarnish));
     p.h = (swirl - 0.5) * 0.5 + (fine - 0.5) * 0.4;
-    p.rough = 0.22 + tarnish * 0.42 + swirl * 0.1;
+    p.rough = 0.18 + tarnish * 0.46 + swirl * 0.1;
     p.ao = 1 - tarnish * 0.12;
-    p.metal = mix(0.95, 0.55, tarnish);
+    p.metal = mix(1.0, 0.45, tarnish);
   });
 }
