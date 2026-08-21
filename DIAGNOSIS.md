@@ -1999,3 +1999,117 @@ the defect is gone. The paired same-region ablation can.
   agents' renderers live, and `capture.mjs` printed p25 21.0 / p50 51.1 ms for `helm`
   even in a window it scored `rivals 0p/0b quiet`. `ext.post.profile` is a serialising
   per-pass measurement and is quoted above; the wall-clock frame periods are not.
+
+## 49. Motion blur was smearing the deck the eye stands on
+
+The near field measured **half as sharp as mid-distance** geometry, which is backwards
+for a first-person view. An agent isolated it properly and the mechanism is velocity
+attribution, not the blur.
+
+**The isolation is the lesson.** Its first attempt — disable a pass, capture, compare
+— produced a contradiction: the all-off variant measured *less* sharp over the sails
+than the one-pass-off variants. The ship is sailing, so variants captured a minute
+apart differ in wave phase, cloud field, sun and heading. That is §43 from the other
+side. What worked was visiting variants **round-robin over six cycles with a second
+`base` as the null**:
+
+| variant | near | sails |
+|---|---|---|
+| base | 4.42 ±0.52 | 7.71 ±2.18 |
+| **motion blur off** | **6.42 ±0.41** | 11.68 ±2.08 |
+| depth of field off | 4.81 ±0.51 | 8.78 ±1.56 |
+| TAA → SMAA | 5.64 ±1.07 | 14.35 ±1.60 |
+| base again (null) | 4.74 ±0.40 | 8.91 ±0.48 |
+
+Motion blur is the only variant past the null on near (+2.00, 3.8 sd). DoF is **not
+resolvable** (+0.38, 0.7 sd). TAA→SMAA sharpens *everything*, so it cannot be read as
+near-specific.
+
+**Mechanism**, from exact rigid reconstruction of consecutive-frame transforms at
+15 kn:
+
+| depth | `velocity.ts` reported | true screen motion | over-report |
+|---|---|---|---|
+| 0.8 m grating | 300 px | 17 px | **18×** |
+| 6 m deck run | 42 px | 1.6 px | **26×** |
+| 22 m sails | 7.3 px | 0.3 px | 24× |
+
+The eye is bolted to the ship, so the deck's true motion is only the camera-spring
+residual — but reprojection assumes world-static geometry and hands back the camera's
+whole translation parallax, 64:1 near-to-far purely from 1/depth. Motion blur now
+measures velocity in the **ship's frame**; TAA keeps the world reprojection, because
+its history is a screen-space buffer and world-static content needs it or it ghosts.
+Extra cost 0.020 ms against a 2.05 ms scene pass.
+
+**A second defect from the same instrument:** the shutter was a fraction of *whatever
+frame the engine produced*, so a 50 ms frame got 3× the smear of a 16 ms one — worse
+exactly when the frame is struggling. It is an exposure *time* now.
+
+The control is what makes the result trustworthy: **the motion-blur-off ceiling never
+moved** (6.42 / 6.51 / 6.49) while base climbed to meet it (4.42 → 5.85 → 6.54). On
+my own metric, near went 8.90 → 14.29 and mid 12.50 → 19.63.
+
+**It corrected my brief's methodology.** I had proposed judging the fix by the
+near/sails sharpness ratio. That ratio is still 0.63 after the fix — and it is 0.63
+with motion blur off entirely, because black tarred shrouds against sky out-gradient
+oiled planking whatever post does. A cross-region ratio measures content contrast as
+much as focus. Use the paired within-run delta.
+
+**Still open, deliberately:** `DOF_COMBINE_FRAG` ramps the far field over 1.4 px of
+CoC but the near field's alpha saturates to 1.0 the instant CoC clears 1.2 px, so a
+deck pixel asking for 1.2 px of defocus has its full-res colour discarded for a
+half-res gather. Ablation put it at 0.2–0.7 sd and it is a look the owner approved.
+And TAA's near-field share is unquantified — with velocity 50 px wrong, `clipAabb`
+pulls history to the 3×3 mean against a `uFeedbackMin` of 0.7, i.e. a 70% box blur.
+Giving TAA the ship-frame velocity is the obvious next move and the risky one.
+
+## 50. The ship's wheel was thirty unrotated boxes
+
+No identifiable wheel appeared anywhere in the helm view, and the foreground read as a
+pile of scattered lumber — because that is what it was. Two bugs in `buildWheel`.
+
+**Wrong plane.** `revolve` turns about +Y (`Builder.ts:458` sets
+`p.set(r*ca, y, r*sa)`), so the barrel's axis is local Y and a disc must lie in local
+XZ. The old code offset along X and drew its circle in YZ, mounting both discs at 90°
+to the barrel they turn on.
+
+**No orientation.** `box` is centre-plus-half-extents and axis-aligned. Every spoke was
+an identical Y-aligned bar merely *translated* onto a circle — ten parallel slabs, not
+ten radii. Same for rim segments and handles.
+
+Measured by reading the `aPart == PART.WHEEL` vertices out of the page, which is
+immune to camera angle, lighting and motion blur:
+
+| | span | detected axis | disc clusters |
+|---|---|---|---|
+| before | 2.48 × 1.11 × 2.07 | **y (vertical)** | **four**, at y = 6.0 / 6.25 / 7.0 / 7.25 |
+| after | 1.24 × 2.12 × 2.03 | x (athwartships) | **two**, at x = ±0.5 |
+
+A wheel has two discs on one axis. The old geometry's detected axis was *vertical* and
+its clusters were stacked in four layers; that is the defect in one line. In-plane
+aspect 1.20 → 1.04, rim vertices at 0.903 ± 0.082 m, +120 vertices.
+
+The rim is chorded rather than turned, which is not a simplification — a ship's wheel
+rim IS felloes, straight segments jointed at the spokes.
+
+**One statistic moved the wrong way and must not be quoted as a win:** angular
+coverage fell 24/36 → 12/36 sectors, because scattered bars spread vertices over many
+angles while a ten-felloe rim concentrates them at ten joints. Coverage is the wrong
+measure for this shape.
+
+**Still not good enough.** From the helm the two discs overlap nearly along their own
+axis, so the wheel is legible as spokes and handles but not yet obviously a wheel.
+That is a framing question for `src/camera` and `deck.ts`'s helm anchor together, not
+a geometry one.
+
+## 51. `preflight` said push-ready while the tree would not build
+
+An agent found it printing `push-ready` with `npm run build` red on four backticked
+GLSL comments — the recurring build-breaker, and the single thing that most obviously
+disqualifies a tree from being pushed. Preflight was checking publication hygiene and
+calling the result push-readiness, which is a bigger claim than it was testing.
+
+`check-glsl` runs inside it now: well under a second, and it includes an esbuild
+parse, so "will not build" is a fact. A full `tsc` is deliberately **not** run — it
+costs 24 s, agents run this gate repeatedly, and a slow gate gets skipped. The success
+line names what was and was not checked instead of implying both.
