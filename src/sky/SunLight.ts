@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { World } from '../types';
-import { SHADOW_PULLBACK_M, SHADOW_RADIUS_MAX_M, SHADOW_RADIUS_MIN_M } from './constants';
+import {
+  SHADOW_BIAS_M, SHADOW_CANVAS_FLOOR, SHADOW_DEPTH_HALF_M, SHADOW_PULLBACK_M,
+  SHADOW_RADIUS_MAX_M, SHADOW_RADIUS_MIN_M,
+} from './constants';
 import type { Radiometry } from './Radiometry';
 
 /**
@@ -39,14 +42,55 @@ export class SunLight {
   init(world: World): void {
     const sun = this.sun;
     sun.castShadow = true;
-    sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = SHADOW_PULLBACK_M + 260;
+    // DEPTH RANGE. VSM keeps its two depth MOMENTS in a half-float RG target —
+    // three creates both `map` and `mapPass` with HalfFloatType — so the mean
+    // that every depth comparison is made against carries 11 significant bits
+    // and no more. A half-float step is 2^(e-10), which makes the quantum a
+    // fraction of the near-to-far range, and the range used to be [1, 680] to
+    // hold a ship 60 m across: the casters landed at window-space z 0.52-0.72,
+    // where the step is 2^-11 and the quantum was 4.9e-4 x 679 m = 0.33 METRES.
+    // That is larger than the entire bias budget underneath it — 0.16 m of push
+    // in the sail's depth material plus SHADOW_BIAS_M here — so the comparison
+    // the whole shadow rests on was quantised more coarsely than the slack meant
+    // to protect it.
+    //
+    // Two things shrink it, and this uses both. The obvious one is a shorter
+    // range. The less obvious one is keeping the VALUES small, because a
+    // half-float step halves with every binade: depths in [0.25, 0.5) are
+    // quantised twice as finely as depths in [0.5, 1). So `near` is tight to the
+    // front of the ship and `far` carries all the margin, which puts the ship in
+    // the near half of the range and buys another bit for nothing. The quantum
+    // is now 0.02-0.08 m across the ship instead of a flat 0.33 m.
+    sun.shadow.camera.near = SHADOW_PULLBACK_M - SHADOW_DEPTH_HALF_M;
+    sun.shadow.camera.far = SHADOW_PULLBACK_M + 3 * SHADOW_DEPTH_HALF_M;
     // Thin standing rigging is only a few centimetres across, so a depth bias
     // large enough to kill acne on the hull would detach the shadow from every
     // line. normalBias moves the RECEIVER along its own normal instead, which
     // scales with surface curvature and leaves thin casters alone.
-    sun.shadow.bias = -0.00016;
+    //
+    // `bias` is in window-space depth, i.e. a fraction of near-to-far, so it
+    // only means anything as metres divided by the range — and it silently
+    // changed meaning every time the range did. Derive it.
+    sun.shadow.bias = -SHADOW_BIAS_M / (sun.shadow.camera.far - sun.shadow.camera.near);
     sun.shadow.normalBias = 0.055;
+    // TRANSLUCENT CASTERS. Measured on the `orbit` frame: removing the sails
+    // from the shadow map takes the darkest decile over the ship from 56 to 111
+    // sRGB against 123 with no shadow at all, so canvas casts about nine tenths
+    // of the shadow that lands on this ship. Canvas passes a third of the light,
+    // which makes a sail's shadow on another sail a grey wash at roughly a
+    // quarter of full sun; rendered as an opaque occluder it was at 5%, and that
+    // — not the map resolution, not the filter width, not the caster's
+    // tessellation, all three of which measured null — is why those shadows read
+    // as hard black cut-outs.
+    //
+    // A shadow map cannot carry per-caster opacity, and this is a per-LIGHT
+    // floor, so it is a compromise in both directions: it lifts the canvas
+    // shadows most of the way to where they belong, and it lifts the opaque
+    // shadows of hull, spars and tops to about twice their honest darkness. The
+    // exact fix is a transmission-aware shadow term in the sail material, which
+    // is one line in `ship/build/sails.ts`; until that lands, the error sits on
+    // a tenth of the shadow area instead of on nine tenths of it.
+    sun.shadow.intensity = 1 - SHADOW_CANVAS_FLOOR;
     // VSM blurs the ENTIRE shadow map, twice, every frame, regardless of how
     // little of it a single ship covers: cost is blurSamples x 2 x mapSize^2.
     // At 8 taps on a 4096 map that was 268 M fetches a frame and 19 ms, the

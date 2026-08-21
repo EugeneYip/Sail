@@ -203,6 +203,33 @@ export const SHADOW_RADIUS_MIN_M = 74;
 export const SHADOW_RADIUS_MAX_M = 200;
 /** Distance the shadow camera is pulled back along the light axis, metres. */
 export const SHADOW_PULLBACK_M = 420;
+/**
+ * Half-depth of the shadow VOLUME about the pullback plane, metres.
+ *
+ * Only the ship casts — ocean, islands and rigging all set `castShadow` false —
+ * so this has to hold nothing but the ship: 82 m sparred, 67 m of rig, about a
+ * frustum centre 22 m above the waterline, so a bounding radius near 60 m. The
+ * 80 m here is that with margin. Not a lateral extent: that is
+ * SHADOW_RADIUS_*_M.
+ */
+export const SHADOW_DEPTH_HALF_M = 80;
+/**
+ * Depth-comparison slack for the sun's shadow, metres of world distance along
+ * the light. Applied at the RECEIVER, so it is what stops acne on the hull and
+ * the deck; the sail's own depth material adds its own push on top.
+ */
+export const SHADOW_BIAS_M = 0.109;
+/**
+ * Light that reaches a shadow cast by CANVAS, as a fraction of full sun.
+ *
+ * Flax duck passes about a third of the light that falls on it — the sail
+ * material carries the same number as `CLOTH_TRANSMISSION` — so a sail is a
+ * lampshade, not an occluder, and its shadow on another sail is a grey wash. A
+ * shadow map cannot say that per caster, and this is a per-LIGHT floor, so it is
+ * a compromise; see the note on `shadow.intensity` in SunLight.ts for what it
+ * gets right and what it costs.
+ */
+export const SHADOW_CANVAS_FLOOR = 0.18;
 
 /**
  * Cinematic moon. A physically exact full moon delivers 2.5e-6 of the sun's
