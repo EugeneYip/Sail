@@ -3844,3 +3844,62 @@ tonal defect.
 - **The metals are authored with dielectric albedos.** `makeIron` gives wrought iron an
   F0 of ~**0.013**, an order of magnitude below any real metal — which is why an iron
   fitting has no gradient across it and reads as dark plastic.
+
+## 69. A published commit of unverified agent work, and a near-miss phantom regression
+
+The owner published the repo to GitHub Pages while three agents were mid-task, and
+committed the ~300 lines they had left in the tree. So `def7ecc` shipped **partial,
+unverified work from three killed agents** — it typechecked and `check-shaders` passed,
+but nobody had looked at a frame, and it went live.
+
+**It is good.** The frame is the strongest in the project: the hull reads with planking
+tone and legible gunports, the sails carry cloth and camber, the far field has texture to
+the horizon, and the horizon is clean. The metals work landed with its physics intact —
+it found `ship-iron` presenting **F0 0.019/0.019/0.020, below the 0.04 dielectric
+floor**, and derived the replacement from n and k
+(`F0 = ((n−1)² + k²)/((n+1)² + k²) = 0.195` for fire-blacked wrought iron, which is the
+right material for a ship's ironwork rather than bare iron).
+
+**But I nearly reported a regression that did not exist.** The published commit measured
+p25 46–56 ms against a verified 21–26 ms baseline, with the harness printing `rivals
+0p/0b quiet`. An A/B against its own parent saved me: **the parent measured the same**
+(47.6 / 33.9), so there was no regression — the box was at **load average 68** from two
+background sessions. That is §31's mistake exactly, and the only thing that stopped it
+was refusing to conclude from one arm.
+
+**Instrument fixed.** `capture.mjs` counted rival *renderers* by parsing `ps` for browser
+command lines, and node/esbuild work owns no renderer and matches no browser. It now
+reads `os.loadavg()` — which needs no `ps` parse and cannot be fooled by a command line —
+and vetoes on load above 4, printing `LOADED(n)` with the same taint marks. This box idles
+near 2 with a dev server up, so the threshold catches saturation rather than demanding
+silence.
+
+## 70. The Gamma glyphs were the hammock cranes, and that is the fourth misattribution
+
+A blind critic reported "25+ identical Gamma glyphs with no gradient across them, no
+variation between pins at different orientations". It called them belaying pins. An agent
+that investigated agreed and filed it as `buildBelayingPins`. **Both were wrong.**
+
+**The count is the tell.** The hammock-crane loop in `hull.ts` runs `z = -18` to `19` at
+1.5 m — **25 a side**. The belaying pins come in three clusters of 11. And a vertical box
+plus a horizontal box at its head *is* a Γ; the pins are a single box.
+
+This is the fourth object this project has misattributed from a crop, after the bow
+object, the "square waterfall" and the wheel. The pattern is consistent enough to state as
+a rule: **a crop tells you where a defect is on screen, never which object it is.** Count
+something and match it against the builder before naming the file.
+
+Both objects were flat, and for the same reason: **an axis-aligned box has exactly two lit
+faces at any sun angle**, so every instance presents the identical pair and a flat face has
+no gradient across it by construction. The cranes are now bent rods — two spars with a
+short elbow, which is what a rod bent round a former looks like — with a deterministic
+per-station lean. The pins are round and tapered with a shoulder, canted and jittered from
+a hash, and every third carries a hank of rope.
+
+Deliberately *not* done: a lathed profile with turnings, and a coil on every pin. A 35 mm
+shaft is about 15 px across at 2 m, so a taper reads and a turning does not, and 130 coils
+would cost more than the whole rig's ribbons.
+
+Cost: ship triangles 49,996 → 56,508 (+13%), **zero extra draw calls**, since both merge
+into existing bins. The lighting half of the complaint was already fixed by the iron F0
+correction, so what remained was only ever geometry.
