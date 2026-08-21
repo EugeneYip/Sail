@@ -385,87 +385,101 @@ float lwClothLine(float distM, float widthM, float aa) {
 }
 
 /**
- * The weave.
+ * THE WEAVE IS GONE, and the arithmetic says it had to be.
  *
- * This used to be baked into the canvas map as two sinusoids at 190 and 150
- * cycles across 512 texels — 2.7 texels a cycle, right at Nyquist. What came out
- * was a beating moiré that averaged to a flat grey-green field: measured, the
- * baked albedo had a standard deviation of 0.024 at a two-metre viewing
- * distance, which is a constant with a rounding error on it. That is the whole
- * of the owner's "the sails read as flat cloth".
+ * There used to be a per-pixel plain-weave tier here at a 2.4 mm warp pitch. It
+ * faded itself out with 'clamp(WARP / (2 * fwidth) - 1)', which was the right
+ * instinct, but the fade was never anything but zero. This camera is 58 degrees
+ * of VERTICAL field over 900 pixels, so one pixel subtends 2 * tan(29) / 900 =
+ * 1.232 mm per metre of range: at the helm's 15-25 m from the courses a pixel is
+ * 18-31 mm of cloth, and the weave needs 1.2 mm to survive its own fade. That is
+ * a range of 0.97 m, closer than the player can get to any sail in the suit, and
+ * fwidth only grows with obliquity, never shrinks. So the tier was provably zero
+ * at every reachable range and it is deleted rather than defended.
  *
- * Generated here instead, the pitch is in METRES and holds at any distance. No.1
- * flax duck is a plain weave of about 2.4 mm warp pitch with a slightly coarser
- * weft, and it is genuinely visible at arm's length — the ribbed sheen across a
- * sail is the single strongest cue that it is cloth and not paper.
+ * (The previous note here assumed 50 degrees over 1600 px and got 1.17 mm at 2 m,
+ * which is the same number a factor of two too fine. The fov and the pixel count
+ * are both in 'src/core/settings.ts' and 'scripts/capture.mjs'; measure, do not
+ * assume, because a 2x error in the pixel footprint is a 2x error in every
+ * antialiasing fade in this file.)
  *
- * Both tiers fade out as their pitch approaches a pixel, which is what stops the
- * weave becoming the sparkle field a texture at this frequency turns into. The
- * relief comes back as an analytic slope in 'g', per metre.
- *
- *   m  (along the span, across the chord) in metres
+ * Individual threads are not renderable on this ship. What IS renderable at
+ * 18-31 mm a pixel is the BOLT: a 610 mm cloth is 20-34 px, its seam is the
+ * strongest thing on a real sail, and the cockle flutes between the seams are
+ * 10-20 px. That is the tier below and it is the only one there needs to be.
  */
-float lwWeave(vec2 m, vec2 aa, out vec2 g) {
-  const float WARP = 0.0024;
-  const float WEFT = 0.0031;
-  float fw = clamp(WARP / max(aa.y * 2.0, 1e-7) - 1.0, 0.0, 1.0);
-  float ff = clamp(WEFT / max(aa.x * 2.0, 1e-7) - 1.0, 0.0, 1.0);
-
-  float kw = TAU / WARP;
-  float kf = TAU / WEFT;
-  float sw = sin(m.y * kw);
-  float sf = sin(m.x * kf);
-
-  // A plain weave is one set of threads passing over the other, so the two
-  // sinusoids do not add — the crossing where both are up is the high point and
-  // the crossing where both are down is the pit. Multiplying the phases gives
-  // that, and it is still differentiable in closed form.
-  float h = 0.62 * sw * fw + 0.5 * sf * ff + 0.34 * sw * sf * fw * ff;
-  g = vec2(
-    (0.5 * kf * cos(m.x * kf)) * ff + (0.34 * kf * sw * cos(m.x * kf)) * fw * ff,
-    (0.62 * kw * cos(m.y * kw)) * fw + (0.34 * kw * cos(m.y * kw) * sf) * fw * ff
-  );
-  return h;
-}
 
 /**
- * The cloth itself: slubs, bands and pucker.
+ * The COCKLE of a bolt of duck: long shallow flutes running head to foot.
  *
- * The weave above is the right idea measured at the wrong scale, and the probe
- * says so. At a two-metre viewing distance a 1600 px / 50 degree frame resolves
- * 1.17 mm per pixel, so the Nyquist limit is 2.3 mm — and the warp pitch is
- * 2.4 mm. The antialiasing fade therefore holds the warp tier at 3 PER CENT of
- * its amplitude at 2 m and at zero by 4 m; measured, the weave contributes an
- * albedo standard deviation of 0.0074 at 2 m, which is flatter than the 0.024 of
- * the baked map it was written to replace. Individual threads are simply not
- * renderable at the distance the owner is complaining about, and no amount of
- * amplitude fixes that — it is the sample rate.
+ * The warp is the stiff direction, so cloth under tension flutes ALONG the bolt.
+ * That is the whole difference between cloth and stucco: the relief has a grain,
+ * and the grain is the seam direction. The regular part of the corrugation — one
+ * crest and one trough to each 610 mm cloth — is in the baked map, where it is
+ * free and mips correctly; this is the irregular tier over it, at 550 mm across
+ * the bolt and 3 m along, whose job is to break the map's 2.44 m tile before the
+ * repeat becomes visible on a 22 m course.
  *
- * What IS visible on a real sail at arm's length is the cloth rather than the
- * thread: handspun flax is thick and thin along its length, so duck woven from
- * it has slubs and banding at one to four centimetres, and a sail under load
- * puckers at the same scale. That is an order of magnitude coarser than the
- * weave, it survives out to about twelve metres, and it is the thing that makes
- * canvas read as canvas.
+ * WHY THE OCTAVE WEIGHTS ARE WHAT THEY ARE. In an fBm the SLOPE an octave
+ * contributes is its amplitude times its frequency, so the octave weighting that
+ * governs the normal map is 'lacunarity * gain', not 'gain'. The tier this
+ * replaces used 2.85 and 0.45, i.e. 1.28 — over one, so its FINEST octave, the
+ * one nearest the pixel, carried more slope than its base and owned the shading.
+ * 2.0 and 0.35 is 0.70, so the base octave owns it and the fine one only
+ * roughens. Each octave is also faded on ITS OWN pitch rather than the tier's.
+ *
+ * Calibrated, not guessed: '.tmp/noise2dstat.mjs' checks the ported derivative
+ * against a finite difference and measures 'noise2d_d' at an RMS per-axis
+ * gradient of 0.625 and an RMS value of 0.216, so the RMS chord slope of this
+ * tier is AMP * kc * 0.625 * sqrt(1 + 0.70^2) and can be stated in degrees.
  *
  *   m  (along the span, across the chord) in metres
+ *   aa (fwidth(span), fwidth(chord)) in metres per pixel
  *   returns  roughly -1..1
  *   g        out: d/dm, per metre
  */
-float lwClothSlub(vec2 m, vec2 aa, out vec2 g) {
-  const float P = 0.024;
-  float k = 1.0 / P;
-  // Slubs run along the yarn, so a gentle 2.2:1 rather than the fibre tier's 22.
-  float ky = k * 0.45;
-  float aam = max(aa.x, aa.y);
-  float f1 = clamp(P / max(aam * 2.0, 1e-7) - 1.0, 0.0, 1.0);
-  float f2 = clamp(P * 0.35 / max(aam * 2.0, 1e-7) - 1.0, 0.0, 1.0);
-  vec2 p = vec2(m.x * k, m.y * ky);
+float lwClothCockle(vec2 m, vec2 aa, out vec2 g) {
+  const float ACROSS = 0.55;
+  const float ALONG = 3.0;
+  const float LAC = 2.0;
+  const float GAIN = 0.35;
+  float kc = 1.0 / ACROSS;
+  float ka = 1.0 / ALONG;
+  float f1 = clamp(ACROSS / max(aa.y * 2.0, 1e-7) - 1.0, 0.0, 1.0);
+  float f2 = clamp(ACROSS / LAC / max(aa.y * 2.0, 1e-7) - 1.0, 0.0, 1.0);
+  vec2 p = vec2(m.x * ka, m.y * kc);
   vec3 a = noise2d_d(p + 5.13);
-  vec3 b = noise2d_d(p * 2.85 + 31.7);
-  g = vec2(a.y * k, a.z * ky) * f1
-    + vec2(b.y * k, b.z * ky) * (2.85 * 0.45 * f2);
-  return a.x * f1 + b.x * 0.45 * f2;
+  vec3 b = noise2d_d(p * LAC + 31.7);
+  g = vec2(a.y * ka, a.z * kc) * f1
+    + vec2(b.y * ka, b.z * kc) * (LAC * GAIN * f2);
+  return a.x * f1 + b.x * GAIN * f2;
+}
+
+/**
+ * The seam, as the lapped and doubled thickness of cloth it is rather than a
+ * stripe painted on — the same argument that makes the deck's caulk a groove
+ * instead of a black line in 'shaders/detail.ts'.
+ *
+ * This is the strongest relief on a real sail and it is deliberately NOT in the
+ * baked map: 22 mm of lap is four texels of a 512 map over 2.44 m, so the mip
+ * chain destroys it first, and a version baked at full strength put a
+ * 74-degree crease in the map's top percentile. Here it holds its step at any
+ * range, because the shoulder is widened to a pixel and its slope drops to
+ * match — conserving the total rise exactly the way 'lwClothLine' conserves a
+ * line's ink.
+ *
+ *   seamD  metres from the seam centreline
+ *   aa     metres of chord per pixel
+ *   h      out: height in metres, 0 outside the lap
+ *   returns  dh/d(seamD), which is negative
+ */
+float lwSeamLap(float seamD, float aa, out float h) {
+  const float LAP_M = 0.011;
+  const float RISE_M = 0.0015;
+  float w = max(0.004, aa);
+  float x = clamp((seamD - LAP_M + w) / (2.0 * w), 0.0, 1.0);
+  h = RISE_M * (1.0 - x * x * (3.0 - 2.0 * x));
+  return -RISE_M * 3.0 * x * (1.0 - x) / w;
 }
 
 /**
@@ -521,7 +535,11 @@ function makeSailMaterial(
     sheenColor: new THREE.Color(0xa8a294),
     side: THREE.DoubleSide,
     aoMapIntensity: 0.85,
-    normalScale: new THREE.Vector2(0.85, 0.85),
+    // 1.0, because 'makeCanvas' now bakes its height in METRES with the Sobel
+    // gain set so the stored normal IS the surface slope. Anything else here
+    // makes the map's measured slope a lie: '.tmp/clothprobe.mjs' reports on the
+    // texture, and this is the only thing between the texture and the shading.
+    normalScale: new THREE.Vector2(1, 1),
     dithering: true,
   });
   const trans = { value: CLOTH_TRANSMISSION };
@@ -577,7 +595,7 @@ function makeSailMaterial(
         // the creases without evaluating the fan a second time.
         vec2 lwCreaseG = vec2(0.0);
         float lwCreaseH = 0.0;
-        float lwSlubR = 0.0;
+        float lwClothR = 0.0;
         {
           float spanM = vSailUv.x;
           float chordM = vSailUv.y;
@@ -589,15 +607,32 @@ function makeSailMaterial(
           float pf = chordM / ${lwFloat(PANEL_WIDTH_M)};
           float seamD = min(fract(pf), 1.0 - fract(pf)) * ${lwFloat(PANEL_WIDTH_M)};
           float seam = lwClothLine(seamD, 0.022, aaC);
-          // Every cloth is a slightly different bolt of flax.
+          // Every cloth is a slightly different bolt of flax. This is the only
+          // bolt tone there is now: the baked map used to add a second one from
+          // 'lattice(bolt, floor(u * 3))', which is a hard-edged 867 x 610 mm
+          // rectangle of constant value, and two of them together are the
+          // owner's "quilted" almost by construction. This one is per bolt for
+          // the bolt's whole length, does not repeat with the tile, and sits at
+          // the seam's exact phase.
           float panelTone = hash11(floor(pf) * 0.731 + 3.17);
           // Two rows of hand stitching, one either side of the overlap, at the
           // ten-to-the-inch a sailmaker works to. This is the detail that says
           // the seam is sewn rather than drawn on.
+          //
+          // The ROWS hold at any range — they are 1.6 mm lines and 'lwClothLine'
+          // fades their contrast honestly. The individual STITCHES do not: below
+          // Nyquist an 8.5 mm repeat stops being stitches, because
+          // min(fract, 1 - fract) * 0.0085 never exceeds 4.25 mm, so once a pixel
+          // is wider than that the line covers every sample and the term
+          // collapses into a beat pattern. So the dash modulation fades to a
+          // continuous row rather than taking the row down with it.
+          const float STITCH_PITCH_M = 0.0085;
+          float stitchRes = clamp(STITCH_PITCH_M / max(aaS * 2.0, 1e-7) - 1.0, 0.0, 1.0);
           float stitchRow = lwClothLine(abs(seamD - 0.016), 0.0016, aaC);
-          float stitch = stitchRow
-            * lwClothLine(min(fract(spanM / 0.0085), 1.0 - fract(spanM / 0.0085)) * 0.0085,
-                          0.0022, aaS);
+          float dash = lwClothLine(
+            min(fract(spanM / STITCH_PITCH_M), 1.0 - fract(spanM / STITCH_PITCH_M))
+              * STITCH_PITCH_M, 0.0022, aaS);
+          float stitch = stitchRow * mix(1.0, dash, stitchRes);
 
           // Bolt ropes all round the sail, heavier on the leeches.
           float edgeSpanM = min(vSail.y, 1.0 - vSail.y) * vCloth.y;
@@ -664,25 +699,33 @@ function makeSailMaterial(
           float foot = smoothstep(0.5, 1.0, vSail.y);
           vec3 grime = vec3(0.78, 0.79, 0.74);
 
-          // The weave. Relief of 0.11 mm over a 2.4 mm pitch is a peak slope of
-          // 0.29 — a 16-degree tilt, which is what makes a sunlit sail ripple
-          // with light instead of reading as a bent sheet of paper.
+          // The cockle. AMP is set from the measured statistics of 'noise2d_d'
+          // (see 'lwClothCockle'): 0.032 * (1 / 0.55) * 0.625 * 1.221 is an RMS
+          // chord slope of 0.044, a two-and-a-half-degree ripple, against 0.008 —
+          // half a degree — along the bolt. Six to one, and the six is the seam
+          // direction. A reef band is a row of points seized through eyelets and
+          // the cloth gathers at every one, so the flutes are pulled harder where
+          // a band runs; that stands in for a third crease fan at a tenth of the
+          // cost.
           vec2 aaW = vec2(fwidth(spanM), fwidth(chordM));
-          vec2 weaveG;
-          float weave = lwWeave(vec2(spanM, chordM), aaW, weaveG);
-          // The slub tier, an order of magnitude coarser, is what survives to
-          // the distance the sail is actually looked at. 1.8 mm of relief over a
-          // 24 mm slub is a peak slope near 0.11 - a six-degree ripple, which is
-          // how a hauled sail catches the light in bands rather than as a sheet.
-          vec2 slubG;
-          float slub = lwClothSlub(vec2(spanM, chordM), aaW, slubG);
-          lwSlubR = 0.075 * slub;
-          // lwWeave works in (span, chord); lwCreaseG is in (chord, span).
-          lwCreaseG += vec2(weaveG.y, weaveG.x) * 0.00011
-                     + vec2(slubG.y, slubG.x) * 0.0018;
+          vec2 cockleG;
+          float cockle = lwClothCockle(vec2(spanM, chordM), aaW, cockleG);
+          float bandPull = 1.0 + 0.9 * band;
+          cockle *= bandPull;
+          cockleG *= bandPull;
+          // Gloss follows the cockle along the warp: a real sail catches the
+          // light in bands running down the cloth, not in a uniform sheen.
+          lwClothR = 0.07 * cockle;
+          // The lapped seam. With the baked map's seam height gone this is the
+          // strongest relief on a sail, and on a real one it should be.
+          float lapH;
+          float lapSlope = lwSeamLap(seamD, aaC, lapH);
+          // lwClothCockle works in (span, chord); lwCreaseG is in (chord, span).
+          lwCreaseG += vec2(cockleG.y, cockleG.x) * 0.032;
+          lwCreaseG.x += lapSlope * sign(0.5 - fract(pf));
 
-          diffuseColor.rgb *= 0.93 + 0.14 * panelTone;
-          diffuseColor.rgb *= 1.0 + 0.055 * weave + 0.085 * slub;
+          diffuseColor.rgb *= 0.96 + 0.08 * panelTone;
+          diffuseColor.rgb *= 1.0 + 0.075 * cockle;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * grime,
                                  foot * 0.4 + smoothstep(0.5, 0.9, stain) * 0.35);
           diffuseColor.rgb *= 1.0 - seam * 0.28 - band * 0.2 - pts * 0.5
@@ -744,7 +787,7 @@ function makeSailMaterial(
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
-        roughnessFactor = clamp(roughnessFactor + lwSlubR, 0.35, 1.0);`,
+        roughnessFactor = clamp(roughnessFactor + lwClothR, 0.35, 1.0);`,
       )
       .replace(
         '#include <lights_fragment_end>',

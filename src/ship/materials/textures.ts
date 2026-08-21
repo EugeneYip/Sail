@@ -509,50 +509,141 @@ export function makeRope(size = 128): TexSet {
 }
 
 /**
- * Weathered flax sailcloth: woven weft/warp, vertical panel seams,
- * hand-sewn patches and mildew staining toward the foot.
+ * Bolts of duck per canvas tile: `PANEL_TILE_M` (2.44 m, in `shaders/sail.ts`)
+ * over a 610 mm cloth. If either number moves, the baked seam and the crisp
+ * per-pixel seam in `build/sails.ts` stop sharing a phase and a sail draws two
+ * sets of seams a few centimetres apart.
+ */
+const CANVAS_BOLTS = 4;
+
+/**
+ * Mean metres of sailcloth per tile — `SEAM_TILE_M` 2.60 along the bolt and
+ * `PANEL_TILE_M` 2.44 across it. `bake`'s Sobel is per TEXEL, so the strength
+ * below converts it to a real surface slope: see `makeCanvas`.
+ */
+const CANVAS_TILE_M = 2.52;
+
+/**
+ * Weathered flax sailcloth: bolts of duck seamed head to foot, cockled along
+ * the warp, soiled and mildewed toward the foot.
+ *
+ * WHY THIS MAP IS NEARLY FLAT, when the deck's is not.
+ *
+ * Measured on the version this replaces (`.tmp/clothprobe.mjs`, which bakes the
+ * library in plain node and reports on the normal map the GPU consumes): an RMS
+ * surface slope of **48 degrees**, with its relief energy centred on 95 mm along
+ * the bolt and 91 mm across it — isotropic decimetre bumps at half a radian of
+ * tilt. That is crumpled foil, not cloth, and it is the whole of the owner's
+ * "bumpy, quilted, popcorn-like". It was also nearly the only thing on the sail:
+ * ablated in the live material, zeroing `normalScale` dropped the sail's
+ * gradient energy at helm range by more than half while every per-pixel tier
+ * moved it by under 2%.
+ *
+ * Two things made it that steep, and both are structural rather than a matter of
+ * taste:
+ *
+ *  - `p.h` was a sum of two ISOTROPIC fBms (9x11 and 34x26 cycles) at three
+ *    octaves, so the finest octave sat at 20-23 mm — and in an fBm the SLOPE of
+ *    an octave is its amplitude times its frequency, so with a gain of 0.5 and a
+ *    lacunarity of 2 every octave contributes the same slope and the map's
+ *    normal ends up owned by whichever octave is nearest the texel grid.
+ *  - `bake`'s Sobel is per TEXEL, so the height had no physical unit at all and
+ *    a 256-texel map (medium and low tiers, `Ship.init`) got exactly twice the
+ *    slope of the 512 one for the same source.
+ *
+ * So the height field here is now in METRES, with the Sobel gain set to
+ * `size / (8 * tile)` — 8 is the Sobel operator's gain on a unit ramp — which
+ * makes the stored normal the true surface slope at any map resolution. And a
+ * bolt of No.1 duck IS flat: what relief it has is anisotropic, because the warp
+ * is the stiff direction, so cloth under tension cockles into long shallow
+ * flutes running head to foot. Nothing isotropic goes in here.
+ *
+ * The seam has no height in this map at all. It is the strongest relief on a
+ * real sail — a lapped, double-stitched, doubled thickness of cloth — but it is
+ * 22 mm wide, so a map that holds it is holding a feature the mip chain destroys
+ * first. `build/sails.ts` draws the lap per pixel from the sail's own metre
+ * coordinates, where it keeps its slope at any range; what the map owes it is
+ * the shading and the dirt either side, which is 46 mm across and mips honestly.
  */
 export function makeCanvas(size = 512): TexSet {
-  return bake(size, 2.4, (u, v, p) => {
-    // The WEAVE IS NOT HERE any more. 190 weft cycles over 512 texels is 2.7
-    // texels a cycle: sampled at Nyquist it came out as a beating moiré that
-    // averaged to a flat grey-green field, which measured a standard deviation
-    // of 0.024 at two metres and is exactly the "sails read as flat cloth" the
-    // owner reported. The weave is now generated per pixel from the sail's own
-    // metre coordinates in `build/sails.ts`, where a 2.5 mm thread pitch can be
-    // resolved and faded out honestly.
+  return bake(size, size / (8 * CANVAS_TILE_M), (u, v, p) => {
+    // u runs ALONG the bolts (head to foot), v ACROSS them.
+    const pv = v * CANVAS_BOLTS;
+    const bolt = Math.floor(pv);
+    const av = pv - bolt;
+    // Soft and wide on purpose — 0.075 of a bolt is 46 mm.
+    const seam = smoothstep(0.075, 0.03, Math.min(av, 1 - av));
+
+    // THE FLUTES, and they are a sinusoid rather than a noise on purpose.
     //
-    // What is left here is the tier a map can carry: the slub and cockle of
-    // hand-woven flax at a centimetre and up, panel tone, soil and mildew.
-    const slub = fbmC(size, u, v, 34, 26, 3, 601) - 0.5;
-    const cockle = fbmC(size, u, v, 9, 11, 3, 607) - 0.5;
+    // A cockle is a corrugation, not a bumpfield: the cloth is held flat where it
+    // is seamed and bags between the seams, so one crest and one trough to a bolt
+    // — 305 mm from crest to trough — is the shape, and `sin(2*pi*av)` is exactly
+    // that and is continuous across the seam as well as at it.
+    //
+    // Value noise cannot do this job at a stated slope. `vnoise` interpolates
+    // uniform lattice values with a smoothstep, so its RMS gradient is only 0.45
+    // per cell against 2.2 for a sinusoid of the same peak-to-peak: asking a
+    // 350 mm fBm for a four-degree slope costs 70 mm of relief, which is a bumpy
+    // sail again by a different route. The sinusoid gets it for 16 mm.
+    //
+    // Wander and swell keep it off a corrugated roof: both vary over about a
+    // metre ALONG the bolt and not at all across it, so the grain stays the seam
+    // direction.
+    const wander = (fbmC(size, u, v, 3, 2, 2, 613) - 0.5) * 0.1;
+    const swell = 0.5 + fbmC(size, u, v, 4, 2, 2, 619);
+    const flute = Math.sin(Math.PI * 2 * (av + wander)) * swell;
+    // A gentle irregular undulation under the flutes, 349 mm across the bolt and
+    // 1.30 m along it, so the corrugation is never quite regular.
+    const cockle = fbmC(size, u, v, 2, 7, 2, 607) - 0.5;
+    // Handspun flax is thick and thin along its length, so a bolt of duck has
+    // tonal streaks running head to foot. Albedo and gloss, almost no relief:
+    // 81 mm across the bolt is under a pixel at the range this is looked at, and
+    // an albedo that averages out is honest where a normal that averages out is
+    // just noise.
+    const slub = fbmC(size, u, v, 4, 30, 2, 601) - 0.5;
 
-    // Four vertical panels per tile with an overlapped, double-stitched seam.
-    const pv = v * 4;
-    const pRow = Math.floor(pv);
-    const av = pv - pRow;
-    const seam = smoothstep(0.055, 0.02, Math.min(av, 1 - av));
-
-    const tone = lattice(pRow, Math.floor(u * 3), 9) * 2 - 1;
-    const soil = fbmC(size, u, v, 6, 6, 4, 617);
-    const mildew = clamp01((fbmC(size, u, v, 12, 9, 3, 733) - 0.52) * 3.0);
+    // Weathering, coarsened. Soil was 6x6 cycles at FOUR octaves — an isotropic
+    // 51 mm mottle at the finest, which is under a pixel at the range the sail is
+    // looked at and so is the albedo half of the popcorn: dirt that reads as
+    // noise rather than as staining. A sail gets dirty in broad streaks that run
+    // with the cloth, so this is coarser, anisotropic and three octaves.
+    const soil = fbmC(size, u, v, 3, 5, 3, 617);
+    const mildew = clamp01((fbmC(size, u, v, 8, 7, 2, 733) - 0.52) * 3.0);
 
     // Patches: rectangular worley cells of slightly different cloth.
     worleyCell(u, v, 6, 809, _cell);
     const patch = _cell.r < 0.07 ? smoothstep(0.2, 0.14, _cell.d) : 0;
 
-    let l = 0.7 + slub * 0.085 + cockle * 0.07 + tone * 0.03;
+    // No per-bolt tone here any more. It was `lattice(bolt, floor(u * 3))`, i.e.
+    // a hard-edged 867 x 610 mm rectangle of constant value with no smoothing at
+    // all, which is the "quilted" in the owner's report taken literally. Bolt
+    // tone is real, but it belongs to the bolt for its whole length and it wants
+    // the seam's exact phase, so `build/sails.ts` owns it now.
+    let l = 0.7 + slub * 0.105 + cockle * 0.05;
     l -= soil * 0.07;
     l = mix(l, 0.6, patch * 0.5);
-    l = mix(l, 0.44, seam * 0.35);
+    // The seam is the strongest thing on a real sail and '.tmp/clothprobe.mjs'
+    // reports its 4-cycles-per-tile amplitude ('seam4') precisely so that it
+    // cannot be improved into invisibility without the number saying so. Dropping
+    // the baked per-bolt tone took k=4 energy with it, so this carries more.
+    l = mix(l, 0.44, seam * 0.5);
 
     // Flax canvas is warm off-white; mildew pulls it grey-green.
     p.r = mix(l * 1.0, l * 0.72, mildew * 0.6);
     p.g = mix(l * 0.965, l * 0.73, mildew * 0.6);
     p.b = mix(l * 0.875, l * 0.62, mildew * 0.6);
-    p.h = slub * 0.55 + cockle * 0.85 + seam * 0.9 + patch * 0.4;
-    p.rough = 0.78 + slub * 0.1 + cockle * 0.14 + mildew * 0.1;
-    p.ao = 1 - seam * 0.22 - patch * 0.1;
+    // METRES of relief. 22 mm crest to trough over a 610 mm bolt is a peak slope
+    // near 0.11 — a six-degree ripple, which is what a hauled sail does. Measured
+    // with '.tmp/clothprobe.mjs' rather than set by eye; the number that matters
+    // is the whole map's RMS slope and the tier it lands in.
+    p.h = flute * 0.011 + cockle * 0.016 + slub * 0.0008 + patch * 0.0012;
+    // Gloss varies ALONG the bolt with the yarn, which is the slight sheen a
+    // real sail shows when the sun is off the beam. The isotropic 0.14 of cockle
+    // that used to be the largest term here was the roughness half of the
+    // popcorn.
+    p.rough = 0.8 + slub * 0.17 + cockle * 0.04 + mildew * 0.1 - seam * 0.07;
+    p.ao = 1 - seam * 0.2 - patch * 0.1;
   });
 }
 
