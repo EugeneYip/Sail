@@ -4,6 +4,14 @@ How a critic agent judges a frame. The critic is shown images with neutral
 labels and **is not told which build produced which**, nor which is newer. It
 must commit to a verdict before any reveal.
 
+**The sheet must include `wildlife`.** A blind pass over noon/golden/helm/orbit
+produced the observation "nothing is alive in any of the eight frames" — no birds, no
+other sail, no spray in air. That is *correct engine behaviour*: direction 3's
+populations appear on a Poisson process with means of minutes, so a scene that does not
+force them shows empty sea. But it means the sanctioned review sheet never shows the
+world's life, and a critic cannot score what it is never shown. `--scene wildlife`
+forces one of each near enough to read.
+
 **On the comparator.** The original intent was a blind side-by-side against
 slowroads.io. Those frames were never obtained — the site is behind a
 bot-verification challenge, which was not bypassed — so the honest substitute is
