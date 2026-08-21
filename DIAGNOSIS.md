@@ -4878,3 +4878,71 @@ faint stars, because the faint ones were previously below the crush.
   blue hour is *supposed* to read darker than the sky behind it and no exposure change will
   invert that. What changed is that its own tonal detail — panels, seams, the ensign — now
   survives quantisation.
+
+### 77a. Confirmed, and §74's measurement was right while my inference was wrong
+
+Verified independently on fresh captures: dusk frame p50 **22.6**, night **27.4**, and
+p0.1 of **3.0 / 3.1** — still well under the 8.7–11.7 the blind critique called a correct
+black level, so no black point was lifted to buy it. Star headroom (sky p99.9 − p50) is
+**68.7 / 68.4 codes against daylight's 48.7**, so the stars did not just survive, they have
+more room than daylight highlights do.
+
+**My inference in §74 was wrong and the agent's correction is the interesting part.** The
+ceiling *was* pinned at 4.4999990 of 4.5 — that measurement holds — but the curve was only
+*asking* for 4.96 stops at dusk and 4.71 at night, so the clamp cost **0.46 and 0.21
+stops**. The other 4.35 were `COMPENSATION_SLOPE`. I read "pinned at the ceiling" as
+"the ceiling is the constraint", and it was not.
+
+What the clamp *was* doing is worse than darkening and I had not seen it: everything from
+`raw` 8.29 down to the histogram floor received exactly 4.5 stops, so **across the last
+2.2 stops of nightfall the controller stopped responding at all.** A rail that never moves
+is invisible in any single frame; it only shows up as a *derivative* being zero.
+
+**And it answered the exposure-or-illuminant question properly, by read-back.** The dusk
+sky measures **7.9 cd/m²** where a sun 12.7° below the horizon gives a physical
+0.005–0.05 — so the illuminant is **7–10 stops brighter than physical, not darker**, and
+`src/sky` says so itself: `MOON_IRRADIANCE_FULL` 0.0026 against a physical 2.5e-6, commented
+as "the one deliberately non-physical constant". Raising the illuminant would have been
+pushing on the wrong end. The measurable defect was that dusk was being rendered at
+**9.8 codes per stop in AgX's toe against 44 near middle grey**; it is now 15.9.
+
+Daylight is now **structurally** unable to move: 11 of 14 presets meter below the knee, so
+the compressed branch is never entered, and `golden` — the closest at −0.09 against a knee
+of 1.4 — still has 1.46 stops of margin.
+
+### Two more instrument faults, one of them the HMR trap for the second time
+- **`sceneDepth` is `r32f` / `RedFormat`**, so `readRenderTargetPixels` returns *one* float
+  per pixel. An RGBA stride classified 75% of the frame off a buffer of zeros.
+- **Vite HMR reloaded the page mid-probe** when the file under test was edited, reverting
+  `world.env` to app defaults — and the probe then reported `sunset` metering at −1.216
+  against a true −8.33. **Seven stops, and plausible enough to be written into DIAGNOSIS
+  before a `sunY` sanity print caught it.** This is the same trap §57 records, and it has
+  now cost two sessions. The fix is cheap and is now in every probe: stub the HMR socket,
+  count navigations, and print a physical quantity you can sanity-check (`sunY`).
+
+## 78. The blue hour had no preset, and `dusk` was lying about being it
+
+`dusk` is labelled "Blue hour, first stars" and is nothing of the kind: at `timeOfDay` 20.7
+the sun is **12.7° below the horizon** — late nautical twilight — and it meters *darker*
+than `night`, because its moon is lower. So there were **3.5 stops between `sunset` and
+`dusk` with no preset in them**, and that gap is the hour a sailing game is most often
+photographed in.
+
+This is the same structural failure as the blind critique's "nothing is alive in any of the
+eight frames": **a review sheet cannot score what it never shows.** Two of the project's
+worst blind spots have now been holes in the sanctioned scene list rather than in the
+engine, which makes the scene list itself a thing to audit.
+
+`bluehour` added at 19.95, beam-on. Measured on the shipped frame: western sky at the
+horizon **71.5**, zenith **29.5**, sea **22.5** — 2.4 stops of sky in one frame, with the
+afterglow, the deep zenith and the first stars all present, which is what makes the hour a
+real test of the exposure curve rather than a pretty postcard.
+
+`dusk` is relabelled "Late nautical twilight, stars out".
+
+**And the frame corrected me.** I wrote that a white sail there "reads as a pale grey shape
+rather than a silhouette", then shot it: beam-on to a sun just down, the sail plan is
+**backlit** and silhouettes, which is both correct and the stronger image. Front-lit canvas
+at low sun is what `sunset` is for — which is why that preset is a bowsprit shot. I also
+quoted 86/41/25 for those three luminances before measuring them; the real figures are
+above.
