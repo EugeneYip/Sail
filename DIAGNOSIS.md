@@ -4048,3 +4048,68 @@ arrived at by two compensating errors, which is the most dangerous kind of agree
 - **The bloom composite is a lerp, not an add**: `mix(col, bloom, 0.055)` removes 5.5% of the
   base image everywhere, a flat −0.08 stops. Defensible as energy conservation and far too
   small to be a defect; recorded so nobody re-derives it.
+
+### 71a. Confirmed, and the fix revealed what the crush was hiding
+
+Verified on three fresh captures: **zero exactly-black pixels in `orbit`, `night` and
+`dusk`**, and `orbit`'s share below L=4 goes 0.85% → **0.00%**. Night and dusk still read
+as night and dusk — dark sea, stars, warm cloud undersides, island silhouettes — so
+nothing was washed out to buy it. The mathematics of the fix checks out independently:
+above the pivot `f(x) = (x−p)c + p` gives `f(p) = p, f′ = c`; below it
+`g(x) = p(x/p)^c` gives `g(p) = p` and `g′(p) = c`. Same value, same slope, no kink,
+and nothing above the pivot can move.
+
+**And it exposed a defect the clipping had been concealing.** With the shadows no longer
+crushed to black, the sails at low light carry heavy spatially-incoherent **colour
+speckle**:
+
+| scene | chroma p50 | p99 | mean luminance | neighbour chroma jump |
+|---|---|---|---|---|
+| dusk | **18.0** | 42 | 24.3 | 4.78 |
+| night | **26.0** | 45 | 29.9 | 4.89 |
+| orbit | 33.0 | 74 | 121.4 | 3.09 |
+
+At dusk the chroma is **74% of the luminance**; at night **87%**. A near-white flax sail
+should have chroma near zero. The neighbour-to-neighbour jump of ~4.8 against orbit's 3.09
+says it is speckle rather than a smooth tint — spatially incoherent, so it is noise and
+not a colour error.
+
+The agent that fixed the crush had already measured that the **grade attenuates** it
+(high-frequency energy 2.06 for AgX alone against 1.89 shipping), which locates the source
+**upstream of the composite**, in the scene render. So this is pre-existing and was simply
+below the clip line: the crush was deleting it along with everything else dark.
+
+That is the loop working as intended, and worth naming as a pattern: **a defect that
+clamps to black hides every other defect underneath it.** The same thing happened with the
+hull — §68's aerial term and this both had to land before anything in the shadows could be
+judged at all.
+
+## 72. §68a's calibration was 2.14 stops out, and two errors cancelled
+
+This is a correction to a finding I recorded *and briefed into two agent tasks*.
+
+§68a calibrated the pipeline by injecting radiance through `material.emissive` and
+concluded that AgX "is right at the top" — sky 0.28 radiance predicting 129 against a
+measured 137 — and therefore that the crush was in the composite's shadow response. **The
+conclusion was right and both of its numbers were wrong.**
+
+- **`world.uniforms.uExposure` and `world.ext.post.exposure` are not the multiplier the
+  frame is multiplied by.** `PREPARE_FRAG` uses `tExposure.g`, a GPU-written 1×1 target.
+  Read back in one frame: estimate **0.668**, applied **0.151** — a **2.14-stop** gap.
+- The sky was taken as **0.28** radiance from `uSkyColor`; the sky *pixels* read back at
+  **4.77**.
+
+Two errors of 4.4× and 20× **in opposite directions** are why "AgX is right at the top"
+appeared to hold. AgX alone on the sky really is 128.8, so the prediction was numerically
+right by coincidence. `material.emissive` itself is sound — d(radiance)/dE measures
+**0.984** off the `scene` target — so the method was fine and the reference values were
+not.
+
+Both misleading comments are corrected in place: `src/post/ext.ts`, and
+`src/post/AutoExposure.ts`, which claimed the estimate tracked the applied value "within
+about a stop".
+
+**The lesson is not "check your units."** It is that a calibration which agrees with
+prediction at one end is not thereby validated — two independent errors of similar
+magnitude in opposite directions will reproduce agreement, and that agreement is what
+stops you looking further.
