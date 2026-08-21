@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import os from 'node:os';
 import process from 'node:process';
 
 /**
@@ -114,9 +115,37 @@ function competingRenderers() {
     const rivals = renderers.filter((r) => !isMine(r));
     // A tree root is a rival whose parent is not itself a rival: one per agent.
     const rivalPids = new Set(rivals.map((r) => r.pid));
-    return { procs: rivals.length, browsers: rivals.filter((r) => !rivalPids.has(r.ppid)).length };
+    return {
+      procs: rivals.length,
+      browsers: rivals.filter((r) => !rivalPids.has(r.ppid)).length,
+      load: loadAvg(),
+    };
   } catch {
-    return { procs: -1, browsers: -1 }; // unknown; do not claim the box is quiet
+    return { procs: -1, browsers: -1, load: loadAvg() }; // unknown; never claim quiet
+  }
+}
+
+/**
+ * One-minute load average, because counting rival RENDERERS is not the same as
+ * knowing the box is quiet.
+ *
+ * This was learned the expensive way. A run reported `rivals 0p/0b quiet` while
+ * the load average was **68**, and every timing in that window was three times
+ * the same scene's idle cost — two background sessions were saturating the
+ * machine with node and esbuild work that owns no renderer process and matches
+ * no browser command line. I very nearly reported a phantom regression on a
+ * freshly published commit; only an A/B against its own parent caught it.
+ *
+ * `os.loadavg()` needs no `ps` parse and cannot be fooled by a command line, so
+ * it is the honest second opinion. The 4.0 threshold is deliberately loose: this
+ * box idles near 2 with a dev server up, and the point is to catch a saturated
+ * machine rather than to demand silence.
+ */
+function loadAvg() {
+  try {
+    return Math.round(os.loadavg()[0] * 10) / 10;
+  } catch {
+    return -1;
   }
 }
 
@@ -190,6 +219,12 @@ function parseArgs(argv) {
 /* ------------------------------------------------------------------ *
  *  scenes — each is a patch applied to world.env / world.settings / world.cam
  * ------------------------------------------------------------------ */
+
+/**
+ * One-minute load average above which timings are not quotable, whatever the
+ * rival-renderer count says. See the note beside `loaded` below.
+ */
+const LOAD_BUSY = 4;
 
 const SCENES = {
   dawn: {
@@ -612,9 +647,21 @@ for (const name of sceneNames) {
   const unknown = rivalsBefore.procs < 0 || rivalsAfter.procs < 0;
   const procs = Math.max(rivalsBefore.procs, rivalsAfter.procs);
   const browsers = Math.max(rivalsBefore.browsers, rivalsAfter.browsers);
-  // Unknown counts as tainted. "I could not check" is not "the box was quiet".
-  const dirty = unknown || procs > 0;
-  if (dirty) tainted.push({ name, procs, browsers, unknown });
+  /*
+   * Unknown counts as tainted. "I could not check" is not "the box was quiet".
+   *
+   * And neither is "no rival renderers". A run once printed `rivals 0p/0b quiet`
+   * at a load average of 68, measuring three times the scene's idle cost,
+   * because two background sessions were saturating the box with node and
+   * esbuild work that owns no renderer and matches no browser command line. So
+   * load is a veto in its own right, at a deliberately loose threshold — this
+   * box idles near 2 with a dev server up, and the point is to catch saturation
+   * rather than to demand silence.
+   */
+  const load = Math.max(rivalsBefore.load ?? -1, rivalsAfter.load ?? -1);
+  const loaded = load > LOAD_BUSY;
+  const dirty = unknown || procs > 0 || loaded;
+  if (dirty) tainted.push({ name, procs, browsers, unknown, load: loaded ? load : 0 });
 
   results.push({
     name, label: scene.label, file,
@@ -630,7 +677,10 @@ for (const name of sceneNames) {
   // The marker rides directly on p25/p50 so the warning cannot be separated from
   // the number when someone copies one line of this output into a doc.
   const mark = dirty ? '!' : ' ';
-  const verdict = unknown ? 'CONTENTION-UNKNOWN' : procs > 0 ? 'CONTENDED' : 'quiet';
+  const verdict = unknown ? 'CONTENTION-UNKNOWN'
+    : procs > 0 ? 'CONTENDED'
+    : loaded ? `LOADED(${load})`
+    : 'quiet';
   const rivalStr = unknown ? '?' : `${procs}p/${browsers}b`;
   // Fixed decimals, not String(number) — 55 and 55.8 must not misalign a column
   // that people read down looking for outliers.
