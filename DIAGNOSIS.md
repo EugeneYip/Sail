@@ -2851,3 +2851,88 @@ liner (16 px of freeboard) is the only hull these numbers mean anything on.
   freeboard in px, the stripe against the planking, thin-ink, and a three-frame flicker
   statistic. `.tmp/mag.mjs` magnifies nearest-neighbour, because a 3 px gunport cannot be
   judged at 1:1 on a screenshot of a screenshot.
+
+## 60. Boston's landward depth order: the flagged risk reproduces, but it is a thinning, not a failure
+
+The world agent shipped the town with an honest caveat it could not test: the mast
+thicket is emitted **far-to-near in town-local order** so it accumulates correctly with
+depth-write on, and *that order is only right from seaward* — sail past and look back
+and the thicket should thin.
+
+Tested. **My first attempt was invalid**: I moved the ship 22 km to the far side, which
+retires the landfall and spawns a new one, so I compared two different towns (their
+absolute z differed by 385 m and the ship x by 22 km — the tell). Boston is held in
+absolute coordinates precisely so it is a place rather than a backdrop, and that makes
+"move the observer" the wrong lever.
+
+The valid test flips the town's own `bearing` by π at runtime, which reverses which end
+of the 2.6 km frontage is nearest the eye without touching anything else:
+
+| | dark pixels in the waterline band | ink |
+|---|---|---|
+| as shipped | 18,288 | 288.3 |
+| `bearing + π` | 15,922 | **133.0** |
+
+**A 54% loss of ink.** But the crop shows it still reads as a town — the hill, the
+cupola breaking the ridge, buildings along the skyline, a second stretch to the right.
+No holes, no z-fighting, no corruption. So the risk is **real and mild**: a thinning,
+not a failure.
+
+**And this test cannot attribute it.** Flipping the bearing changes the depth order
+*and* the aspect at the same time, and the town is not symmetric — from behind the hill
+fewer waterfront buildings face the eye, which is correct rather than a bug. Separating
+the two needs the emission order reversed while the bearing is held, which is a change
+in `Boston.ts` rather than a runtime poke. Recorded as an upper bound on the defect:
+**at most** 54% of the ink, and no visual failure at all.
+
+## 61. The landfall was a quarter turn out, and one number found it
+
+Boston's 2600 m long axis **subtended one pixel at 8 km**. `place()` set the yaw to
+`b + π/2`, which puts town-local +Z perpendicular to the line of sight — so the 900 m
+depth axis spread across the frame while the length ran away from the eye, and three
+hills laid out along x were stacked front-to-back into one hump. `b + π` takes the
+frontage from **1 px to 235 px** and the skyline from 112 to 240 columns.
+
+Worth noting what that means about the earlier report. The previous world agent wrote
+"Boston is a town on a headland, not recognisably Boston" and "the dome and spires only
+resolve inside ~2 km" — both true observations, and both symptoms of a one-line
+orientation bug rather than of insufficient detail. A skyline problem that looks like it
+needs more geometry can be a transform.
+
+The hill-exaggeration trade was also in the wrong place rather than the wrong size:
+`BEACON_H = 90` against a real 45–60 m was already there, but `inland = z/700` put the
+crest at the **back** of the peninsula and scaled the hill by 0.35–1.0, so the visible
+ridge was 57 m and the State House stood against hillside with only the top 9 m of a
+52 m landmark against sky. Cresting the ridge over the town buys 11 px of skyline from
+the same 90 m instead of 7.
+
+### The vessel fix was temporal, and the ink measurement was the wrong one
+The coverage filter conserves ink by construction, so single-frame thin-ink is flat
+within 10% either way — *that is the point*, and measuring it proves nothing. The defect
+was flicker, with the hull on station and its attitude frozen so nothing moved but the
+camera, sub-pixel:
+
+| at 554 m | before | after |
+|---|---|---|
+| liner, mean frame-to-frame change | 14.3 sRGB/frame | **4.4** |
+| liner, pixels changing > 12 sRGB | **45% of box** | **8.7%** |
+| brig | 14.8 sRGB/frame, 49% | 5.4, 11.4% |
+
+Half of every distant rig was changing by more than 12 sRGB between consecutive frames.
+That is §52's crawling net on the vessels.
+
+**And the gunport stripe honestly did not improve at the close pass.** Contrast against
+her planking at 174 m is 10.5/23.7 sRGB before and 10.8/26.8 after — essentially
+unchanged, because at that range the band already resolves at 2.5 px either way. What
+changed is structure: a hard edge instead of a vertex-interpolated smear spanning 0.2 of
+the freeboard, a band specified in metres, and gunports. The filter's real benefit is
+past 400 m and **could not be measured** — the reference window must be wider than the
+band and narrower than the freeboard, and by then it is itself sub-pixel. On the brig no
+reliable number exists at all: repeats of identical code spread ±25 sRGB.
+
+**Triangles went down while detail went up**: 23,954 → 22,188 total, every hull and the
+town cheaper, because a rope ribbon is 2 triangles where a capped four-sided cone was
+16 — which paid for 7 shrouds a side instead of 3 and 168 moored ships instead of 64.
+Zero extra draw calls, via `transparent: false` with `CustomBlending`: three only
+consults `transparent` when choosing a render list, so the mesh stays in the opaque list
+while blending still applies.
