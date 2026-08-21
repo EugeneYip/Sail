@@ -3043,3 +3043,218 @@ between pins at different orientations", and the yards in orbit, e.g. (674–842
 - **The ensign may be an anachronism** — "a modern-looking US flag with a full star
   grid". The texture was verified at 15 stars and 15 stripes by dumping it, so this is
   probably a misread at 80×50 px, but it is worth one look at 1:1.
+
+## 64. The 9.44 ms that is not in the pixels: three items, and the floor is CPU
+
+§59B fitted the whole engine to `cost = 9.44 ms + 13.83 ms/Mpx` and §59D attributed the
+intercept to "the shadow map, the solver and the FFT dispatch" without measuring it. This
+measures it, by ablation at two and three render scales, which is a direct answer rather
+than an attribution argument: **a saving that is the same at 1.115 Mpx and at 3.327 Mpx is
+fixed cost, and one that grows with the pixel count is not, however much it looks as if it
+should be.**
+
+Instrument: `.tmp/fixedsplit.mjs`, noon @ ultra, 1600x900 CSS at dpr 2, controller off,
+`ps` sampled around every cell.
+
+### A. The curve reproduces
+Three rungs, two passes, quiet box:
+
+| scale | backing store | Mpx | p50 |
+|---|---|---|---|
+| 0.76 | 2432x1368 | 3.327 | 55.6 |
+| 0.60 | 1920x1080 | 2.074 | 37.8 |
+| 0.44 | 1408x792 | 1.115 | 23.8 |
+
+Fit: **cost = 7.86 ms + 14.37 ms/Mpx, worst residual 0.15 ms.** The same line as §59B —
+the slope agrees to 4 per cent and the intercept to within its own uncertainty over a 3x
+lever arm, which §64G shows is about +/- 1.5 ms.
+
+### B. Paired A/B, because the noise is the size of the effect
+The first attempt measured each variant as one long block. At 1.115 Mpx the *same*
+baseline read p50 25.8 twice and 23.8 once, against shadow and wake effects of 2-3 ms — so
+a block A/B cannot resolve them, and the 5.76 Mpx rung is worse (44 samples in 4 s, p95
+103 against p50 88). Every number below is instead the **median of per-pair differences**
+from base and variant alternated in 1.4 s bursts, order flipped every pair, the first 0.7 s
+after each switch discarded. Slow drift then cancels instead of landing in the answer.
+
+### C. The split, measured
+
+| ablated | saves @ 1.115 Mpx | saves @ 3.327 Mpx | reading |
+|---|---|---|---|
+| **sun's shadow map, generation only** (`shadow.autoUpdate = false`) | **3.45** | **3.70** | fixed 3.3 |
+| ...its VSM blur alone (`blurSamples` 6 -> 1) | 1.30 | 1.00 | fixed ~1.15 |
+| ...`shadowMapSize` 2048 -> 1024 | **2.45** | **2.45** | fixed 2.45, identical |
+| ...the per-pixel lookup (`castShadow` off, minus the row above) | -0.70 | +0.25 | ~0 |
+| **the wake field** (`WakeField.update`) | **2.25** | **2.85** | fixed ~2.0 |
+| ...its target 1536² -> 1024² | **1.75** | (spread 3.3, unusable) | fixed 1.75 |
+| ...-> 768² | 1.55 | 1.65 | fixed 1.5 |
+| ...-> 512² | 2.20 | 2.75 | fixed 1.9 |
+| **the ocean FFT** (57 sim passes) | **1.75** | **2.95** | fixed ~1.8 |
+| the ocean foam sim | 0.40 | 0.30 | fixed 0.35 |
+| the sky's env probe + PMREM re-filter, 6 Hz | 0.55 | 0.10 | ~0.3 |
+| the aerial froxel volume, 16 draws every 8th frame | 0.05 | 0.60 | ~0.35 |
+| the sky-view LUT | 0.05 | -0.25 | 0 |
+| **the cloud shadow map, 512² over 26 km** | 0.05 | -1.20 | **0** |
+| the cloud march (half res) | 2.10 | 5.15 | 0.56 + 1.38/Mpx |
+| the cloud temporal resolve (half res) | -0.10 | 3.40 | ~1.5/Mpx |
+| all volumetric clouds | 4.25 | 9.55 | 1.58 + 2.40/Mpx |
+| the ocean surface draw (`visible = false`) | 4.95 | 11.80 | 1.50 + 3.10/Mpx |
+
+Whole-module ablation at 1.115 Mpx, base p50 25.5, as the check that the itemised list has
+not missed anything: **vfx 2.60, ocean 1.95**, vfx:weather 0.90, weather 0.90 (spread 5.6,
+unusable), sky 0.65, audio 0.40, world 0.40, ui 0.25, physics 0.15, wildlife 0.00, camera
+-0.25, ship -0.80, input -1.05. And vfx decomposes to **the wake field and nothing else**:
+wake 2.85, water probe -0.95, hull water 0.30, spray -0.75, the particle step 0.20.
+
+**Three items are the whole fixed term**: the sun's shadow map (3.3-3.7), the wake field
+(2.3-2.9) and the ocean FFT (1.8-3.0), summing to 7.4-9.6 against a fitted intercept of
+7.86-9.44. Individual savings sum higher than the intercept because the frame is partly
+overlapped, so no single item "owns" it — but nothing large sits outside that list.
+
+### D. The three suspects, priced
+- **The VSM blur is real but it is a third of the shadow's cost, not the cost.** 1.0-1.3 ms
+  of a 3.45-3.70 ms shadow map; the depth render into the same 2048² map is the other
+  2.2-2.7. And the blur cannot be made cheaper at the same visual radius: three spaces
+  `VSM_SAMPLES` taps uniformly over +/- `radius` texels, so 6 taps across 2.2 texels are
+  already 0.88 texels apart, which is the minimum spacing for contiguous bilinear coverage.
+  The note at `SunLight.ts:94` is right about the mechanism and wrong about the magnitude.
+- **The atmosphere LUTs are nil.** In steady state transmittance and multi-scatter do not
+  rebuild at all (`sky:bakeMs` never appears), the sky-view LUT reads 0.004-0.025 ms and the
+  aerial volume 0.20-0.25 ms amortised. About 0.3 ms for the whole chain.
+- **`CLOUD_SHADOW_SIZE` 512 over 26 km is 0.00 ms**, measured at both rungs.
+
+### E. The floor is CPU, and it is nearly the whole intercept
+`settings.debug` per-module stopwatch plus `ext.post.profile()`:
+
+| | 1.115 Mpx | 3.327 Mpx |
+|---|---|---|
+| sum of `upd:*` | 3.95 | 4.94 |
+| post stack submission | 2.31 | 2.61 |
+| **CPU per frame** | **6.26** | **7.55** |
+
+against a fitted intercept of 7.86 ms. Largest CPU items at 3.327 Mpx: `upd:ocean` 2.08
+(of which `ocean:cpu` 0.96 is the CPU wave mirror and `ocean:gpu` 0.86 is *submitting* the
+57 sim passes), the post stack's `scene` mark 1.68-2.00 for 75 draw calls — **27 us of CPU
+per draw call** — then `upd:vfx` 1.10, `upd:physics` 0.41, `upd:sky` 0.34.
+
+So the practical consequence for §59D and §59J: **the fixed term does not contain 13 ms to
+give.** It is 7.9-9.4 ms in total, of which 6.3-7.6 is CPU that no amount of GPU-pass
+removal touches. An engine with every fixed GPU pass free would still hold 60 fps only up
+to about 0.72 Mpx on this box. Both terms have to move, and the fixed one is nearly spent.
+
+### F. Four instrument corrections
+1. **`world.ext.post.profile()` does not return GPU time here, `syncMode` notwithstanding.**
+   Its passes sum to 2.31-2.61 ms against frames that cost 24.8-55.8 ms. `gl.finish()`
+   under ANGLE-on-Metal does not block until the GPU drains — §16's `gl.finish()` row
+   biting again — so every number it prints is *submission* cost. It is still a good
+   instrument, and it is where the 27 us/draw-call figure above comes from; but a change
+   "priced at 0.020 ms" with it was priced in CPU, not in frame time.
+2. **`world.stats.drawCalls` counts only the render hook.** `Engine.tick` calls
+   `renderer.info.reset()` *after* every module update, so the ocean's 57 sim passes and
+   the sky's LUT passes are invisible in it. The real `renderer.render()` count per frame at
+   ultra/noon is about 140, not the 68-91 that gets quoted.
+3. **Setting `settings.renderScale` without dispatching a resize measures the OPENING CAP,
+   not the rung you asked for.** `Engine.applyResize` applies `seedOpeningLevel` on the
+   first resize whatever `adaptiveResolution` is set to afterwards, so a probe that only
+   writes the setting sits at 1664x936 = 1.56 Mpx. The tell is a base p50 of 31 where the
+   sweep says 55.6. This invalidated one paired run before I noticed.
+4. **The rival-renderer counter in `adaptsweep.mjs` matches command LINES, so it counts
+   your own shells.** `/chrome-headless|ms-playwright|Chromium/` is satisfied by any
+   `until pgrep -f 'ms-playwright' ...; do sleep 2; done` wait loop, and the probe's ppid
+   walk excludes descendants but not siblings. A run on a genuinely idle box therefore
+   reported `rivals 3/3` and I discarded a before/after comparison as contended. Anchor on
+   argv[0] being a browser binary instead; `.tmp/fixedsplit.mjs` now does.
+
+### G. What was cut: the wake field's texel, measured from both directions
+`wakeRes` at ultra 1536 -> 1024 in `src/vfx/WakeField.ts`, i.e. the value `high` has always
+shipped. The field spans a constant 1024 m, so this is a texel size: 0.67 m -> 1.0 m. The
+whole target is decayed by one pass every frame and the foam ribbon re-stamped into it, so
+the cost is quadratic in this number and none of it scales with the backing store.
+
+| measurement | result |
+|---|---|
+| paired A/B before, 1536 -> 1024, 1.115 Mpx | **saves 1.75 ms**, pair spread 1.20, pairs 1.9 / 1.6 / 0.8 / 2.0 |
+| paired A/B after, 1024 -> 1536 (positive control), 1.115 Mpx | **costs 1.30 ms**, pair spread 1.40, pairs all one sign: -1.4 / -1.7 / -1.2 / -0.9 / -1.1 / -2.3 |
+| fixed-scale sweep, before -> after, p50 at 3.327 / 2.074 / 1.115 Mpx | 55.6 -> 53.8, 37.8 -> 36.6, 23.8 -> 24.1 |
+
+Take the conservative figure: **1.3 ms of fixed cost, about a sixth of the whole non-pixel
+term**, and confirmed by the same instrument with the sign flipped, which a one-sided
+ablation cannot do.
+
+**And the third row is why the sweep is the wrong instrument for this.** Its fitted
+intercept moves 7.86 -> 8.97 — the wrong way — because the lowest rung anchors the intercept
+and that rung's own run-to-run spread is +/- 1 ms (it has read 23.8, 24.1, 24.5, 25.5, 25.8,
+26.0 on identical code). With three rungs, ~1 ms of per-point noise and a 2.2 Mpx lever arm
+the intercept's standard error is about **+/- 1.5 ms**, so a fixed-scale sweep cannot resolve
+a 1.3 ms change in it at all. Do not read a sweep intercept as a before/after statistic
+without that error bar; the §59B figure of 9.44 carries the same one.
+
+**The visual cost, stated plainly**, because this is a quality-for-speed trade and not a
+free win by assertion: the *persistent* field's texel goes from 0.67 m to 1.0 m. That field
+carries nothing sub-metre in the first place, for two reasons already in the code — the
+fine near-hull detail lives in `interaction`, 128 m over 512 = 0.25 m/texel, which this does
+not touch; and the foam channel is a coverage that `ocean/shaders/surface.ts` thresholds the
+ocean's own high-frequency field against (`linstep(thr - wThr, thr + wThr, decide)`) rather
+than drawing as an alpha, exactly as the contract in `vfx/index.ts` demands. What is left in
+the persistent field is the Kelvin pattern, whose divergent arms are tens of metres apart.
+
+Measured, not asserted. `.tmp/wakeshot.mjs` shoots both resolutions in ONE session with an
+equal settle after each resize (the resize calls `clearTargets`, so a shot taken immediately
+after it compares a mature wake with an empty one and measures the settle):
+`.tmp/sharp.mjs` on the same 1300x540 crop of the wake at 3200x1800 reads **6.049 at 1024
+against 5.974 at 1536** — 1.3 per cent apart and in the *wrong direction* for a resolution
+loss, against an instrument that moved 3.15 against 11.30 for a real one (§59J). By eye the
+foam speckle, its scale and the wake's envelope are indistinguishable. Frames are
+`.tmp/WK-wake*.png` (orbit) and `.tmp/WL-wake*.png` (waterline).
+
+One thing those frames do show, at BOTH resolutions and therefore nothing to do with this:
+**a hard-edged white plate of foam along the hull's waterline** in the `waterline` scene, a
+flat pale sheet with a straight leading edge running most of the ship's length. §40 recorded
+the foam plate as fixed; something in that family is back, it is in the near-hull water and
+not in the persistent field, and it is the most owner-visible defect in the frames I took.
+
+### H. What is left on the table, with prices
+- **The shadow map at 1024: 2.45 ms, the largest single fixed saving available, and an
+  owner decision rather than a free win.** §56's control measured `map512` taking the
+  sail-shadow edge p50 from 3.48 to 8.42 capture px; 1024 lies between and is untested, so
+  `.tmp/leechshadow.mjs` now carries a `map1024` variant to get the number before anyone
+  decides. The other levers on that 3.5 ms are already at their floor: the blur taps are
+  0.88 texels apart (§64D) and the frustum half-extent at noon is 54 m against a ship whose
+  bounding radius the code puts near 60 m, so there is no slack to reclaim by tightening it.
+- **The wake field's decay pass, ~0.9 ms at 1024², with no visual change at all.** It is one
+  pass over the whole target every frame doing two jobs: multiply R by `uDecay`, and zero
+  GBA. Exponential decay is separable in time, so decaying 1/N of the field per frame by
+  `uDecay^N` follows exactly the same envelope, at most N/60 s stale — 1.6 per cent of a
+  texel's own value at N = 4 against the shortest tau of 4 s, and the same amortisation the
+  water probe already applies to its rows. The GBA zero only needs to cover the ribbon's own
+  AABB, which `render()` already computes, because outside it nothing has written GBA since
+  the last zero. Not attempted: a scissor error here leaves a permanent rectangle of stale
+  wake height, which is exactly the class of artefact this file is full of.
+- **The ocean sim's 57 passes, ~0.9 ms, bit-identical output.** `oceanResolution` is a
+  no-op between high and ultra — `MAX_FFT_N` caps `cap` at 256 either way — and the
+  band-limit rule then gives n = **64/64/64/256** at ultra (measured off the live module)
+  and 128/128/256 at high (the same rule, arithmetic only). The three 64² cascades therefore
+  share an identical FFT: same stages, same butterfly table, differing only in `uH0` and two
+  scalars. One MRT group with 6 attachments would do those 39 passes' work in 13. The output
+  is identical by construction and `world.ext.ocean.debugCompare()` is the gate. Not
+  attempted, for time.
+- **On the variable side**, the biggest single item is the cloud march plus temporal resolve
+  at about 2.9 ms/Mpx of the 14.37 total, at `CLOUD_RESOLUTION_DIVISOR` 2. Divisor 3 would
+  give back roughly 1.3 ms/Mpx, 9 per cent of the slope. Visible, so it needs
+  `.tmp/sharp.mjs` and an owner decision.
+
+### I. One number worth chasing that is not mine
+`scripts/capture.mjs` at its default 1600x900 dpr 1 (1.44 Mpx) now reads **noon p25 16.5 ms,
+at the rAF cap** — with one rival browser present, so contention can only have ADDED time and
+16.5 bounds the true cost from below. §59D recorded the same scene on a QUIET box at p25 21.3
+/ p50 28.5. Some of that is the wake cut, most of it is not: the rigging went from a capped
+cone to a two-triangle ribbon and Boston landed in between. **The standing "60 fps at
+1600x900 at ultra" may now hold at dpr 1**, and that is worth one clean `--wait-quiet` run by
+whoever gets a quiet box next. It does not hold at dpr 2, where the same CSS size is 5.76 Mpx.
+
+### J. What is not verified
+The shadow-edge cost of `shadowMapSize` 1024 — the variant is added, the run was not made.
+Whether the wake texel change is visible to the owner on a real panel: a headless PNG is the
+backing store, not what a panel shows after upscaling. And none of this is measured on real
+hardware — §64E makes the fixed term a property of this box's CPU as much as its GPU, so a
+quieter machine with a faster core has a smaller one, and by how much is not knowable here.
