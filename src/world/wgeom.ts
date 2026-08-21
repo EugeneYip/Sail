@@ -12,13 +12,16 @@ import * as THREE from 'three';
  *
  * Normals are accumulated from the faces at `finish()`, so a box built with
  * four vertices per face comes out flat and a loft that shares its rings comes
- * out smooth. That is the whole reason there is no `normal` argument.
+ * out smooth. That is the whole reason there is no `normal` argument — with the
+ * single exception of `rope()`, whose triangles have no area to accumulate from.
  */
 export class MeshBuilder {
   private pos: number[] = [];
   private col: number[] = [];
   private aux: number[] = [];
   private idx: number[] = [];
+  /** Vertices whose normal is dictated rather than accumulated. */
+  private nfix = new Map<number, RGB>();
 
   get vertexCount(): number {
     return this.pos.length / 3;
@@ -116,6 +119,49 @@ export class MeshBuilder {
     }
   }
 
+  /**
+   * A rope: two vertices per station, both at the axis, expanded into a
+   * camera-facing ribbon by the vertex shader.
+   *
+   * Why not a thin `cyl()`. A 5 cm shroud at 400 m is a fifth of a pixel wide,
+   * the renderer asks for no MSAA, and a sub-pixel opaque triangle rasterises
+   * with BINARY coverage — it lands on a pixel centre or it does not, and which
+   * flips as the camera moves. Thirty of them doing that at once is a crawling
+   * net, and it is why the standing rigging on these hulls simply was not there
+   * past a couple of cables. Emitted as a degenerate strip instead, the shader
+   * widens it to a pixel and scales its alpha by the rope's true coverage, so
+   * the ink is conserved at every range. That fix, and its measurements, come
+   * straight from the player's own rig — see `src/ship/shaders/line.ts`.
+   *
+   * `aux` is (LINE_KIND [+1 to follow a square yard], side, radius m, rough);
+   * `side` and the radius are filled in here, so callers pass kind and rough.
+   * The normal carries the rope's own axis, which is what the shader needs to
+   * build the ribbon; it cannot be accumulated from a zero-area triangle.
+   */
+  rope(
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+    r0: number, r1: number, kind: number, rough: number, c: RGB, spans = 1,
+  ): void {
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const t: RGB = [dx / len, dy / len, dz / len];
+    const rows: number[][] = [];
+    for (let i = 0; i <= spans; i++) {
+      const s = i / spans;
+      const x = x0 + dx * s, y = y0 + dy * s, z = z0 + dz * s;
+      const r = r0 + (r1 - r0) * s;
+      const row: number[] = [];
+      for (const side of [-1, 1]) {
+        const v = this.vert(x, y, z, c, [kind, side, r, rough]);
+        this.nfix.set(v, t);
+        row.push(v);
+      }
+      rows.push(row);
+    }
+    this.tube(rows, false);
+  }
+
   /** Flat double-sided-looking blade: a quad strip swept from root to tip. */
   blade(pts: number[], c: RGB, auxAt: (t: number, edge: number) => Aux): void {
     // pts is [x,y,z, halfChordX,halfChordY,halfChordZ] per station.
@@ -153,6 +199,9 @@ export class MeshBuilder {
     for (let i = 0; i < nrm.length; i += 3) {
       const l = Math.hypot(nrm[i], nrm[i + 1], nrm[i + 2]) || 1;
       nrm[i] /= l; nrm[i + 1] /= l; nrm[i + 2] /= l;
+    }
+    for (const [v, n] of this.nfix) {
+      nrm[v * 3] = n[0]; nrm[v * 3 + 1] = n[1]; nrm[v * 3 + 2] = n[2];
     }
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));

@@ -39,7 +39,12 @@ export interface VesselSpec {
   bowsprit: number;
   jibs: number;
   hull: number;
+  /** Gunport-stripe centres, as a fraction of the rail height at each station. */
   stripes: readonly number[];
+  /** Half-height of the painted band, metres. */
+  stripeH: number;
+  /** Gunports a side per stripe. 0 for a vessel that carries no guns. */
+  ports: number;
   boot: number;
   canvas: number;
   /** Best speed through the water, m/s. */
@@ -52,6 +57,16 @@ const ROUGH_PAINT = 0.42;
 const ROUGH_CANVAS = 0.86;
 const ROUGH_DECK = 0.74;
 const ROUGH_SPAR = 0.58;
+const ROUGH_RIG = 0.9;
+
+/** `aAux.x` codes; the meaning of the middle channels follows from it. */
+const KIND_FIXED = 0;
+const KIND_SQUARE = 1;
+const KIND_FORE_AFT = 2;
+const KIND_ROPE = 3;
+
+/** No stripe anywhere near this vertex. Any value past the widest band will do. */
+const NO_STRIPE = 1e3;
 
 /** Hull stations, bow to stern: [t, halfBeamFrac, keelFrac, railFrac]. */
 const STATIONS: readonly (readonly [number, number, number, number])[] = [
@@ -66,23 +81,26 @@ const STATIONS: readonly (readonly [number, number, number, number])[] = [
   [1.00, 0.44, 0.40, 1.08],
 ];
 
-const STRIPE_HALF = 0.075;
+/** The buff the gunport stripes are painted in. */
+export const STRIPE_COLOUR = 0xd8b166;
 
 /**
  * Section outline, starboard side: [halfBeamScale, above-water?, yFrac].
  *
- * Generated rather than tabulated, because the painted gunport stripes have to
- * land ON a vertex to exist at all. The tabulated version had four above-water
- * levels at 1.00, 0.72, 0.30 and 0.00 and a brig whose stripe was specified at
- * 0.44 — so the stripe matched no vertex and simply never rendered. Every hull
- * in the fleet was a plain black slab and it took a 216 m crop to notice.
+ * The stripes used to need their own levels here, because the paint was baked
+ * into vertex colours and so had to land ON a vertex to exist. It does not any
+ * more — the fragment shader box-filters the band — but the levels the shader
+ * DOES need are the ones that keep the distance-to-the-nearest-stripe linear
+ * inside every quad: the centre of each stripe, where that distance has a kink,
+ * and the midpoint between two stripes, where the nearest stripe changes. Miss
+ * either and the band bends in the middle of a strake.
  */
 function sectionOutline(stripes: readonly number[]): (readonly [number, number, number])[] {
   const levels = new Set<number>([1.0, 0.86, 0.72, 0.5, 0.3, 0.14, 0.0]);
-  for (const st of stripes) {
-    levels.add(Math.min(0.99, st + STRIPE_HALF));
-    levels.add(st);
-    levels.add(Math.max(0.01, st - STRIPE_HALF));
+  const st = [...stripes].sort((a, b) => a - b);
+  for (let i = 0; i < st.length; i++) {
+    levels.add(st[i]);
+    if (i + 1 < st.length) levels.add((st[i] + st[i + 1]) * 0.5);
   }
   const sorted = [...levels].sort((a, b) => b - a);
   const out: (readonly [number, number, number])[] = [];
@@ -99,12 +117,25 @@ function sectionOutline(stripes: readonly number[]): (readonly [number, number, 
 function hullColour(spec: VesselSpec, yFrac: number, above: boolean): RGB {
   const hull = srgb(spec.hull);
   if (!above) return mixRGB(srgb(spec.boot), hull, 0.25);
-  for (const s of spec.stripes) {
-    if (Math.abs(yFrac - s) <= STRIPE_HALF + 1e-4) return srgb(0xd8b166);
-  }
   if (yFrac > 0.9) return mixRGB(hull, srgb(0x000000), 0.35);
   if (yFrac < 0.16) return mixRGB(hull, srgb(spec.boot), 0.45);
   return hull;
+}
+
+/**
+ * Signed metres from this vertex to the nearest stripe centre on its own
+ * station, which is what the fragment shader filters the band out of. Signed,
+ * not absolute, so the two edges of the band are distinguishable; the sign is
+ * arbitrary but has to be consistent, so it is measured upward.
+ */
+function stripeDistance(spec: VesselSpec, railY: number, y: number): number {
+  if (!spec.stripes.length) return NO_STRIPE;
+  let best = NO_STRIPE;
+  for (const s of spec.stripes) {
+    const d = y - railY * s;
+    if (Math.abs(d) < Math.abs(best)) best = d;
+  }
+  return best;
 }
 
 function buildHull(b: MeshBuilder, spec: VesselSpec): void {
@@ -112,7 +143,7 @@ function buildHull(b: MeshBuilder, spec: VesselSpec): void {
   const railIdx: number[][] = [];
   const deckIdx: number[][] = [];
   const rings: number[][] = [];
-  const aux: Aux = [0, 0, 0, ROUGH_PAINT];
+  const aux: Aux = [KIND_FIXED, NO_STRIPE, 0, ROUGH_PAINT];
   const section = sectionOutline(spec.stripes);
 
   for (const [t, hbf, keelf, railf] of STATIONS) {
@@ -127,8 +158,10 @@ function buildHull(b: MeshBuilder, spec: VesselSpec): void {
       const above = kindAbove === 1;
       const y = above ? railY * yf : keelY * yf;
       const col = hullColour(spec, yf, above);
-      starboard.push(b.vert(hb * hs, y, z, col, aux));
-      if (hs > 1e-4) port.push(b.vert(-hb * hs, y, z, col, aux));
+      // Only the painted topside carries a stripe; her copper does not.
+      const sd: Aux = [KIND_FIXED, above ? stripeDistance(spec, railY, y) : NO_STRIPE, 0, ROUGH_PAINT];
+      starboard.push(b.vert(hb * hs, y, z, col, sd));
+      if (hs > 1e-4) port.push(b.vert(-hb * hs, y, z, col, sd));
     }
     for (let i = 0; i < starboard.length; i++) ring.push(starboard[i]);
     for (let i = port.length - 1; i >= 0; i--) ring.push(port[i]);
@@ -142,7 +175,7 @@ function buildHull(b: MeshBuilder, spec: VesselSpec): void {
   // the bow, which is the single most common way a low-detail ship reads as
   // unfinished.
   const deckCol = srgb(0x9c7c50);
-  const deckAux: Aux = [0, 0, 0, ROUGH_DECK];
+  const deckAux: Aux = [KIND_FIXED, NO_STRIPE, 0, ROUGH_DECK];
   const deckRows: number[][] = [];
   for (const d of deckIdx) {
     const hb = d[2] as number;
@@ -187,6 +220,7 @@ function sailPanel(
   kind: number,
   pivotZ: number,
   col: RGB,
+  tone = 1,
 ): void {
   const rows: number[][] = [];
   for (let iv = 0; iv <= nv; iv++) {
@@ -201,9 +235,21 @@ function sailPanel(
       const by = p01[1] + (p11[1] - p01[1]) * u;
       const bz = p01[2] + (p11[2] - p01[2]) * u;
       const bulge = Math.sin(Math.PI * u) * Math.sin(Math.PI * v);
-      // Cloth is never a flat sheet even at the head; a touch of tone variation
-      // across the panel keeps a big sail from reading as cardboard.
-      const shade = 1 - 0.10 * Math.cos(Math.PI * v) * Math.cos(Math.PI * u);
+      /*
+       * A three-master's canvas has to read as four or five separate sails and
+       * not one pale mass, and what separates two courses is the dark band at
+       * the foot of the upper one: the yard shadows it, the sail above shades
+       * it, and the belly's lower curve turns away from the sky.
+       *
+       * Baked as a RAMP over the lower third rather than as an edge, on purpose.
+       * A hard line one pixel wide has the same sub-pixel problem as a shroud;
+       * a gradient point-samples to its own average at every distance, so the
+       * separation survives all the way out to the horizon without aliasing.
+       */
+      const foot = 1 - 0.44 * Math.min(1, Math.max(0, (v - 0.5) / 0.5) ** 1.4);
+      // Both leeches a little darker: a sail is a curved surface, not a card.
+      const limb = 1 - 0.10 * Math.abs(2 * u - 1) ** 2;
+      const shade = foot * limb * tone;
       row.push(
         b.vert(
           ax + (bx - ax) * v,
@@ -226,11 +272,12 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
   const canvas = srgb(spec.canvas);
   const r0 = spec.beam * 0.055;
 
-  for (const m of spec.masts) {
+  for (let mi = 0; mi < spec.masts.length; mi++) {
+    const m = spec.masts[mi];
     const heel = spec.rail * 0.7;
     const rake = spec.loa * 0.012;
     const capH = heel + (m.height - heel) * 0.56;
-    const spar: Aux = [0, 0, 0, ROUGH_SPAR];
+    const spar: Aux = [KIND_FIXED, NO_STRIPE, 0, ROUGH_SPAR];
     b.cyl(0, heel - 0.6, m.z, 0, capH, m.z + rake, r0, r0 * 0.72, 7, sparLo, spar);
     b.cyl(0, capH - 0.4, m.z + rake, 0, m.height, m.z + rake * 1.8, r0 * 0.6, r0 * 0.3, 6, sparHi, spar);
 
@@ -248,7 +295,7 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
         // hanging 2 m above it. The gap made the rig read as stacked cardboard.
         const yBot = i === 0 ? heel + 1.1 : heel + (m.height - heel) * levels[i - 1] - 0.15;
         const hs = spec.beam * spans[i];
-        b.cyl(-hs, yTop, yardZ, hs, yTop, yardZ, r0 * 0.34, r0 * 0.34, 5, sparHi, [1, yardZ, 0, ROUGH_SPAR]);
+        b.cyl(-hs, yTop, yardZ, hs, yTop, yardZ, r0 * 0.34, r0 * 0.34, 5, sparHi, [KIND_SQUARE, yardZ, 0, ROUGH_SPAR]);
         sailPanel(
           b,
           [-hs * 0.97, yTop - 0.15, yardZ],
@@ -257,27 +304,69 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
           [-hs * 0.84, yBot, yardZ],
           4,
           3,
-          1,
+          KIND_SQUARE,
           yardZ,
           canvas,
+          // The course is the oldest and dirtiest cloth on her, and a touch of
+          // tone between the tiers is another thing that stops them merging.
+          0.9 + i * 0.035,
         );
       }
     }
 
-    // Shrouds and a forestay. Four thin cones a side is nothing to draw and it
-    // is most of the difference between a rig and two posts with crossbars.
-    const tarred = srgb(0x2a2622);
-    const rig: Aux = [0, 0, 0, 0.9];
+    /*
+     * Standing rigging: five shrouds a side, a pair of backstays and the stays
+     * forward, all as ropes. Five thin ones read as a gang where three fat ones
+     * read as nothing — a lower gang really is eight or ten shrouds with
+     * ratlines across it, and what the eye gets at any distance is the total
+     * ink of the whole gang, not any individual line.
+     *
+     * 5.6 cm is about right for a lower shroud (an eleven-inch rope is eleven
+     * inches of CIRCUMFERENCE), and it is thinner than the cones this replaces.
+     * The ink still goes UP, because there are four times as many lines and
+     * none of them fall through a pixel any more.
+     */
+    const tarred = srgb(0x1d1a17);
     const capZ = m.z + rake;
-    const shroudR = Math.max(0.035, r0 * 0.09);
+    /*
+     * Sized off her beam, because rope was sized off the ship: a first rate's
+     * lower shrouds were fourteen to sixteen inch rope — that is CIRCUMFERENCE,
+     * so 11-13 cm through — and a brig's were half that. A flat 5.6 cm for
+     * everything measured 8 per cent LESS ink on the liner than the three fat
+     * cones it replaced, which is the wrong direction: what the eye gets from a
+     * gang at half a mile is the sum of the whole gang, and a real lower gang is
+     * seven to ten shrouds a side, not three.
+     */
+    const shroudR = Math.max(0.022, spec.beam * 0.0040);
+    const stayR = Math.max(0.026, spec.beam * 0.0042);
+    const GANG = 7;
     for (const side of [1, -1]) {
-      for (let k = 0; k < 3; k++) {
-        const spread = spec.beam * (0.40 + k * 0.055);
-        const along = m.z + spec.loa * (0.045 + k * 0.035);
-        b.cyl(side * spread, heel * 0.98, along, side * r0 * 0.7, capH - 0.5, capZ, shroudR, shroudR, 4, tarred, rig);
+      for (let k = 0; k < GANG; k++) {
+        const f = k / (GANG - 1);
+        const spread = spec.beam * (0.36 + f * 0.16);
+        const along = m.z + spec.loa * (0.022 + f * 0.092);
+        b.rope(
+          side * spread, heel * 0.98, along,
+          side * r0 * 0.8, capH - 0.5, capZ,
+          shroudR, shroudR * 0.85, KIND_ROPE, ROUGH_RIG, tarred,
+        );
       }
+      // A backstay: masthead to the rail well abaft her, which is the line that
+      // gives a rig its rake against the sky.
+      b.rope(
+        side * spec.beam * 0.40, heel * 0.95, Math.min(half - 0.5, m.z + spec.loa * 0.26),
+        side * r0 * 0.45, heel + (m.height - heel) * 0.93, capZ,
+        stayR, stayR, KIND_ROPE, ROUGH_RIG, tarred,
+      );
     }
-    b.cyl(0, capH - 0.5, capZ, 0, heel * 0.92, m.z - spec.loa * 0.20, shroudR, shroudR, 4, tarred, rig);
+    // Forestay and topmast stay. They run forward to the next mast's heel, or
+    // to the stemhead on the foremast, never through the mast ahead of her.
+    const fwdLimit = mi > 0 ? spec.masts[mi - 1].z + spec.loa * 0.03 : -half - spec.bowsprit * 0.35;
+    for (const [fromH, len, r] of [[0.56, 0.62, stayR], [0.92, 1.0, stayR * 0.85]] as const) {
+      const top = heel + (m.height - heel) * fromH;
+      const foot = Math.max(fwdLimit, m.z - (m.z - fwdLimit) * len);
+      b.rope(0, top - 0.4, capZ, 0, heel * 0.9 + (foot < -half ? 1.2 : 0), foot, r, r, KIND_ROPE, ROUGH_RIG, tarred);
+    }
 
     if (m.gaff) {
       const peak = heel + (m.height - heel) * (m.gaffPeak ?? 0.82);
@@ -285,8 +374,8 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
       const boomEnd = m.z + boomLen;
       const boomY = heel + 0.9;
       const gaffZ = m.z + boomLen * 0.62;
-      b.cyl(0, boomY, m.z + 0.3, 0, boomY - 0.2, boomEnd, r0 * 0.32, r0 * 0.24, 5, sparHi, [2, m.z, 0, ROUGH_SPAR]);
-      b.cyl(0, peak - 1.2, m.z + 0.3, 0, peak, gaffZ, r0 * 0.28, r0 * 0.2, 5, sparHi, [2, m.z, 0, ROUGH_SPAR]);
+      b.cyl(0, boomY, m.z + 0.3, 0, boomY - 0.2, boomEnd, r0 * 0.32, r0 * 0.24, 5, sparHi, [KIND_FORE_AFT, m.z, 0, ROUGH_SPAR]);
+      b.cyl(0, peak - 1.2, m.z + 0.3, 0, peak, gaffZ, r0 * 0.28, r0 * 0.2, 5, sparHi, [KIND_FORE_AFT, m.z, 0, ROUGH_SPAR]);
       sailPanel(
         b,
         [0, boomY + 0.1, m.z + 0.4],
@@ -295,7 +384,7 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
         [0, boomY - 0.15, boomEnd],
         3,
         3,
-        2,
+        KIND_FORE_AFT,
         m.z,
         canvas,
       );
@@ -305,7 +394,7 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
   if (spec.bowsprit > 0) {
     const tipZ = -half - spec.bowsprit;
     const tipY = spec.rail * 0.9 + spec.bowsprit * 0.16;
-    b.cyl(0, spec.rail * 0.72, -half + 1.0, 0, tipY, tipZ, r0 * 0.62, r0 * 0.34, 6, sparLo, [0, 0, 0, ROUGH_SPAR]);
+    b.cyl(0, spec.rail * 0.72, -half + 1.0, 0, tipY, tipZ, r0 * 0.62, r0 * 0.34, 6, sparLo, [KIND_FIXED, NO_STRIPE, 0, ROUGH_SPAR]);
     const fore = spec.masts[0];
     for (let j = 0; j < spec.jibs; j++) {
       const f = (j + 1) / (spec.jibs + 1);
@@ -320,7 +409,7 @@ function buildRig(b: MeshBuilder, spec: VesselSpec): void {
         [0, tackY + (headY - tackY) * 0.12, tackZ + spec.loa * 0.12],
         3,
         3,
-        2,
+        KIND_FORE_AFT,
         fore.z,
         srgb(spec.canvas),
       );
@@ -351,6 +440,8 @@ export const VESSEL_SPECS: readonly VesselSpec[] = [
     jibs: 1,
     hull: 0x24312e,
     stripes: [],
+    stripeH: 0,
+    ports: 0,
     boot: 0x4a3326,
     canvas: 0xa86a44,
     topSpeed: 3.3,
@@ -371,6 +462,10 @@ export const VESSEL_SPECS: readonly VesselSpec[] = [
     jibs: 2,
     hull: 0x181a1d,
     stripes: [0.44],
+    // 0.54 m of paint on 1.6 m of freeboard. Wide for a brig, and deliberately:
+    // a quarter-metre band was a pixel and a half at the range she is passed at.
+    stripeH: 0.27,
+    ports: 8,
     boot: 0x5d5238,
     canvas: 0xd6cdb8,
     topSpeed: 4.9,
@@ -391,6 +486,8 @@ export const VESSEL_SPECS: readonly VesselSpec[] = [
     jibs: 3,
     hull: 0x14161a,
     stripes: [0.34, 0.66],
+    stripeH: 0.42,
+    ports: 13,
     boot: 0x6a6144,
     canvas: 0xd9d1bd,
     topSpeed: 5.6,

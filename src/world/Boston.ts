@@ -2,7 +2,23 @@ import * as THREE from 'three';
 import type { World } from '../types';
 import { makeRng } from '../util/math';
 import { MeshBuilder, mixRGB, srgb, type Aux, type RGB } from './wgeom';
-import { vesselFrag, vesselVert } from './shaders/vessel';
+import { vesselFrag, vesselShared, vesselVert } from './shaders/vessel';
+
+/**
+ * Same arrangement as the vessels: blending on, but NOT in the transparent
+ * list, so the town keeps its opaque sort and its depth write and only her
+ * shipping's masts — which are a twentieth of a pixel wide at eight kilometres
+ * — get a partial alpha. See `ROPE_BLEND` in `Vessels.ts`.
+ */
+const TOWN_BLEND = {
+  transparent: false,
+  depthWrite: true,
+  blending: THREE.CustomBlending,
+  blendSrc: THREE.SrcAlphaFactor,
+  blendDst: THREE.OneMinusSrcAlphaFactor,
+  blendSrcAlpha: THREE.OneFactor,
+  blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+} as const;
 
 /**
  * Boston, from seaward, about 1800.
@@ -31,12 +47,38 @@ import { vesselFrag, vesselVert } from './shaders/vessel';
 const BUILD_BUDGET_MS = 1.5;
 /** Town scale. Real Boston peninsula is about 3 km on its long axis. */
 const TOWN_LEN = 2600;
+const TOWN_DEPTH = 900;
 /**
- * Beacon Hill, exaggerated. The Trimountain summits were nearer 45-60 m, and a
- * faithful 74 m hill measures EIGHT PIXELS at 9 km — the first capture put the
- * town on the horizon and the horizon stayed dead flat. So the hills are pushed
- * to 90 m and, more importantly, the landfall is placed at 4-8 km rather than
- * 12-21 km, which is where a low brick town actually becomes a place.
+ * Where the ridge crest lies, metres inland of the waterfront.
+ *
+ * This number, not the hill height, is what decides whether there is a skyline
+ * at all. The ground used to rise monotonically inland (`inland = z / 700`), so
+ * the highest ground was always at the BACK of the peninsula — which means the
+ * State House dome, at 300 m in, stood against hillside and not against sky.
+ * Only the top nine metres of a fifty-six-metre-tall landmark had anything
+ * behind it to be a silhouette against, and a silhouette is the whole of what
+ * you can see of a town at eight kilometres. Beacon Hill really is like this:
+ * it crests where the State House stands and falls away to the Charles behind.
+ */
+const CREST_Z = 330;
+/**
+ * Beacon Hill's summit, metres. EXAGGERATED, and this is the size of the lie.
+ *
+ * The Trimountain summits were 45-60 m. At eight kilometres and a 50 degree
+ * vertical field, one metre of height is 0.121 px, so a faithful 50 m hill is
+ * SIX PIXELS — less than the cloud it stands under, and the first capture of
+ * this town put it on the horizon and the horizon stayed flat. 90 m reads.
+ *
+ * The trade is deliberate and it is the smaller of two lies available. The old
+ * arrangement also used 90 m but threw two thirds of it away on the near slope
+ * and put the crest behind the town, so the ridge you actually saw was 57 m and
+ * the dome had no sky behind it: an exaggeration that cost the recognisability
+ * it was spent on. Moving the crest forward means the visible summit is now the
+ * number written here, so 90 m of hill buys 11 px of skyline instead of 7.
+ *
+ * Nothing else is exaggerated to match: the State House is at its real 52 m to
+ * the finial, Old North at its real 58 m. They read because the ground under
+ * them now falls away behind, not because they were inflated.
  */
 const BEACON_H = 90;
 
@@ -78,8 +120,14 @@ export class Boston {
     this.nextEvent = Boston.MEAN_GAP_S * 0.7;
   }
 
-  showcase(world: World): void {
-    this.place(world, 4200);
+  /**
+   * `range` metres, dead on the bow. Dead ahead rather than the usual random
+   * bearing because the whole question about a landfall is what its silhouette
+   * does, and a silhouette cannot be A/B'd from two crops taken at two
+   * different bearings.
+   */
+  showcase(world: World, range = 4200): void {
+    this.place(world, range, 0);
     this.nextEvent = 1e6;
   }
 
@@ -88,13 +136,25 @@ export class Boston {
   }
 
   /** Put the town on the horizon at `range` metres, roughly on the bow. */
-  private place(world: World, range: number): void {
+  private place(world: World, range: number, offBow?: number): void {
     const r = this.rng;
-    const b = world.ship.heading + (r() - 0.5) * 0.7;
+    const b = world.ship.heading + (offBow ?? (r() - 0.5) * 0.7);
     this.absX = world.ship.position.x + world.origin.x + Math.sin(b) * range;
     this.absZ = world.ship.position.z + world.origin.z - Math.cos(b) * range;
-    // The town faces the sea, so its axis is across the approach.
-    this.bearing = b + Math.PI * 0.5;
+    /*
+     * The town faces the sea: her long axis across the approach, her waterfront
+     * toward you and her hills receding.
+     *
+     * This was `b + PI/2`, and that is a quarter turn out. The vertex shader
+     * maps town-local +Z to (-sin, cos) of this angle, and at b + PI/2 that
+     * came out PERPENDICULAR to the line of sight — so the 900 m depth axis was
+     * what spread across the frame and the 2600 m length ran away from the eye.
+     * Three hills laid out along x were therefore stacked one behind another,
+     * and the landfall measured 850 m wide when it should have measured 2600:
+     * the Trimountain could not read as three humps because it was never
+     * presented as three of anything. Measured before the change and after it.
+     */
+    this.bearing = b + Math.PI;
     this.placed = true;
     if (!this.builder && !this.mesh) this.beginBuild();
     world.bus.emit('world:landfall', { name: 'Boston', range });
@@ -111,7 +171,10 @@ export class Boston {
       { label: 'town3', run: (b, r) => this.buildTown(b, r, 90) },
       { label: 'town4', run: (b, r) => this.buildTown(b, r, 80) },
       { label: 'landmarks', run: (b, r) => this.buildLandmarks(b, r) },
-      { label: 'wharf', run: (b, r) => this.buildWharf(b, r) },
+      // Two slices: the shipping is 168 hulls now and one slice of it overran
+      // the 1.5 ms budget, which is the whole point of slicing.
+      { label: 'wharf', run: (b, r) => this.buildWharf(b, r, 0) },
+      { label: 'shipping', run: (b, r) => this.buildWharf(b, r, 1) },
     ];
   }
 
@@ -129,10 +192,10 @@ export class Boston {
     const beach = srgb(0xb9ac8b);
     const aux: Aux = [0, 0, 0, 0.9];
 
-    const nx = 40;
+    const nx = 56;
     const nz = 12;
     const halfL = TOWN_LEN * 0.5;
-    const depth = 900;
+    const depth = TOWN_DEPTH;
     const rows: number[][] = [];
     for (let j = 0; j < nz; j++) {
       const v = j / (nz - 1);
@@ -160,19 +223,35 @@ export class Boston {
     b.tube([skirt, front], false);
   }
 
+  /**
+   * The Trimountain, as a silhouette.
+   *
+   * Three humps only read as three if the saddles between them are deep enough
+   * to see. At eight kilometres a metre is an eighth of a pixel, so a saddle has
+   * to drop 25-30 m to be worth two pixels of notch — which means the humps have
+   * to be NARROW. The old profile gave Beacon a sigma of 338 m against a
+   * 1300 m half-length, so it swallowed both its neighbours and the ridge came
+   * out as one broad swell with two imperceptible shoulders.
+   */
   private landHeight(x: number, z: number, rng: () => number): number {
     const halfL = TOWN_LEN * 0.5;
     const t = x / halfL;
-    // Copp's Hill, Beacon Hill, Fort Hill: the Trimountain.
-    const hills =
-      BEACON_H * Math.exp(-Math.pow((t + 0.05) / 0.26, 2)) +
-      BEACON_H * 0.62 * Math.exp(-Math.pow((t + 0.62) / 0.18, 2)) +
-      BEACON_H * 0.55 * Math.exp(-Math.pow((t - 0.55) / 0.2, 2));
-    // Inland the ground rises away from the waterfront.
-    const inland = Math.max(0, z / 700);
+    // Copp's Hill to the north, Beacon in the middle, Fort Hill to the south.
+    const hills = Math.max(
+      BEACON_H * Math.exp(-Math.pow((t + 0.04) / 0.155, 2)),
+      Math.max(
+        BEACON_H * 0.60 * Math.exp(-Math.pow((t + 0.58) / 0.135, 2)),
+        BEACON_H * 0.52 * Math.exp(-Math.pow((t - 0.54) / 0.15, 2)),
+      ),
+    );
+    // A ridge that crests over the town and falls away behind it, so everything
+    // built on the crest has sky behind it instead of more hill.
+    const ridge = z < CREST_Z
+      ? 0.16 + 0.84 * Math.pow(Math.max(0, z) / CREST_Z, 1.25)
+      : Math.max(0.32, 1 - 0.68 * Math.pow((z - CREST_Z) / (TOWN_DEPTH - CREST_Z), 1.25));
     const shore = Math.min(1, Math.max(0, (z + 60) / 150));
     const jitter = (rng() - 0.5) * 2.4;
-    return (hills * (0.35 + 0.65 * inland) + 6 * inland) * shore + jitter * shore;
+    return hills * ridge * shore + jitter * shore;
   }
 
   private landColour(x: number, z: number, grass: RGB, dry: RGB, beach: RGB): RGB {
@@ -260,41 +339,74 @@ export class Boston {
     const lead = srgb(0xb6b8b6);
     const halfL = TOWN_LEN * 0.5;
 
-    // --- the State House on the crest of Beacon Hill
-    const shX = -halfL * 0.05;
-    const shZ = 300;
+    /*
+     * The State House, ON the crest of Beacon Hill.
+     *
+     * Bulfinch's dome is 15 m across and this one is 24. That is the one thing
+     * in the town that is inflated on purpose: at eight kilometres 15 m is
+     * 1.8 px, and a dome two pixels wide is a bump. 24 m is three, which is
+     * enough to read as round against a straight ridge — and roundness is what
+     * names it. Its height is NOT inflated: 52 m to the finial, which is what
+     * Bulfinch built, and it clears the ridge only because the ridge now falls
+     * away behind it.
+     */
+    const shX = -halfL * 0.04;
+    const shZ = CREST_Z;
     const shY = this.landHeight(shX, shZ, rng);
+    const DOME_R = 12;
+    // Shingled in 1798, so pale, not gold — and the brightest thing in the town,
+    // because at five kilometres the haze eats anything that is not.
+    const shingle = srgb(0xefe8d2);
     b.box(shX, shY + 11, shZ, 34, 11, 15, srgb(0x8d5a44), aux);
-    b.box(shX, shY + 24, shZ, 13, 3, 13, stone, aux);
-    // Drum and dome. Bulfinch's was shingled in 1798, so pale, not gold.
-    b.cyl(shX, shY + 27, shZ, shX, shY + 34, shZ, 9, 8.4, 12, stone, aux);
+    b.box(shX, shY + 24, shZ, 15, 3, 15, stone, aux);
+    b.cyl(shX, shY + 27, shZ, shX, shY + 34, shZ, DOME_R * 1.06, DOME_R, 12, stone, aux);
     const domeRings: number[][] = [];
     for (let k = 0; k <= 5; k++) {
       const s = k / 5;
-      const rr = 8.4 * Math.cos(s * Math.PI * 0.5);
-      const yy = shY + 34 + 11 * Math.sin(s * Math.PI * 0.5);
+      const rr = DOME_R * Math.cos(s * Math.PI * 0.5);
+      const yy = shY + 34 + 12 * Math.sin(s * Math.PI * 0.5);
       const ring: number[] = [];
       for (let j = 0; j < 12; j++) {
         const th = (j / 12) * Math.PI * 2;
-        ring.push(b.vert(shX + Math.cos(th) * rr, yy, shZ + Math.sin(th) * rr, lead, aux));
+        ring.push(b.vert(shX + Math.cos(th) * rr, yy, shZ + Math.sin(th) * rr, k > 3 ? shingle : lead, aux));
       }
       domeRings.push(ring);
     }
     b.tube(domeRings, true);
-    b.cyl(shX, shY + 45, shZ, shX, shY + 52, shZ, 0.9, 0.3, 5, stone, aux);
+    // The lantern and finial, as a rope rather than a 1.8 m cylinder: at eight
+    // kilometres that cylinder is a fifth of a pixel and it is the topmost
+    // point of the whole landfall, so it is exactly the thing that must not
+    // blink in and out as the ship moves.
+    b.rope(shX, shY + 45, shZ, shX, shY + 52, shZ, 1.7, 0.7, 3, 0.8, shingle);
 
-    // --- spires. Old North is the tall one, and it is northernmost.
-    const spires = [
-      [-halfL * 0.66, 130, 58],
-      [-halfL * 0.3, 210, 44],
-      [halfL * 0.06, 150, 40],
-      [halfL * 0.34, 240, 46],
-      [halfL * 0.62, 170, 38],
+    /*
+     * Spires. Old North is the tall one and it stands at the far end of the
+     * town over the low hill — 58 m, which is its real height, and it is on the
+     * crest so the whole steeple is against sky. The others are shorter and
+     * further down the slope, which is what makes the tall one legible: a
+     * skyline is read from its outline, and an outline needs a hierarchy.
+     */
+    const spires: readonly (readonly [number, number, number])[] = [
+      [-halfL * 0.58, CREST_Z - 24, 58],
+      [-halfL * 0.28, 214, 42],
+      [halfL * 0.05, 156, 38],
+      [halfL * 0.32, 246, 45],
+      [halfL * 0.60, 190, 36],
     ];
+    /*
+     * Towers 13 m square and spires 6 m at the base. Old North's tower is
+     * nearer 9 m and its spire nearer 4, so both are exaggerated about 1.4x —
+     * stated, because at eight kilometres 9 m is ONE pixel and the spire above
+     * it was 0.5 m at the top, which is a twentieth of a pixel. Measured on the
+     * skyline profile before this change: the tallest spire in the town reached
+     * 6 px of the 10 px it stands, because its top four pixels were sub-pixel
+     * geometry and simply were not drawn. The spire itself is a rope, so what
+     * is left of it past resolution fades instead of blinking.
+     */
     for (const [sx, sz, sh] of spires) {
       const g = this.landHeight(sx, sz, rng);
-      b.box(sx, g + sh * 0.3, sz, 5.5, sh * 0.3, 5.5, white, aux);
-      b.cyl(sx, g + sh * 0.6, sz, sx, g + sh, sz, 4.2, 0.25, 6, white, aux);
+      b.box(sx, g + sh * 0.32, sz, 6.5, sh * 0.32, 6.5, white, aux);
+      b.rope(sx, g + sh * 0.6, sz, sx, g + sh, sz, 3.0, 0.9, 3, 0.8, white);
     }
 
     // --- Boston Light on the outermost drumlin, and the fort on Castle Island
@@ -327,37 +439,90 @@ export class Boston {
    * legible thing about a seaport, and at 8 km it is the only thing you can
    * read apart from the hills.
    */
-  private buildWharf(b: MeshBuilder, rng: () => number): void {
+  /**
+   * Long Wharf and the shipping — the thicket of masts that is the single most
+   * legible thing about a seaport of this date, and the hardest thing here to
+   * draw honestly.
+   *
+   * A lower mast is 60-80 cm through at the deck. At eight kilometres that is a
+   * TWENTIETH of a pixel, and drawn as a tapered cylinder it was one of two
+   * things: nothing at all, or a hard black pixel wherever it happened to cross
+   * a pixel centre, moving from mast to mast as the ship sailed. Sixty-four of
+   * them made a sparse crawling stipple, not a thicket. As `rope()` ribbons
+   * each mast contributes exactly its own coverage instead, so a hundred of
+   * them sum to the faint grey haze a hundred masts actually look like, and it
+   * holds still.
+   *
+   * Emitted FAR TO NEAR, because a ribbon widened to a pixel at this range is
+   * sixteen metres wide in world space, so masts overlap heavily and the mesh
+   * writes depth. Far first means each nearer mast blends over what is already
+   * there instead of a nearer one discarding all the rest. The order is only
+   * right from seaward, which is the side a harbour is approached from; sail
+   * past and look back and the thicket thins, which is the graceful way for
+   * this to fail.
+   */
+  private buildWharf(b: MeshBuilder, rng: () => number, part: number): void {
     const aux: Aux = [0, 0, 0, 0.85];
     const timber = srgb(0x6b5a44);
-    const spar = srgb(0xa8834e);
+    // Weathered and slushed dark, because contrast against the haze is what
+    // makes a mast visible at all and a bright spar has none.
+    const spar = srgb(0x584631);
     const stone = srgb(0x8b8474);
 
-    // The wharf itself: half a kilometre out into the harbour.
-    b.box(60, 2.4, -230, 17, 2.4, 250, stone, aux);
-    b.box(60, 5.5, -60, 12, 4.5, 40, timber, aux);
-    // Other quays either side.
-    b.box(-420, 2.0, -120, 90, 2.0, 26, stone, aux);
-    b.box(520, 2.0, -140, 110, 2.0, 24, stone, aux);
+    if (part === 0) {
+      // Long Wharf, half a kilometre out into the harbour, and the quays that
+      // ran the length of the waterfront either side of it.
+      b.box(60, 2.4, -230, 17, 2.4, 250, stone, aux);
+      b.box(60, 5.5, -60, 12, 4.5, 40, timber, aux);
+      for (const [qx, qz, qw] of [[-1010, -85, 130], [-700, -105, 150], [-390, -125, 150],
+        [-120, -95, 110], [350, -135, 170], [700, -110, 150], [1010, -80, 120]] as const) {
+        b.box(qx, 2.0, qz, qw, 2.0, 24, stone, aux);
+      }
+      return;
+    }
 
-    // Masts. Two ranks either side of Long Wharf plus a scatter in the roads.
-    for (let n = 0; n < 64; n++) {
-      const alongWharf = n < 44;
-      const side = n % 2 === 0 ? 1 : -1;
-      const x = alongWharf ? 60 + side * (26 + rng() * 10) : -700 + rng() * 1500;
-      const z = alongWharf ? -430 + rng() * 380 : -700 - rng() * 900;
-      const h = 16 + rng() * 24;
-      const r = 0.30 + rng() * 0.14;
-      b.cyl(x, 0.5, z, x + (rng() - 0.5) * 1.4, h, z, r, r * 0.3, 5, spar, aux);
+    // Moored across the whole frontage, not down one wharf: a rank of masts
+    // that recedes along the line of sight stacks into two vertical lines
+    // instead of spreading into a thicket.
+    const ships: { x: number; z: number; h: number; r: number; len: number; yards: number }[] = [];
+    for (let n = 0; n < 152; n++) {
+      const alongside = n % 4 !== 3;
+      ships.push({
+        // Alongside the quays that run the length of the waterfront, or out in
+        // the roads. Both spread ACROSS the frontage: seventy masts stacked down
+        // one wharf occupy ten pixels of screen at this range and blend into a
+        // single line, which is the same mistake as laying the hills out along
+        // the line of sight.
+        x: alongside ? -1080 + rng() * 2160 : -900 + rng() * 1900,
+        z: alongside ? -170 - rng() * 130 : -330 - rng() * 460,
+        h: 17 + rng() * 26,
+        r: 0.30 + rng() * 0.15,
+        len: 8 + rng() * 8,
+        yards: 1 + (rng() < 0.6 ? 1 : 0),
+      });
+    }
+    // Long Wharf keeps its own crowd, since it is the one named quay.
+    for (let n = 0; n < 16; n++) {
+      ships.push({
+        x: 60 + (n % 2 === 0 ? 1 : -1) * (24 + rng() * 12),
+        z: -460 + rng() * 400,
+        h: 20 + rng() * 24,
+        r: 0.32 + rng() * 0.13,
+        len: 9 + rng() * 8,
+        yards: 1 + (rng() < 0.6 ? 1 : 0),
+      });
+    }
+    ships.sort((p, q) => q.z - p.z);
+    for (const s of ships) {
+      b.rope(s.x, 0.5, s.z, s.x + (rng() - 0.5) * 1.4, s.h, s.z, s.r, s.r * 0.34, 3, 0.85, spar);
       // One or two yards: without them a mast is a stick, not a ship.
-      const yards = 1 + (rng() < 0.55 ? 1 : 0);
-      for (let k = 0; k < yards; k++) {
-        const yy = h * (0.42 + k * 0.26);
+      for (let k = 0; k < s.yards; k++) {
+        const yy = s.h * (0.42 + k * 0.26);
         const hs = 3.5 + rng() * 4.5;
-        b.cyl(x - hs, yy, z, x + hs, yy, z, r * 0.36, r * 0.36, 4, spar, aux);
+        b.rope(s.x - hs, yy, s.z, s.x + hs, yy, s.z, s.r * 0.4, s.r * 0.4, 3, 0.85, spar);
       }
       // A dark hull under her, just proud of the water.
-      b.box(x, 1.1, z, 3.4, 1.5, 8 + rng() * 7, srgb(0x2a2722), aux);
+      b.box(s.x, 1.1, s.z, 3.4, 1.5, s.len, srgb(0x2a2722), aux);
     }
   }
 
@@ -433,13 +598,23 @@ export class Boston {
 
     this.material = new THREE.ShaderMaterial({
       name: 'world-boston',
-      uniforms: { ...world.uniforms },
+      // A town has no gunport stripe, and a zero half-height is what switches
+      // the fragment shader's band filter off.
+      uniforms: {
+        ...world.uniforms,
+        ...vesselShared,
+        uStripe: { value: new THREE.Vector4(0, 0, 0, 0) },
+        uPorts: { value: new THREE.Vector4(0, 0, 0, 0) },
+      },
       vertexShader: vesselVert,
       fragmentShader: vesselFrag,
       side: THREE.DoubleSide,
+      ...TOWN_BLEND,
     });
     this.mesh = new THREE.Mesh(geo, this.material);
     this.mesh.name = 'world-boston';
+    this.mesh.renderOrder = 1;
+    this.mesh.userData.town = { len: TOWN_LEN, depth: TOWN_DEPTH, hill: BEACON_H };
     this.mesh.visible = false;
     world.scene.add(this.mesh);
     world.stats['world.bostonTris'] = (body.getIndex()?.count ?? 0) / 3;

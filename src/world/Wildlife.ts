@@ -5,6 +5,7 @@ import { Buoys } from './Buoys';
 import { Dolphins } from './Dolphins';
 import { Vessels } from './Vessels';
 import { Whales } from './Whales';
+import { vesselShared } from './shaders/vessel';
 
 /**
  * The company. Everything alive or crewed that shares the sea with the player.
@@ -36,8 +37,10 @@ import { Whales } from './Whales';
  *   http://127.0.0.1:5178/?showcase=all
  *   world.bus.emit('world:showcase', 'dolphins')
  *
- * Accepted names: birds, dolphins, whales, whaleclose, vessels, boston, buoy,
- * all,
+ * Accepted names: birds, dolphins, whales, whaleclose, vessels, boston,
+ * boston8 (the same landfall at 8 km, dead on the bow, which is the range its
+ * silhouette has to be identifiable at), buoy, all, far (the three hulls on
+ * station at about 550 m, where their rigging goes sub-pixel),
  * and `near` — which is `all` with the whale and every hull type brought inside
  * 500 m, so a reviewer can judge the construction rather than a silhouette.
  * The URL form is what `scripts/capture.mjs --url` needs, since the harness
@@ -86,6 +89,10 @@ export class Wildlife implements Module {
   update(world: World): void {
     const t0 = performance.now();
     const dt = world.time.dt;
+    // The vessel and town shader converts a rope's radius to pixels, so it
+    // needs the backing store's height. One assignment, shared by reference
+    // with every material that program is used by.
+    vesselShared.uViewportH.value = world.size.height;
 
     // Wait for the solver to float the hull before placing anything relative to
     // it, or a showcase pod ends up where the ship was on frame one.
@@ -112,8 +119,14 @@ export class Wildlife implements Module {
     if (which === 'whales' || (all && !near)) this.whales.showcase(world, false);
     if (near || which === 'whaleclose') this.whales.showcase(world, true);
     if (near) this.vessels.showcaseNear(world);
+    // The same three hulls at five and a half times the range, which is where
+    // rigging goes sub-pixel and the whole minification question is settled.
+    else if (which === 'far') this.vessels.showcaseNear(world, 5.5);
     else if (all || which === 'vessels') this.vessels.showcase(world);
-    if (all || which === 'boston') this.boston.showcase(world);
+    // `boston8` is the range a skyline has to be identifiable at; `boston` is
+    // the range it becomes a place you can steer for.
+    if (which === 'boston8') this.boston.showcase(world, 8000);
+    else if (all || which === 'boston') this.boston.showcase(world);
     if (all || which === 'buoy') this.buoys.showcase(world);
   }
 

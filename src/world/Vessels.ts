@@ -1,10 +1,43 @@
 import * as THREE from 'three';
 import type { FoamSource, World } from '../types';
 import { damp, makeRng, smoothstep, wrapPi } from '../util/math';
-import { buildVessel, VESSEL_SPECS, type VesselSpec } from './vesselGeom';
-import { vesselFrag, vesselVert } from './shaders/vessel';
-import { toInstanced } from './wgeom';
+import { buildVessel, STRIPE_COLOUR, VESSEL_SPECS, type VesselSpec } from './vesselGeom';
+import { vesselFrag, vesselShared, vesselVert } from './shaders/vessel';
+import { srgb, toInstanced } from './wgeom';
 import type { WorldExt } from './api';
+
+/**
+ * Blending on a material that is NOT in the transparent list.
+ *
+ * The whole hull, her spars and her canvas write alpha 1, so with these factors
+ * they composite to exactly the pixels an opaque draw produced; only a rope
+ * writes a partial alpha, and it needs to blend or the coverage filter has
+ * nothing to give its ink to. `transparent: false` is what keeps the mesh in
+ * the opaque list — three only consults `transparent` when it decides which
+ * list an object joins, and applies `blending` either way — so the sort order,
+ * the depth write and the aerial-perspective maths are all untouched. The
+ * `renderOrder` puts her after the sea and the land she may be blended against.
+ */
+const ROPE_BLEND = {
+  transparent: false,
+  depthWrite: true,
+  blending: THREE.CustomBlending,
+  blendSrc: THREE.SrcAlphaFactor,
+  blendDst: THREE.OneMinusSrcAlphaFactor,
+  blendSrcAlpha: THREE.OneFactor,
+  blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+} as const;
+
+/** The painted band and her gunports, for the fragment shader's box filter. */
+function paintUniforms(spec: VesselSpec): Record<string, { value: THREE.Vector4 }> {
+  const c = srgb(STRIPE_COLOUR);
+  const period = spec.ports > 0 ? spec.loa / spec.ports : 0;
+  return {
+    uStripe: { value: new THREE.Vector4(c[0], c[1], c[2], spec.stripeH) },
+    // Ports are roughly square and stop short of the stem and the transom.
+    uPorts: { value: new THREE.Vector4(period, spec.stripeH * 0.62, spec.stripeH * 0.66, spec.loa * 0.34) },
+  };
+}
 
 const MAX_VESSELS = 4;
 /** Mean seconds between one sail appearing and the next. */
@@ -46,6 +79,20 @@ interface Vessel {
   pitch: number;
   /** Set by the review hook: hold this course, do not dodge, do not tack. */
   held: boolean;
+  /**
+   * Review hook: keep station on the player instead of sailing.
+   *
+   * A close pass is the event this whole module exists for, and it cannot be
+   * A/B'd from a capture unless the range is a constant. Left to sail, a
+   * showcase vessel placed 420 m off closes to 259 m in the nine seconds a
+   * capture settles for, which is a 62 per cent change of pixel scale between
+   * two runs of identical code. `stationR` metres at `stationRel` radians off
+   * the bow, re-asserted every frame, makes the crop repeatable.
+   */
+  station: boolean;
+  stationRel: number;
+  stationR: number;
+  stationHead: number;
   brace: number;
   sheet: number;
   bulge: number;
@@ -90,14 +137,19 @@ class VesselBatch {
 
     this.material = new THREE.ShaderMaterial({
       name: `world-vessel-${spec.key}`,
-      uniforms: { ...world.uniforms },
+      uniforms: { ...world.uniforms, ...vesselShared, ...paintUniforms(spec) },
       vertexShader: vesselVert,
       fragmentShader: vesselFrag,
       side: THREE.DoubleSide,
+      ...ROPE_BLEND,
     });
     this.mesh = new THREE.Mesh(this.geo, this.material);
     this.mesh.name = `world-vessel-${spec.key}`;
+    this.mesh.renderOrder = 1;
     this.mesh.visible = false;
+    // The hull metrics, for a probe that wants to sample the ship's side at a
+    // known height rather than guess a box from the vertex buffer.
+    this.mesh.userData.spec = spec;
     world.scene.add(this.mesh);
   }
 
@@ -175,7 +227,9 @@ export class Vessels {
       this.vessels.push({
         active: false, type: 0, flavour: 'crossing', x: 0, z: 0, y: 0,
         heading: 0, speed: 0, course: 0, tack: 1, tackTimer: 0,
-        heel: 0, pitch: 0, held: false, brace: 0, sheet: 0, bulge: 0, scale: 1, tint: 1,
+        heel: 0, pitch: 0, held: false,
+        station: false, stationRel: 0, stationR: 0, stationHead: 0,
+        brace: 0, sheet: 0, bulge: 0, scale: 1, tint: 1,
       });
     }
     this.applySettings(world);
@@ -218,41 +272,38 @@ export class Vessels {
    * Put one of each hull close aboard, on the beam, so a reviewer can actually
    * look at the construction instead of a three-pixel silhouette.
    */
-  showcaseNear(world: World): void {
-    const ship = world.ship;
+  showcaseNear(world: World, scale = 1): void {
     // NOT beam-on. A square-rigger's yards are athwartships, so her beam is
     // exactly the angle from which every sail is edge-on and the rig reads as
     // two bare poles — which is what the first review crop showed. Put her on a
     // near-reciprocal course instead, so we look at her from about 35 degrees
     // off the bow and see the faces of the canvas whatever the brace.
-    const bow = world.ship.heading;
-    // On the bow, not abeam: a chase camera sees about 55 degrees and anything
-    // truly on the beam is off the edge of the frame.
-    const ranges = [130, 230, 420];
+    //
+    // The ranges are from the SHIP; the chase camera sits about 74 m astern of
+    // her, so these put all three hulls 150-165 m from the lens, which is the
+    // range a close pass is judged at.
+    const ranges = [80, 88, 85];
+    const rels = [0.0, 0.34, -0.45];
     for (let t = 0; t < VESSEL_SPECS.length; t++) {
       const slot = this.vessels.find((v) => !v.active);
       if (!slot) break;
-      const side = t % 2 === 0 ? 1 : -1;
-      const bearing = bow + side * (0.20 + t * 0.09);
+      const side = rels[t] >= 0 ? 1 : -1;
       // The two rigs want opposite viewing angles and there is no compromise:
       // a square yard is athwartships, so her sails face you from ahead or
       // astern; a gaff sail lies along the keel, so hers face you from abeam.
       // Get it wrong and the canvas is edge-on and she looks bare-poled.
       const foreAndAft = VESSEL_SPECS[t].masts.every((m) => m.squares === 0);
-      const disp = foreAndAft
-        ? bearing + Math.PI * 0.5
-        : bearing + Math.PI - side * 0.62;
       slot.type = t;
       slot.flavour = 'crossing';
-      slot.x = ship.position.x + Math.sin(bearing) * ranges[t];
-      slot.z = ship.position.z - Math.cos(bearing) * ranges[t];
-      // Broadside to the camera, and held there: the point of this hook is to
-      // see how she is built, not to watch her helmsman work.
-      slot.course = disp;
-      slot.heading = disp;
+      slot.station = true;
+      slot.stationRel = rels[t];
+      slot.stationR = ranges[t] * scale;
+      slot.stationHead = foreAndAft
+        ? rels[t] + Math.PI * 0.5
+        : rels[t] + Math.PI - side * 0.62;
       slot.tack = 1;
       slot.tackTimer = 1e6;
-      slot.speed = 2;
+      slot.speed = VESSEL_SPECS[t].topSpeed * 0.6;
       slot.heel = 0;
       slot.pitch = 0;
       slot.held = true;
@@ -323,6 +374,7 @@ export class Vessels {
     slot.scale = 0.94 + r() * 0.12;
     slot.tint = 0.9 + r() * 0.2;
     slot.held = false;
+    slot.station = false;
     slot.active = true;
     if (!this.batches[slot.type]) this.pendingBuild = slot.type;
     world.bus.emit('world:sail', { type: VESSEL_SPECS[slot.type].label, range });
@@ -382,15 +434,25 @@ export class Vessels {
 
       // Give the player room: nobody sails straight through you. Deliberately
       // weak and short-ranged so it nudges rather than steers.
-      const dxs = v.x - shipX;
-      const dzs = v.z - shipZ;
-      const ds = Math.hypot(dxs, dzs);
+      let dxs = v.x - shipX;
+      let dzs = v.z - shipZ;
+      let ds = Math.hypot(dxs, dzs);
       if (!v.held && ds < AVOID_START) {
         const away = Math.atan2(dxs, -dzs);
         steer += wrapPi(away - steer) * (1 - ds / AVOID_START) * 0.5;
       }
 
-      v.heading += wrapPi(steer - v.heading) * Math.min(1, dt * 0.22);
+      if (v.station) {
+        const bear = world.ship.heading + v.stationRel;
+        v.x = shipX + Math.sin(bear) * v.stationR;
+        v.z = shipZ - Math.cos(bear) * v.stationR;
+        v.heading = world.ship.heading + v.stationHead;
+        dxs = v.x - shipX;
+        dzs = v.z - shipZ;
+        ds = v.stationR;
+      } else {
+        v.heading += wrapPi(steer - v.heading) * Math.min(1, dt * 0.22);
+      }
 
       // --- polar. No-go zone, then a broad peak on a reach.
       const twa = wrapPi(env.windBearing - v.heading);
@@ -400,12 +462,13 @@ export class Vessels {
       const windK = THREE.MathUtils.clamp((env.windSpeed * env.gust) / 9, 0.22, 1.3);
       const slower = v.flavour === 'overhaul' ? 0.74 : 1;
       const target = spec.topSpeed * drive * shape * windK * slower;
-      v.speed = damp(v.speed, target, 0.09, dt);
-
       const fx = Math.sin(v.heading);
       const fz = -Math.cos(v.heading);
-      v.x += fx * v.speed * dt;
-      v.z += fz * v.speed * dt;
+      if (!v.station) {
+        v.speed = damp(v.speed, target, 0.09, dt);
+        v.x += fx * v.speed * dt;
+        v.z += fz * v.speed * dt;
+      }
 
       // --- attitude. Heel to leeward, pitch from the wave she is actually on.
       // A three-decker is stiffer than a fishing boat, so `stiffness` divides.
@@ -428,6 +491,15 @@ export class Vessels {
       v.sheet = damp(v.sheet, s * (0.16 + (a / Math.PI) * 1.05), 0.9, dt);
       // Cloth is never a flat sheet, even luffing, so the belly has a floor.
       v.bulge = damp(v.bulge, Math.cos(twa) * (0.42 + env.windSpeed * 0.07) * (0.4 + 0.6 * drive), 1.5, dt);
+
+      // A stationed hull sits upright: the point of the hook is to see how she
+      // is built, and 0.15 rad of heel moves her side by 0.6 m on a 1.65 m
+      // freeboard, which is most of a hull's worth of sampling error for
+      // anything trying to measure her paint.
+      if (v.station) {
+        v.heel = 0;
+        v.pitch = 0;
+      }
 
       if (ds > RETIRE_M) {
         v.active = false;
