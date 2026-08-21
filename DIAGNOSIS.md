@@ -2936,3 +2936,110 @@ town cheaper, because a rope ribbon is 2 triangles where a capped four-sided con
 Zero extra draw calls, via `transparent: false` with `CustomBlending`: three only
 consults `transparent` when choosing a render list, so the mesh stays in the opaque list
 while blending still applies.
+
+## 62. The blind critique: the work wins 3 of 4, and the top defect was never on my list
+
+First blind pass since the rubric was written. Four scenes, current `main` against
+`2e7901f` (before the last two days), same harness, same size, **each pair shuffled
+independently** so pane1 was not consistently one build. The critic scored all 32 axes
+and all four winners before being allowed to look across pairs, and never saw the key.
+
+| scene | winner | totals | |
+|---|---|---|---|
+| noon | **NEW** | 4.19 v 3.44 | |
+| golden | OLD | 4.69 v 4.56 | critic called it **a tie inside its own noise** |
+| helm | **NEW** | 4.56 v **2.38** | most decisive margin on the sheet |
+| orbit | **NEW** | 3.94 v 3.19 | |
+
+**New build 3 of 4.** On golden it noted the NEW pane had "demonstrably better lighting
+— real warm/cool split, ΔL 40 v 20, the only internally-shaded cloud on the sheet" and
+lost on composition and restraint because of foam coverage, i.e. it lost the pair while
+winning the axis the hour is about.
+
+Two independent confirmations worth having. It found the **wheel as a pile of loose
+planks** in the OLD helm pane, unprompted, and reasoned to the cause — "a translate
+where a rotate-about-hub belongs produces exactly this" — which is §50 exactly. And its
+post-hoc clustering picked out all four NEW panes as "brighter, higher-contrast, more
+saturated" without knowing which was which.
+
+**Scores are 2.38–4.69 out of 10.** That is the rubric working as designed.
+
+### The finding that matters most, and it was not on my list at all
+> **The far-field ocean dies before the horizon, and the horizon is a stack of
+> hard-edged bands.** All eight frames.
+
+Cleanest instance, `orbit-pane1` at x 0–520: a pale cyan hairline at y 573–576, a
+lighter grey band, then a **hard charcoal bar at x 80–360, y 581–585 with crisp top and
+bottom edges**, then an abrupt step at y = 586 into a flat pale mauve field — ΔL 47
+across 1–2 px. In `noon-pane1` at x 0–420 the ocean between y 328 and 356 is **4–6 flat
+horizontal stripes** with hard boundaries and zero wave detail. It is #1 because the
+horizon is the longest line in every frame and the first thing an eye checks.
+
+Nobody had reported this in two days of defect-driven work, including me. That is the
+argument for a blind pass with no priming.
+
+## 63. The ship receives no sky fill and clips to exactly (0,0,0) — and it completes §56
+
+**Verified independently.** In `orbit-pane1`'s hull band (y 730–840, x 500–1100):
+**30.3% of pixels at L < 4**, and **16.1% — 10,719 pixels — at exactly RGB(0,0,0)**,
+under a sky whose mean luminance in the same frame is **137**. A surface under a bright
+sky dome receives sky irradiance; pure black there is not a grade choice, it is a
+missing ambient term.
+
+Consequences the critic drew, both right:
+- A genuinely well-proportioned hull "reads as a paper cut-out", and none of the
+  modelling that clearly exists is visible. Bulwark, quarter-galleries, channels and
+  stern merge into one flat silhouette; only the gunport strake survives.
+- **Shadows on the sails read as "hard-edged black stickers"** — a top's shadow at
+  (742–787, 594–625), a mast cap at (919–960, 625–671), a crosstree at (842–887,
+  580–607) — with "no penumbra, no ambient lift inside."
+
+**That last point completes §56 and corrects how I closed it.** §56 proved the shadow
+*penumbra width* is physically correct — 1.6–6.5 px is the true band for this rig's
+caster separations and the shipped filter measures p25 2.5 / p50 3.5 / p75 6.2 — and I
+closed the item on that basis. The measurement was right and the conclusion was too
+narrow: **the owner's complaint was that the shadows read as hard black blocks, and a
+correct-width penumbra around an interior with no ambient fill still reads as a
+sticker.** I answered the question I had instrumented rather than the one that was
+asked. The edges were never the problem; the fill was.
+
+A related member of the same family: **a whole class of small props renders as flat,
+unlit black silhouettes** — 25+ belaying pins in `helm-pane2` at (905–1330, 470–620)
+and (180–620, 285–390), "identical Γ glyphs with no gradient across them, no variation
+between pins at different orientations", and the yards in orbit, e.g. (674–842,
+510–516) as "a solid 2 px black bar". Objects receiving no light at all.
+
+### What it checked and did NOT find, so the loop stops chasing them
+- **No water tiling.** Autocorrelation of near-field water in all six wide frames: no
+  secondary lobe at any lag. What had looked like peaks was the decay skirt of its own
+  exclusion window.
+- **No sky banding.** Longest run of unchanging value 2–11 px at 0.3 LSB, all eight.
+- **No tonemapper hue skew.** Brightest sky warm with G between R and B in all eight.
+- **Almost no highlight clipping** — max 0.034% of pixels ≥ 254 in any channel.
+- **The dither is correct: leave it alone.** It flagged an interleaved-gradient-noise
+  grating at 2.26 × 3.22 px as a defect, then measured its amplitude at **0.16–0.96
+  LSB** and retracted: "a properly calibrated dither and the reason there is no banding
+  anywhere."
+- **The HUD is the one thing already at commercial quality.** "It never competes in any
+  of the eight. Don't touch it."
+
+### Bugs it named that need their own answers
+- **Orphan spar** in the OLD noon pane: a tapered stick (795,472)→(858,502) clear of
+  the ship and its rigging, casting no shadow. Present in OLD; **check whether it
+  survives on main.**
+- **A sail and its boom pass through the sea surface** in both noon panes — boom end at
+  (745,632) at or below the water, no splash, no intersection foam.
+- **Foam drawn over the hull's flank up to gunport level**, x 826–975, y 785–840.
+- **Two featureless white ellipsoids threaded on a rope outboard the starboard rail**,
+  ~(1345,700) r≈14 and ~(1372,715) r≈13. It could not tell what they are meant to be.
+- **The masthead is clipped by the top edge in all four wide shots.** The chase camera
+  has no headroom for the rig — and note §48 gave that camera an aspect-driven distance
+  floor for the *horizontal* fit only.
+- **Nothing is alive in any of the eight frames.** Direction 3's populations are a
+  Poisson process with means of minutes, so a scene that does not force them shows empty
+  sea — which is correct behaviour and still means the sanctioned review sheet never
+  shows the world's life. The `wildlife` scene exists for this; the review sheet should
+  include it.
+- **The ensign may be an anachronism** — "a modern-looking US flag with a full star
+  grid". The texture was verified at 15 stars and 15 stripes by dumping it, so this is
+  probably a misread at 80×50 px, but it is worth one look at 1:1.
