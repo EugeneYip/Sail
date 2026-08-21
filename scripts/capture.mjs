@@ -263,10 +263,10 @@ const SCENES = {
    * photographed in. A review sheet cannot score what it never shows.
    *
    * 19.95 puts the sun a few degrees down, and beam-on gets the whole of the
-   * hour into one frame: measured, the western sky at the horizon sits at 86
-   * against a zenith of 41 and a sea of 25, so the afterglow, the deep zenith
-   * and the first stars are all present at once and the exposure has to hold all
-   * three.
+   * hour into one frame: measured on the shipped frame, the western sky at the
+   * horizon sits at sRGB 71.5 against a zenith of 29.5 and a sea of 22.5, so the
+   * afterglow, the deep zenith and the first stars are all present at once and
+   * the exposure has to hold all three. (2.4 stops of sky across one frame.)
    *
    * The sail plan reads as a SILHOUETTE here, not as pale cloth — at this angle
    * it is backlit, which is the correct and the more dramatic reading. Judging
