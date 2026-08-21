@@ -43,8 +43,13 @@ import {
  * read back` warnings per capture. Both are gone with the readback itself.
  *
  * `exposure` on this class is therefore a CPU **estimate**, derived from the sky
- * model, for the HUD, `world.uniforms.uExposure` and diagnostic probes. It
- * tracks the GPU value to within about a stop and nothing visual depends on it.
+ * model, for the HUD and `world.uniforms.uExposure`. Nothing visual depends on
+ * it. It does NOT track the GPU value to within about a stop, as this comment
+ * used to say: on the `orbit` preset the estimate is 0.668 against an applied
+ * multiplier of 0.151, **2.14 stops** apart, which is unsurprising once you note
+ * the estimate meters a sky-model luminance and the shader meters a
+ * centre-weighted percentile band of the real frame, ship and sea included.
+ * **Do not calibrate anything against it** — see the note on `PostExt.exposure`.
  * Under `settings.debugStalls` it is reconciled against the real value every
  * `DEBUG_READBACK_INTERVAL` frames. That flag is deliberately NOT
  * `settings.debug`: the reconcile is a synchronous readback costing 0.2 ms idle

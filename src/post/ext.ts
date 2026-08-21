@@ -17,7 +17,22 @@ export interface PostExt {
   depthTexture: THREE.Texture | null;
   near: number;
   far: number;
-  /** Exposure multiplier currently applied to the scene. */
+  /**
+   * CPU **estimate** of the exposure multiplier, from the sky model — NOT the
+   * number the frame was multiplied by. `PREPARE_FRAG` multiplies by
+   * `tExposure.g`, a 1x1 target the adapt pass writes on the GPU from a
+   * centre-weighted histogram of the actual frame, and the two are further apart
+   * than `AutoExposure`'s comment used to claim: measured on the `orbit` preset,
+   * this field read 0.668 while the applied multiplier was **0.151** — 2.14
+   * stops. Nothing visual depends on this field; it is for the HUD.
+   *
+   * A probe that needs the real multiplier must read the GPU state, e.g.
+   * `renderHook.pipeline.targets.map.get('expStateB')` via
+   * `readRenderTargetPixels` (`.g`), or set `settings.debugStalls`. Pinning
+   * `world.uniforms.uExposure` pins the estimate and changes nothing on screen.
+   * Calibrating a transfer curve against this field is what put DIAGNOSIS §68a's
+   * shadow-crush figure out by 2.1 stops and its sky reference out by 20x.
+   */
   exposure: number;
   /** Sub-pixel jitter baked into the projection matrix this frame, NDC. */
   jitter: THREE.Vector2;

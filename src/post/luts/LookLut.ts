@@ -159,9 +159,33 @@ function applyLook(look: Look, rgb: [number, number, number]): [number, number, 
   g = Math.pow(Math.max(g, 0), 1 / look.gamma[1]);
   b = Math.pow(Math.max(b, 0), 1 / look.gamma[2]);
 
-  r = (r - look.pivot) * look.contrast + look.pivot;
-  g = (g - look.pivot) * look.contrast + look.pivot;
-  b = (b - look.pivot) * look.contrast + look.pivot;
+  // Contrast about the pivot. Above the pivot this is the straight line the
+  // looks were authored against, unchanged. Below it the line is replaced by the
+  // log-space slope it was approximating, because the line has an x-intercept at
+  // `pivot * (1 - 1/contrast)` — 0.083 for Open Sea, sRGB code 21 — so every
+  // value AgX placed below code 21 came out NEGATIVE and the `clamp01` in the
+  // black-floor line below turned it into black. The 32-node lattice then
+  // quantised that intercept up to a whole node, so the entire bottom 16 codes
+  // of the AgX output sat flat on the floor.
+  //
+  // Measured whole-frame, one frozen frame, against the same frame with
+  // `uLookAmount` 0 (which is AgX alone): AgX code 12 -> 0.1, 16 -> 0.4,
+  // 24 -> 5.1, 32 -> 13.5, and unity only above 116. That is the shadow crush
+  // DIAGNOSIS §68a attributed to the cos^4 vignette. It is not the vignette:
+  // ablating the vignette in the same frame moves the transfer by under a code
+  // at every level, and the vignette runs on scene-linear radiance BEFORE the
+  // tonemap, which is the correct side of it.
+  //
+  // The two branches meet at the pivot with the same value and the same slope —
+  // d/dx of `pivot * (x/pivot)^c` is exactly `c` at x = pivot — so there is no
+  // kink, and by construction nothing above the pivot moves by a single code.
+  const con = (x: number): number => {
+    if (x >= look.pivot) return (x - look.pivot) * look.contrast + look.pivot;
+    return x <= 0 ? 0 : look.pivot * Math.pow(x / look.pivot, look.contrast);
+  };
+  r = con(r);
+  g = con(g);
+  b = con(b);
 
   // Split tone. A smoothstep on luma, biased by toneBalance, so shadows and
   // highlights get independent tints without a visible crossover band.
