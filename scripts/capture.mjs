@@ -245,6 +245,25 @@ const SCENES = {
     env: { timeOfDay: 15.6, windSpeed: 9.0, cloudCover: 0.4, cloudType: 0.75, turbidity: 2.2, rain: 0, visibility: 32000, seaState: 3, waveHeight: 1.5, choppiness: 0.55 },
     cam: { mode: 'orbit', distance: 110 },
   },
+  /*
+   * A scene with NO CLOUD, for A/B-ing anything that touches shadow.
+   *
+   * Every other scene runs cloudCover 0.3-0.5, and the cloud field advects with
+   * wall-clock time, so two captures minutes apart are two different cloud
+   * fields falling on the same sails. That confound has invalidated two shadow
+   * measurements: on identical code, this project measured a deep-shadow share
+   * of 22.1 / 28.7 / 27.0 percent over the hull across three runs -- a 6.6-point
+   * spread, larger than either change being tested.
+   *
+   * cloudCover 0 removes the moving occluder; the sun is high enough to throw
+   * the rig's shadow across the sails rather than off the ship entirely, and
+   * turbidity is low so the shadow's fill comes from a clean sky.
+   */
+  shadow: {
+    label: 'No cloud — shadow A/B without a moving occluder',
+    env: { timeOfDay: 14.2, windSpeed: 8.0, cloudCover: 0, cloudType: 0.7, turbidity: 1.9, rain: 0, visibility: 44000, seaState: 3, waveHeight: 1.3, choppiness: 0.5 },
+    cam: { mode: 'orbit', distance: 104 },
+  },
   // Direction 3's content is invisible to a scene that never asks for it: the
   // populations appear on a Poisson process with means of minutes, so a plain
   // scene will usually show empty sea. `showcase` forces one of each near enough
