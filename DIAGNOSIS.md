@@ -2550,3 +2550,153 @@ could not contain it.**
 
 Nothing at or beyond 2.03 px of CoC changes by a single bit, so the approved near-field
 look is untouched.
+
+## 59. The adaptive controller: the "regression" was a unit error, and §57 got the instrument backwards
+
+Three separate things were wrong. One was in the harness's documentation, one was in
+the comparison that kept the fix off main, and one was in the control law.
+
+### A. Headless Chromium here DOES have a frame clock. §57's "no vsync" is wrong.
+Measured on an EMPTY page — nothing but an rAF loop, so whatever it reports is the
+harness's own clock (`.tmp/rafcap.mjs`):
+
+| launch flags | min | p25 | p50 | p95 |
+|---|---|---|---|---|
+| `capture.mjs` set | 14.1 | 16.6 | 16.7 | 18.6 |
+| `adaptprobe.mjs` set | 14.6 | 16.6 | 16.7 | 18.6 |
+| + `--disable-gpu-vsync` | 14.6 | 16.6 | 16.7 | 18.6 |
+| + `--disable-frame-rate-limit` | 16.7 | 18.3 | 18.7 | 18.8 |
+
+So §16 is right, §57 is wrong, and `capture.mjs` has been printing the correct footnote
+all along ("p25 at the 16.6 ms rAF cap"). But it is a **rate limiter, not a vsync** — the
+sweep below reads 24.6 and 30.7 ms, values a quantised display cannot produce:
+
+    this harness:   period ~= max(16.67, cost)          (unquantised above the floor)
+    real display:   period  = ceil(cost / 16.67) * 16.67 (quantised)
+
+Both halves matter. It makes this box the **right** instrument for a cost sweep — every
+period above the floor IS that frame's cost — and the **wrong** one for a control law: a
+20 ms frame is "6% over budget" here and "half the frame rate" on the owner's panel. The
+`ADAPT_HIT_BUDGETS` 1.4 test therefore means "cost <= 23.3 ms" here and "cost <= 16.7 ms"
+there, which is why a live run settles one to two rungs higher than a real display wants.
+Below the floor the instrument is simply blind: at dpr 1 even a 400x225 backing store
+reads p50 16.7 ms, exactly what an empty page reads.
+
+### B. The ground truth: cost per rung, and it does not depend on dpr at all
+`.tmp/adaptsweep.mjs`, noon @ ultra, 1600x900, 3 passes, alternating rung order,
+`rivals 0p/0b` sampled around **every rung** and quiet at all of them:
+
+| renderScale | backing store | Mpx | p25 | p50 | intervals a 60 Hz panel would take |
+|---|---|---|---|---|---|
+| 1.00 | 3200x1800 | 5.76 | 81.6 | 89.2 | 6 |
+| 0.92 | 2944x1656 | 4.88 | 64.3 | 77.0 | 5 |
+| 0.84 | 2688x1512 | 4.06 | 60.8 | 64.5 | 4 |
+| 0.76 | 2432x1368 | 3.33 | 51.9 | 56.1 | 4 |
+| 0.68 | 2176x1224 | 2.66 | 43.0 | 47.1 | 3 |
+| 0.60 | 1920x1080 | 2.07 | 35.0 | 37.6 | 3 |
+| 0.52 | 1664x936 | 1.56 | 27.7 | 30.7 | 2 |
+| 0.44 | 1408x792 | 1.12 | 21.4 | 24.6 | 2 |
+| 0.36 | 1152x648 | 0.75 | 17.7 | 19.8 | 2 |
+| 0.30 | 960x540 | 0.52 | 15.4 | 16.6 | 1 (at the floor; cost <= 16.67, unresolvable) |
+| 0.25 | 800x450 | 0.36 | 15.6 | 16.7 | 1 (at the floor) |
+
+The same sweep at `--dpr 1` lies on the **same line**: fitted over the 14 un-censored
+rungs of both, **cost = 9.44 ms + 13.83 ms/Mpx**, worst residual 1.1 ms. dpr 2 at scale
+0.30 and dpr 1 at scale 0.60 are both 960x540 and both read p50 16.6 ms. **The panel's
+device pixel ratio has no effect on frame cost at equal backing store** — only the pixel
+count does.
+
+### C. So the "regression" that kept the fix off main is a unit error
+The old law's floor is `Math.max(0.62, ...)`: a clamp, not a decision. 0.62 at dpr 1 is
+992x558 = 0.55 Mpx. 0.30 at dpr 2 is 960x540 = 0.52 Mpx. **The same picture, 7% apart in
+pixels, recorded in §57 as "throwing away more than half the affordable resolution".**
+And at dpr 2 that clamp stops at 1984x1116 = 2.21 Mpx, which this sweep puts at 36-38 ms
+— 28 fps, three vsync intervals, with nowhere left to go. The old clamp was accidentally
+right for dpr 1 and unreachable for dpr 2. §57's "0.62 at ~63 fps" cannot be a dpr-2
+measurement at all.
+
+### D. What the ladder can never reach, which is a different bug for someone else
+9.44 ms of the frame is not in the pixels — the shadow map is a fixed 2048² x4 cascades,
+the solver and the FFT dispatch do not care about the backing store. That is **57% of a
+16.67 ms budget**, so the pixel budget at 60 fps is 7.2 ms, i.e. about **0.52 Mpx**, and
+adaptive resolution can only ever attack the 13.83 ms/Mpx term. Related: AGENTS' "60 fps
+at 1600x900 on an M2 at ultra" does not hold at either dpr today — `capture.mjs` on a
+quiet box reads noon **p25 21.3 / p50 28.5 ms** at dpr 1 scale 1 (1.44 Mpx, its default),
+not the 13-14 ms in the folklore. That is engine cost, not the controller.
+
+### E. Three real defects in the control law, all found by simulating it
+The law now lives in `src/core/AdaptiveResolution.ts` as a pure function of frame periods,
+and `.tmp/adaptsim.mjs` **imports that module** (`node --experimental-strip-types`) rather
+than transcribing it, so the simulation cannot drift from what ships.
+
+1. **Every load-driven descent STEP doubled the probe backoff.** A descent chain is one
+   decision, and it is multi-step exactly when part of the cost is not in the pixels,
+   because the `sqrt(load)` model then undershoots. Four steps left 32 windows — 18 to
+   48 s — before the first attempt to climb back, and the branch watched for 16 s.
+   "Descends and never returns" was largely "was not watched long enough". Only a failed
+   probe doubles anything now.
+2. **Nothing stopped a descent that bought nothing.** A step must now cut the mean period
+   by 8% (`ADAPT_PAYOFF`), and **two** consecutive steps that fail to end the descent —
+   two, not one, because under vsync a real improvement can hide inside an interval
+   (26.4 -> 19.8 ms both present at 33.3, and the step after that crosses to 16.7).
+3. **When no rung can hold the target, the useful move is to give up frame rate, not
+   pixels.** The accepted interval count is free to change — no reallocation, no TAA reset
+   — and `targetFps` 60 at two intervals is arithmetically identical to `targetFps` 30 on
+   a 60 Hz panel (row 3 of the `ADAPT_HIT_BUDGETS` table is row 1 with the budget
+   doubled). Simulated on a machine with 20 ms of non-pixel cost and cheap pixels: the new
+   law keeps 1408x792 at 30 fps; the law on main grinds to its 0.62 clamp and gets 14 fps.
+
+Two further rules came out of simulating the *hitch cost* rather than the frame rate. A
+marginal window must repeat before it is acted on (`ADAPT_DROP_CONFIRM`: one 90-frame
+window at a true on-time share of 0.95 reads below the 0.94 threshold a third of the
+time), and the climb needs four *consecutive* qualifying windows rather than four
+cumulative ones. Without them the law made **5.9 scale changes a minute** at a marginal
+rung; with them, 2.0/min while it finds its level and **0.40/min** afterwards.
+
+### F. A scale change is not free, and now there is a number for it
+First frame after a resize, measured across 33 changes in the sweeps: **94-569 ms**
+(median ~230); the two frames after it 6-122 ms. That is the post-stack reallocation plus
+a discarded TAA history. It is why the law refuses to retest a rung it has proved fails
+until `failWait` expires, why the backoff caps at 200 windows (~5 min), and why the
+simulation charges itself 230 ms per step — a simulation where stepping is free is testing
+a different controller.
+
+### G. What is verified, and what is not
+Verified: the cost curve; that the law lands on the same rung a brute-force search of the
+ladder finds, in nine machine/panel/target combinations including two this box cannot
+produce at all (120 Hz, `targetFps` 30); climb-back from the ladder floor; squall
+recovery; immunity to isolated 400 ms stalls; the hitch budget; and — live, on a quiet
+box, `--dpr 2` at ultra — an opening backing store of **1.56 Mpx instead of 5.76**, a
+first correction at **t=2.5 s in one step**, 60 fps from t=5 s, and a settle at 0.30
+(960x540) held to t=24 s. The simulation predicted 0.30 for this harness from the sweep
+alone, before the live run; that is the one end-to-end check available.
+
+**Not verified: the steady state on real hardware.** The simulation's jitter is this box's
+(p95/p50 = 1.37 at dpr 1 scale 1) applied multiplicatively, and part of that tail is other
+agents' processes. A quieter machine has a thinner tail and settles one or two rungs
+higher. For this box at dpr 2 the sim says 1152x648 at 30 fps; a real Retina M2 not
+running a dev server and four agents will do better and by how much is not measurable
+here. Nor is the visual question — whether 960x540 upscaled to a 3200x1800 panel is
+acceptable — answerable from a headless PNG, which is the backing store and not what the
+panel shows after upscaling.
+
+### H. The conflation §57 asked about, with numbers
+`min(devicePixelRatio, maxPixelRatio) * renderScale` puts two settings into one number and
+the controller owns only one of them. Since cost depends only on the product (section B),
+on a Retina panel at ultra `renderScale` spends most of its range undoing
+`maxPixelRatio: 2` — and the **ladder's reach becomes dpr-dependent**: its floor is
+0.09 Mpx at dpr 1 and 0.36 Mpx at dpr 2. In simulation that is exactly why the dpr-2 case
+has to give up 30 fps while the dpr-1 case does not: the ladder ran out, not the machine.
+The fix is to make the ladder a pixel budget and `maxPixelRatio` a cap rather than a
+target. I did not make it: choosing between "960x540 at 60 fps" and "1152x648 at 30 fps"
+on a 3200x1800 panel is a visual judgement, and TAA already resolves the subpixel detail
+that 2x device pixels is being paid for.
+
+### I. A third probe trap, on top of §57's two
+A period recorder installed with `addInitScript` starts at page **load**, not at the
+engine's first frame. That put 57 frames of an empty page into a "first 3 seconds" window
+and reported the title screen at **58 fps before a single triangle had been drawn**. Time
+the boot from the engine's first frame (`window.__leeward` appearing), not from navigation.
+And sample `ps` around **every rung**, not around the run: a rival arriving in the middle
+taints some rungs and not others, and "rivals 6p/2b" at the end of a nine-minute sweep
+says nothing about which ones. One three-pass sweep was thrown away for exactly that.
