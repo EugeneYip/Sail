@@ -2700,3 +2700,30 @@ the boot from the engine's first frame (`window.__leeward` appearing), not from 
 And sample `ps` around **every rung**, not around the run: a rival arriving in the middle
 taints some rungs and not others, and "rivals 6p/2b" at the end of a nine-minute sweep
 says nothing about which ones. One three-pass sweep was thrown away for exactly that.
+
+### J. The controller is right and the picture it settles on is soft. Both are true.
+`--dpr 2` at ultra, noon, the same 1100x700 region of the same 3200x1800 screenshot:
+
+| | backing store | p50 | 1vsync | high-frequency energy |
+|---|---|---|---|---|
+| controller off (`renderScale` 1) | 3200x1800 | **88.6 ms** | 4% | **11.30** |
+| controller on | ~960x540 | **17.0 ms** | **93%** | **3.15** |
+
+(High-frequency energy is the mean per-pixel luma gradient, `.tmp/sharp.mjs`. The off run
+was quiet, `rivals 0p/0b`; the on runs read 15.4-15.6 / 16.8-17.0 ms and 91-93% with
+`rivals 3-4p/1b`, and contention can only ADD time, so those bound the truth from below.
+The two frames are ~10 s apart in ship position, which cannot account for a 3.6x gap.)
+
+So the trade at ultra on a Retina panel is **5.2x the frame rate for 3.6x the detail**,
+and it looks it: the rigging loses definition, the gunport stripe turns to mush, the foam
+loses its structure. That is exactly what the branch was afraid of — but the alternative it
+was compared against was never 1984x1116 at 63 fps. Main's clamp holds 1984x1116 at
+**36-38 ms, 28 fps**, and cannot go lower.
+
+The real conclusion is that neither end of this ladder is a good picture at 60 fps, and the
+fix is not in the controller: it is to stop asking for 5.76 Mpx. At CSS 1:1 on the same
+panel — 1600x900 = 1.44 Mpx, the pixel count every measurement in this project used — the
+frame costs **29.4 ms**. To hold 60 fps there, the 9.44 ms fixed term plus 19.9 ms of pixel
+cost has to fit in 16.67: either the pixel term drops ~40% or the fixed term drops ~13 ms.
+**That is the concrete performance target**, and it is the same one AGENTS has always
+stated; §59D is why the controller cannot reach it for you.
