@@ -4702,3 +4702,179 @@ from 40 m to 15 m and `|V.y|` there rises 8x, so the grazing anisotropy at the h
 drops by more than an order of magnitude — but the named hazard (`alphaR`'s variance
 compensation double-counting, on §17C's flicker path) is unchanged and still needs the
 flicker instrument.
+
+## 77. §74 answered: blue hour was the compression slope, and the ceiling was a symptom
+
+**It is exposure, not the illuminant, and the read-back settles it.** Scene-linear radiance
+in the `post/scene` target at `dusk`, converted with the units contract's own
+`LUMINANCE_PER_UNIT` (1.0 game unit = 1.02e4 cd/m^2):
+
+| region | radiance, game units | cd/m^2 |
+|---|---|---|
+| sky, p50 | 7.68e-4 | **7.9** |
+| sky near zenith, p50 | 7.01e-4 | 7.2 |
+| sea, p50 | 9.3e-5 | 0.95 |
+| sail, p50 | 3.30e-4 | 3.4 |
+
+The sun at that preset is **12.7 deg below the horizon** with the moon 10.8 deg up. A real
+sky at the end of nautical twilight is 0.005-0.05 cd/m^2. The model's sky is therefore
+**7 to 10 stops BRIGHTER than physical**, not darker, and the engine was still putting it
+on screen at a median code of 27.8. Raising the illuminant would have been pushing on the
+wrong end of a chain that was already 10 stops hot.
+
+That is not an accident either — the sky module says so itself, and its numbers agree with
+the read-back. `MOON_IRRADIANCE_FULL` is 0.0026 against a physical 2.5e-6 of the sun's
+illuminance and is commented as "the one deliberately non-physical constant in the module";
+`STAR_RADIANCE` 0.055 is "tuned so the sky reads right at night rather than being
+radiometrically exact"; `AIRGLOW` is 0.77 cd/m^2 against a real 2e-4. Measured against the
+same scale the **sun** is right: `uSunIntensity` 10.25 at `orbit` is 1.05e5 lux, and direct
+normal solar illuminance with the sun 42 deg up is 0.9-1.0e5 lux. So the day end is
+calibrated and the night end is deliberately lifted. The illuminant was never the fault.
+
+### The ceiling was pinned, and that was still not the cause
+
+§74's measurement is exact — `expStateA.r` 4.4999990, multiplier 22.627417 — but the
+inference from it was wrong. What the curve was *asking for* is the number that matters:
+
+    raw    = log2(0.18) - metered
+    stops  = raw > KNEE ? KNEE + (raw - KNEE) * SLOPE : raw
+
+| scene | metered log2 | raw | curve wants | got | clamp cost |
+|---|---|---|---|---|---|
+| dusk | -11.79 | 9.31 | 4.96 | 4.50 | **0.46 stops** |
+| night | -11.29 | 8.81 | 4.71 | 4.50 | **0.21 stops** |
+
+So the 4.5 clamp was worth **half a stop**, and the other **4.35 stops** were the
+compression slope. Above the knee the whole curve is one line, and the screen position of
+the metered band collapses to a single identity:
+
+    screenOffset = (1 - SLOPE) * (KNEE - raw)
+
+which is why the slope is the only real lever and the knee just slides the branch.
+
+What the clamp *was* doing is worse than darkening. At `SLOPE` 0.45 the curve reaches 4.5
+stops at `raw` 8.29, and the histogram floor is `raw` 10.53 — so across the **last 2.2
+stops of nightfall the auto-exposure stopped responding to the scene at all** and the
+picture simply went darker. Both night presets were inside that dead band.
+
+### The fix, and why it cannot touch daylight
+
+`COMPENSATION_SLOPE` 0.45 -> **0.55**, `MAX_GAIN_STOPS` 4.5 -> **6.5**. The ceiling is
+sized so it can no longer be reached: the curve's maximum demand, at `EXPOSURE_MIN_LOG`,
+is `1.4 + (-2.474 + 13 - 1.4) * 0.55` = **6.42 stops**. It is now a rail, not an operating
+point. Night still cannot become grey mush, and now by construction rather than by a
+clamp: the identity bounds the screen offset at `0.45 * (1.4 - 10.53)` = **4.11 stops
+below middle grey** for the darkest scene the histogram can represent.
+
+Daylight is not "measured unchanged", it is **structurally unable to change**. All 14
+capture presets, `raw` read off `expStateB` twice 8 s apart with the drift printed
+(`.tmp/H74sweep2.mjs`):
+
+| branch | scenes | raw |
+|---|---|---|
+| **compressed** | sunset, dusk, night | 5.86, 9.31, 8.79 |
+| linear | orbit, helm, dawn, morning, waterline, island, noon, fog, storm, masthead, golden | -2.13 to -0.06 |
+
+Eleven of fourteen never enter the branch, and the closest of them — `golden` at `raw`
+-0.06 — still has **1.46 stops of margin** to the knee. So only three scenes can move at
+all, and the two that were pinned are two of them. `sunset` gains 0.44 stops (`stops` 3.41
+-> 3.850, multiplier 10.6 -> 14.4), which is the right sign for a frame taken 2.5 deg after
+sunset.
+
+### Both states inside ONE frozen frame
+
+The curve constants are uploaded as uniforms, so a variant is a poke at
+`pipeline.exposure.adaptPass` and before/after share one wave phase, one cloud field, one
+sun and one heading. The one wrinkle: a frozen frame has `dt` 0 and the adaptation is
+`prev + (target - prev) * (1 - exp(-rate * dt))`, which never moves — so `adaptPass.render`
+is wrapped to force `uDt` 8 s, which snaps it in a single frame without unfreezing anything
+else. `.tmp/H74curve.mjs`. Luma of the 8-bit composite, p50 over each region; `base2` is a
+second pass at the shipping constants and is the null.
+
+| scene | region | base | **after** | base2 (null) |
+|---|---|---|---|---|
+| dusk | sky | 27.8 | **51.0** | 27.8 |
+| dusk | sea | 6.1 | **10.9** | 6.1 |
+| dusk | sail | 15.6 | **31.5** | 15.7 |
+| dusk | frame | 11.2 | **22.7** | 11.2 |
+| night | sky | 31.7 | **50.3** | 31.7 |
+| night | sea | 8.5 | **14.5** | 8.6 |
+| night | sail | 12.9 | **22.1** | 13.0 |
+| night | frame | 15.8 | **27.2** | 15.9 |
+| sunset | sky | 80.5 | **94.1** | 80.5 |
+| sunset | sea | 34.4 | **42.0** | 34.5 |
+| sunset | sail | 37.9 | **46.5** | 37.9 |
+| sunset | frame | 40.0 | **49.2** | 40.0 |
+| orbit | sky | 104.6 | **104.6** | 104.5 |
+| orbit | sea | 77.4 | **77.4** | 77.6 |
+| orbit | sail | 130.1 | **130.2** | 130.1 |
+| orbit | frame | 95.9 | **96.1** | 96.0 |
+| golden | sail | 123.0 | **122.6** | 123.0 |
+| golden | frame | 109.8 | **109.2** | 109.6 |
+
+`orbit` moves by 0.1-0.2 codes against a null of 0.1-0.2. Applied multiplier there is
+1.4872e-1 before, 1.4879e-1 after, 1.4874e-1 on the null. Nothing new clips at `sunset`
+either — sky p99.9 goes 153.0 -> 168.2 with the sun's own afterglow already at 255 in both.
+(The horizontal banding across the `sunset` cloud deck is present identically in `base` and
+`base2`; it is not this change.)
+
+`golden` is the closest daylight scene to the knee and it is the one worth checking rather
+than `orbit`: `raw` -0.09, and its `sl55` numbers sit inside its own `base`/`base2` null.
+
+Confirmed on the shipping constants in fresh captures: applied multiplier **22.627 ->
+54.011** at dusk (stops 4.500 -> 5.755, and 5.765/54.39 on a second run) and **22.627 ->
+44.497** at night (4.500 -> 5.476), neither on the clamp; scene radiance unchanged (dusk
+sky p50 7.670e-4 -> 7.684e-4); display p50 sky 50.8, sea 11.1, sail 31.7 at dusk and
+50.2 / 14.3 / 22.4 at night.
+
+**No black point was lifted.** Exposure is a multiply upstream of AgX, so zero maps to
+zero: the dusk frame's p0.1 goes 1.1 -> 2.2 codes and night's 2.0 -> 3.1, still far below
+the 8.7-11.7 that the blind critique called correct. §71 removed a contrast operator for
+crushing the darks; this does not put a compensating lift back, it moves the scene up the
+transfer curve instead. That distinction is measurable: at the old exposure the dusk frame
+was being rendered at **9.8 codes per stop**, against 44 codes per stop near middle grey at
+`orbit` — the whole scene was sitting in AgX's toe. After, it is 15.9 codes per stop.
+
+**The stars survive, and there are more of them.** Sky p99.9 minus sky p50, in codes:
+dusk 46.1 -> 58.8, night 55.1 -> 63.5, so the brightest stars gain absolute separation
+while p99.99 and max stay at 255 (the moon disc still clips). At 1:1 the crops show *more*
+faint stars, because the faint ones were previously below the crush.
+
+### Two instrument notes, both of which produced a wrong table before they were found
+
+- **`sceneDepth` is `r32f` = `RedFormat`, so `readRenderTargetPixels` returns ONE float per
+  pixel, not four.** Reading it with an RGBA stride returns the first quarter of the image
+  in the first quarter of the buffer and zeros after, which silently classified 75% of the
+  frame off a buffer of zeros and gave a "sky" region of 8.7% in a frame whose horizon sits
+  37% down. The tell was that the non-zero count was exactly `1600 * 225`. Anything read
+  back from `sceneDepth`, `expLum` or `expPartial` has this shape.
+- **A probe without the HMR guard measures whatever the page reloaded into.** My probes had
+  copied H73speck's skeleton, which does not stub Vite's HMR socket the way
+  `scripts/capture.mjs` does. I then edited `src/post/AutoExposure.ts` while a run was in
+  flight; the page reloaded, `world.env` reverted to the app defaults, and the run reported
+  `sunset` at a metered log2 of **-1.216** against a true **-8.33**. Two things made that
+  expensive. It is **7 stops**, and it is the difference between `sunset` being on the
+  compressed branch and not being on it — I wrote "it is not on it" into this section on the
+  strength of it, and it is. And it did not fail: -1.216 is a perfectly plausible number,
+  just for a different time of day. The cross-check that caught it was `sunY`, which read
+  **0.666** for a preset whose sun is 12.7 deg *below* the horizon. Every probe here now
+  stubs the socket, counts `framenavigated`, prints `sunY`, and re-reads each scene 8 s
+  later so a moving number cannot pass as a measurement. AGENTS.md already says the harness
+  disables HMR "so a capture run is not disturbed by another agent editing `src/`" — the
+  case it does not mention is the agent editing `src/` being *you*.
+
+### Left open
+
+- **`dusk` is not blue hour.** The preset is `timeOfDay` 20.7, which puts the sun 12.7 deg
+  below the horizon — late nautical twilight, an hour past the blue hour its label claims
+  ("Blue hour, first stars"). It also meters **darker than `night`** (-11.79 against
+  -11.29), because at 23.4 the moon is 23 deg up and at 20.7 it is 10.8 deg up. Both are
+  correct physics for the stated times; the label and the coverage are what is wrong. A
+  scene at 19.9-20.2 would exercise the actual blue hour, which nothing currently does —
+  the gap between `sunset` (`raw` 5.86, sun 2.5 deg down) and `dusk` (`raw` 9.31, sun 12.7
+  deg down) is **3.5 stops with no preset in it**, and it is exactly the range a player
+  sails through at the prettiest time of day.
+- The sail's radiance is 0.43 of the sky's at dusk (1.23 stops under), so a white sail at
+  blue hour is *supposed* to read darker than the sky behind it and no exposure change will
+  invert that. What changed is that its own tonal detail — panels, seams, the ensign — now
+  survives quantisation.
