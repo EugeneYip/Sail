@@ -4,6 +4,15 @@ How a critic agent judges a frame. The critic is shown images with neutral
 labels and **is not told which build produced which**, nor which is newer. It
 must commit to a verdict before any reveal.
 
+**On the comparator.** The original intent was a blind side-by-side against
+slowroads.io. Those frames were never obtained — the site is behind a
+bot-verification challenge, which was not bypassed — so the honest substitute is
+this project's **own history**: current `main` against a commit from before the
+work under review, rendered by the same harness at the same size and shuffled.
+That answers "did the work help?" blind, which is most of what the loop needs,
+and it does not pretend to answer "is this as good as a commercial release."
+Where a pane has no comparator, score it absolutely against the axes and say so.
+
 ## Method
 
 1. Look at the sheet. For each pane, write what you actually see — not what you
@@ -77,7 +86,15 @@ Any of these caps the frame at 4 regardless of other scores:
 - Ghosting trails behind a moving object
 - The horizon reading as a hard seam between two flat colours
 - Anything rendering as an obvious untextured placeholder
-- Sub-60 fps at 1600x900 ultra on the reference M2
+
+**Performance is NOT one of these, deliberately.** It used to be, as "sub-60 fps at
+1600x900 ultra", and that criterion would now cap every frame at 4 and destroy the
+exercise — because the engine's standing state is `cost = 9.44 ms + 13.83 ms/Mpx`, so
+1600x900 at 1:1 costs 29.4 ms and the target is unmet at either device pixel ratio
+(`AGENTS.md` non-negotiable 5). A critic scoring the *image* must not be handed a
+verdict that is already decided by something else, and a defect list where everything
+reads "capped at 4" tells the loop nothing. Frame cost is tracked separately, against
+the cost model rather than against a pass/fail line.
 
 ## Output format
 
