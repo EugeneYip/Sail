@@ -4503,3 +4503,202 @@ tree is shared. Recorded here so `git log` for `src/ocean/shaders/surface.ts` is
 misleading. The committed content **is** the measured content — the before/after table
 above was re-run against the committed file after the fact and reproduces (`orbit`
 2.063 → 2.232, null spread 0.017).
+
+## 75. §67's last item: earth curvature is in, and the skirt's hack was generalised rather than removed
+
+§67 closed with "there is no earth curvature" and "that interaction is the whole job".
+Both halves held up. The drop is landed, the skirt's rise-to-eye-height is now the
+`R -> infinity` limit of a formula that also covers the curved case, and the horizon is
+a line again in the two scenes where it was not one.
+
+### Why it was worth doing, and the strongest reason was not on §67's list
+
+**The sky already drew the limb.** `skyRender.ts` has
+`horizonCos = -sqrt(r*r - RG*RG)/r` and `hitsGround = viewZenithCos < horizonCos`, from
+`uCameraPosW`, which is `setFromMatrixPosition(camera.matrixWorld)` — the same
+expression `Engine.ts:199` uses for the ocean's `uCameraPos`. So the two subsystems
+disagreed about where the horizon was by the whole dip, **3.5 px in `orbit` and
+`shadow`**, and the ocean was painting sea over the entire region the sky had already
+decided was below the earth's limb, plus that much more. The ocean now uses the sky's
+own `GROUND_RADIUS_KM` (6360 km, not the 6371 mean radius) for exactly this reason: one
+number, one line. The 11 km difference is 2.5e-6 rad of dip — 0.003 px.
+
+### The horizon became a line, and the pale cyan hairline went with it
+
+`shadow` (orbit camera, `cloudCover` 0, visibility 44 km — the worst case for the step
+size), same process, sim clock pinned, x 0-520. Before is produced by patching the drop
+back out of the landed shader, so the two differ by the change and nothing else.
+
+| | tot \|d2L\| | max \|dL\| | the five rows above the sea |
+|---|---|---|---|
+| before | 24.0 | 6.73 | 146.7, **147.0, 148.0**, 146.0, 139.2 |
+| after | 23.5 | **7.88** | 146.7, 146.5, 146.2, 146.1, 146.0, then 143.2, 135.4 |
+| after, repeat | 23.7 | 7.88 | same |
+
+Read the before column: the last rows of *sea* were **brighter than the sky above
+them** (148.0 against 146.7). That is §67's "the last visible sea is forced to full
+aerial-perspective saturation, so it IS the sky", and it was worse than neutral — it was
+a pale band. After, the sky descends monotonically for five more rows and then the sea
+steps down by 2.8 and 7.9. `tot|d2L|` is unchanged (null spread 0.2), so nothing was
+traded for it.
+
+Per channel, excess B-R over the sky immediately above, same frames:
+
+| | y+1 | y+2 | y+3 |
+|---|---|---|---|
+| before | +3.5 | +11.1 | **+16.1** |
+| after | +0.8 | — | — |
+
+That is §67's second open item, the in-scatter's elevation lift. §67 got it from +14.4 to
++7.3 and said closing the rest "needs elevation resolution near the horizon that a
+128-row probe has not got". It does not. It needs the rows that were sea at 20-49 km to
+be **sky**, which is what they now are, and the probe was never touched.
+
+### The geometry, verified to a third of a pixel
+
+Sub-pixel silhouette row, from an ink frame (ocean fragment shader forced to one flat
+colour) via the coverage integral. Predicted rows come from the actual projection:
+eye level at `row = H/2 + tan(-p)/pxAngle`, the limb one `sqrt(2h/R)` further down.
+
+| scene | eye | before edge | eye-level row | after edge | limb row | drop | predicted dip |
+|---|---|---|---|---|---|---|---|
+| shadow | 25.51 m | 575.65 sd 0.28 | 575.74 | 579.07 sd 0.33 | 579.25 | **+3.42** | 3.50 |
+| orbit | 25.90 m | 573.18 sd 0.42 | 573.21 | 577.09 sd 0.44 | 576.74 | **+3.91** | 3.53 |
+
+854 and 829 clean columns. **The flat sea's silhouette sits on eye level to 0.03-0.09 px
+and the curved sea's sits on the true limb to 0.18-0.35 px.**
+
+Independently, scaling the drop by `k` must move the dip as `sqrt(k)`. Measured drops for
+k = 0 / 0.25 / 1 / 4: **0 / 0.74 / 2.47 / 6.42 px**, which fit `3.48`, `3.47` and `3.71`
+against a predicted coefficient of **3.57** over a 16x range of k. (The common offset is
+that frame's own baseline: a frozen frame carries a fixed TAA jitter that shifts the
+measured edge but not the matrices the prediction is computed from.)
+
+### The skirt: the same expression, with R put back in
+
+An infinite flat ocean's horizon is at eye level, so the old
+`skirtRise = isSkirt * smoothstep(0.80, 1.0, r) * max(uCameraPos.y, 0.0)` lifted the
+outer edge to eye height to close the sliver under a finite one. A curved sea's horizon
+is `sqrt(2h/R)` below eye level, and the lift that lands the edge exactly on it is
+
+    rise = max(sqrt(h) - D * inversesqrt(2R), 0.0) ^ 2
+
+which is **`h` as `R -> infinity`**, i.e. the old hack is the flat-earth limit of the new
+one. Three properties, and they are what make this a replacement rather than a weakening:
+
+- it is **identically zero** whenever the mesh already reaches past the tangent point,
+  because the clamp bites for `D >= sqrt(2Rh)` — that is every eye up to
+  `HORIZON_RADIUS^2 / (2R)` = **190 m**, so on every camera mode but the debug fly-cam
+  the skirt is now a plain piece of curved sea and the hack is gone;
+- above 190 m it reappears and **still cannot lift any part of the sea above the limb**,
+  because the limb's elevation is the thing it solves for;
+- the guarantee no longer depends on the mesh's edge at all. The silhouette is now
+  interior geometry 18 km out, with 2.7x more mesh behind it in every direction, and the
+  near root of `h/d + d/2R = theta` is monotone, so every ray at or below the dip hits
+  the surface.
+
+Measured in `orbit`, 860 columns: **zero slivers, and zero columns where the curved sea
+sits above the flat one.** Also measured, because the old comment was wrong: removing the
+rise from a *flat* sea drops the silhouette **1.16 px**, not the "sub-pixel sliver" the
+comment claimed. The hack was doing real work.
+
+### Where it is inert, and that is the correct behaviour
+
+The dip goes as `sqrt(h)` and so did the defect, because the forced haze band only eats a
+meaningful number of rows when the eye is high.
+
+| scene | eye | fov | dip | measured |
+|---|---|---|---|---|
+| orbit / shadow | 25.5-25.9 m | 40 | 3.5 px | the win above |
+| golden | 28.4 m | 64.5 | 2.13 px | max\|dL\| 7.44 -> 7.6 +-0.4, tot 15.2 -> 16.0 +-0.7. **No seam at low sun**, which was the risk case |
+| noon | 27.3 m | 64.5 | 2.09 px | max\|dL\| 6.69 -> 6.41: the step is no bigger, just tighter and one row lower |
+| storm | 27.1 m | 64.5 | 2.08 px | max\|dL\| 1.25 -> 2.4 in a 124-unit field. Haze saturates 3.5x before the limb: invisible |
+| helm | 8.4 m | 71 | 1.02 px | no measurable change in the horizon's structure |
+| waterline | 2.5 m | 54 | 0.78 px | below this instrument's floor — see the instrument notes |
+
+So the payoff concentrates on the high, narrow-fov cameras, which are the beauty shots
+and include the scene a blind critic ranked worst. At the helm and at the waterline the
+horizon reads the same, and it should: at a 2.5 m eye the flat sea's outer edge was
+already only 0.1 px above the true limb.
+
+### The forced haze saturation: kept, and its comment was false
+
+`t = max(t, smoothstep(6000.0, 22000.0, dist));` was written for a sea that ran flat to
+49 km. It is **not the lever and never was.** Removing it from the untouched build moves
+`tot|d2L|` by 0.3 on a null spread of 0.4, because Koschmieder had already saturated
+everything past 20 km. With curvature the last sea is at `sqrt(2Rh)` and natural
+extinction alone gives t = 0.44 at a 2.5 m eye, 0.77 at 8 m, 0.91 at 25 m — so it is
+inert again: `shadow` reads 23.5 with it and 22.8 without, max\|dL\| 7.88 against 7.63,
+null spread 0.2. It is kept as a bound on the step at extreme visibility, for one `max`,
+and its comment now says that instead of the old claim.
+
+### What this breaks, and it is not in src/ocean
+
+The drop is anchored on the **camera**, not the world origin, so that the ocean's limb
+and the sky's coincide. The price near the eye is nothing — 0.8 mm at 100 m, 1 mm under
+the orbit camera's ship, so the CPU wave sampler, the wake field and the near field need
+no change. But **anything else sitting at y = 0 a long way off no longer meets the
+water**, and that is a real handoff, not a caveat:
+
+| owner | object | range | drop | float at that range |
+|---|---|---|---|---|
+| `src/world/Boston.ts` | the town's waterfront | spawns 5.0-8.6 km | 2.0-5.8 m | 0.4-0.8 px |
+| `src/world/Boston.ts` | same, at `RETIRE_M` | 46 km | 166 m | **4.5 px** |
+| `src/world/Vessels.ts` | hulls, at `RETIRE_M` | 12.5 km | 12.3 m | 1.2 px |
+| `src/world/Sites.ts` | island shorelines | up to `SITE_M` 9 km | up to 6.4 m | 0.6 px |
+| `src/world/Buoys.ts`, `Birds.ts` | | 4.2 / 7.0 km | 1.4 / 3.9 m | 0.3 / 0.4 px |
+
+The fix is one line per call site: subtract `d*d/(2*EARTH_RADIUS_M)` with `d` the
+horizontal distance from the **camera**, `EARTH_RADIUS_M` exported from
+`src/ocean/OceanMesh.ts`. At normal ranges these are sub-pixel to 1 px. The bad one is
+Boston at 30-46 km — and that is a **pre-existing correctness bug that curvature makes
+visible rather than one it creates**: a 90 m hill seen from a 10 m eye is over the
+horizon beyond 45 km, so a town fully visible at `RETIRE_M` = 46 km was always
+impossible. Applying the drop there does not just remove the float, it makes the town
+rise out of the sea as you close it, which is the most evocative thing a landfall has.
+
+### Four instrument findings, and one of them produced a confident wrong answer first
+
+1. **A whole-row threshold on the silhouette is worth +-1 px, and it cost me a pass.** I
+   read the drop as **5.00 px against a predicted 3.51** and went looking for a factor of
+   sqrt(2) in a shader that did not have one — the ratio was 1.42, which is exactly the
+   kind of coincidence that makes a wrong answer feel found. Two whole-row detections had
+   simply stacked their quantisation errors. The coverage integral
+   `edge = yTop + sum(1 - a(y))` over an ink frame, with `a` built from `R-B` so the ink's
+   own bloom cancels, gets sd 0.28 and agrees with the prediction to **0.08 px**.
+   `.tmp/hzedge.mjs`. Do not difference two thresholded edges when the effect is 3 px.
+2. **`waterline` does not freeze, so nothing can be measured in it this way.** Pinning
+   the sim clock leaves two nulls in the same process differing by **24.6 LSB mean, 216
+   max**, against 2.2 for `orbit` and 2.6 for `helm`. Latching the solved camera every
+   frame and re-stamping it after the tick changed nothing (24.6 LSB), so the mover is
+   not the camera. Something in that scene advances on a clock the sim does not own.
+3. **§67's discontinuity count cannot tell one horizon from a staircase.** It counts
+   `|d2L| >= 1.5`, and a real 7.9-unit step in one row trips it at two or three
+   consecutive rows. `shadow` reads 5 edges before and 5 after. The discriminator is
+   *where* they are and what the sea does below them: before, 576/577/579/584/586 with a
+   brightness bump at the top; after, 578/579/580/581/586 — contiguous at the limb, with
+   the sea strictly monotone for the next 20 rows. Quote the profile, not the count.
+4. **The probe's `masthead` scene has no horizon in frame.** `cam.mode = 'masthead'`
+   frames the top itself; the sea appears only in slivers between the spars, so a
+   silhouette detector there measures near-field sea and reports a dTop of 0 by
+   construction. It is not a horizon regression check. Its `camY` is also 24.7-25.9 m,
+   not the 67 m masthead, so it does not exercise the high-eye case either.
+
+### A shared-tree note: this work was committed by someone else's blanket add
+
+`def7ecc fix(rendering): refine ocean horizon and ship materials` carries
+`src/ocean/OceanMesh.ts` and `src/ocean/shaders/surface.ts` — this change — together with
+`src/ship/materials/materials.ts`, `src/ship/materials/textures.ts` and
+`src/ui/styles.css`, which are not. HEAD is correct and nothing was lost, but
+`git log -- src/ocean` has no curvature commit to find, which is the third time this tree
+has done this (AGENTS.md's standing note, and §69). The same commit also carries another
+agent's `alongLost` / `pxAlong` anisotropic slope-variance work in `surface.ts`; the
+appearance numbers above were re-measured on the current tree with both changes in, and
+they agree with the set taken before it landed.
+
+**Still open from §67, and untouched here:** `lowSlope` written only in the cascade-0
+iteration. Curvature helps it slightly and for free — `pxWorld` at the last sea row falls
+from 40 m to 15 m and `|V.y|` there rises 8x, so the grazing anisotropy at the horizon
+drops by more than an order of magnitude — but the named hazard (`alphaR`'s variance
+compensation double-counting, on §17C's flicker path) is unchanged and still needs the
+flicker instrument.
