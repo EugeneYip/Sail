@@ -252,8 +252,36 @@ const SCENES = {
     env: { timeOfDay: 19.6, windSpeed: 6.0, cloudCover: 0.55, cloudType: 0.7, turbidity: 4.2, rain: 0, visibility: 24000, seaState: 3, waveHeight: 1.2, choppiness: 0.45 },
     cam: { mode: 'bowsprit' },
   },
+  /*
+   * The actual blue hour, which had no preset at all.
+   *
+   * `dusk` below is labelled "Blue hour, first stars" and is nothing of the
+   * kind: at `timeOfDay` 20.7 the sun is **12.7 degrees below the horizon**,
+   * which is late nautical twilight, and it meters DARKER than `night` because
+   * its moon is lower. So there were 3.5 stops between `sunset` and `dusk` with
+   * no preset in them — and that gap is the hour a sailing game is most often
+   * photographed in. A review sheet cannot score what it never shows.
+   *
+   * 19.95 puts the sun a few degrees down, and beam-on gets the whole of the
+   * hour into one frame: measured, the western sky at the horizon sits at 86
+   * against a zenith of 41 and a sea of 25, so the afterglow, the deep zenith
+   * and the first stars are all present at once and the exposure has to hold all
+   * three.
+   *
+   * The sail plan reads as a SILHOUETTE here, not as pale cloth — at this angle
+   * it is backlit, which is the correct and the more dramatic reading. Judging
+   * front-lit canvas at low sun is what `sunset` is for, and it is a bowsprit
+   * shot for exactly that reason.
+   */
+  bluehour: {
+    label: 'Blue hour proper — sun just down, sail still pale',
+    env: { timeOfDay: 19.95, windSpeed: 5.5, cloudCover: 0.4, cloudType: 0.55, turbidity: 3.2, rain: 0, visibility: 26000, seaState: 2, waveHeight: 1.0, choppiness: 0.42 },
+    cam: { mode: 'orbit', distance: 96 },
+  },
   dusk: {
-    label: 'Blue hour, first stars',
+    // Honestly labelled. See `bluehour` above for why this is not it: the sun is
+    // 12.7 degrees down here, and this preset meters darker than `night`.
+    label: 'Late nautical twilight, stars out',
     env: { timeOfDay: 20.7, windSpeed: 5.0, cloudCover: 0.35, cloudType: 0.5, turbidity: 2.8, rain: 0, visibility: 28000, seaState: 2, waveHeight: 0.9, choppiness: 0.4 },
     cam: { mode: 'chase', distance: 78 },
   },
