@@ -2463,6 +2463,25 @@ is the cloth, not the shadow, which is where §54a's normal-map finding already 
 
 ## 57. The stutter was never in the measurement: every timing here used a quarter of the owner's pixels
 
+> **Two claims below are wrong; §59 has the corrections and the evidence.**
+>
+> 1. **"Headless Chromium has no vsync" is false.** It is a 60 Hz **rate limiter**:
+>    `period ≈ max(16.67, cost)`, against a real panel's
+>    `ceil(cost / 16.67) · 16.67`. An empty page reads p50 16.7 ms under four flag
+>    sets including `--disable-gpu-vsync`. That makes this box the *right*
+>    instrument for a cost sweep and the wrong one for a control law — I used the
+>    wrong half of that to argue the whole thing was untestable.
+> 2. **The "over-corrects to 157 fps" regression did not exist.** My probe looped
+>    `waitForTimeout(s * 1000)` over `[3, 6, 10, 16]`, which waits *cumulatively*
+>    to t = 3, 9, 19, 35 s while the label said 3, 6, 10, 16. Dividing frame-count
+>    deltas by the label's gap inflated every rate by up to 2.7×. Corrected, the
+>    old controller settles at **~24 fps** and the new one at **exactly 60**.
+>    A working fix spent a session on a branch because of that arithmetic.
+>
+> The comparison was also unit-confused independently: the old law's floor is
+> `Math.max(0.62, …)`, a clamp rather than a decision, and 0.62 at dpr 1 is
+> 0.55 Mpx while 0.30 at dpr 2 is 0.52 Mpx — **the same picture, 7% apart.**
+
 The single most consequential instrument gap in the project, and it explains two days
 of failing to reproduce a defect the owner reported from play.
 
