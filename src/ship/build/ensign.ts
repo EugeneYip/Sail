@@ -36,6 +36,7 @@ import type { World } from '../../types';
 import { PART } from '../dims';
 import { PARTS_DECL } from '../shaders/parts';
 import { GLSL_COMMON_SAFE, type PartUniforms } from '../materials/materials';
+import { SHIP_AERIAL_FN, SHIP_AERIAL_UNIFORMS } from '../shaders/aerial';
 import type { RigFrame } from './masts';
 
 export interface EnsignResult {
@@ -421,6 +422,14 @@ export function buildEnsign(
     shader.uniforms.uEnsStep = step;
     shader.uniforms.uPartQ = parts.uPartQ;
     shader.uniforms.uPartP = parts.uPartP;
+    shader.uniforms.uSunDirection = world.uniforms.uSunDirection;
+    shader.uniforms.uSunColor = world.uniforms.uSunColor;
+    shader.uniforms.uSunIntensity = world.uniforms.uSunIntensity;
+    shader.uniforms.uMoonColor = world.uniforms.uMoonColor;
+    shader.uniforms.uMoonIntensity = world.uniforms.uMoonIntensity;
+    shader.uniforms.uFogColor = world.uniforms.uFogColor;
+    shader.uniforms.uFogDensity = world.uniforms.uFogDensity;
+    shader.uniforms.uVisibility = world.uniforms.uVisibility;
     shader.vertexShader = /* glsl */ `
       ${GLSL_COMMON_SAFE}
       ${PARTS_DECL}
@@ -442,7 +451,18 @@ export function buildEnsign(
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vNormalL;')
         .replace('#include <begin_vertex>', 'vec3 transformed = vPosL;')}
     `;
-    shader.fragmentShader = `varying vec2 vEnsUv;\n${shader.fragmentShader}`;
+    shader.fragmentShader = `varying vec2 vEnsUv;\n${SHIP_AERIAL_UNIFORMS}\n${shader.fragmentShader
+      // After three's own '#include <common>': lwShipAerial needs
+      // 'inverseTransformDirection' from it and the 'vViewPosition' varying
+      // three declares just above it.
+      .replace('#include <common>', `#include <common>\n${SHIP_AERIAL_FN}`)
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        // The air in front of the bunting, so a flag forty metres up hazes with
+        // the masthead it flies from. See shaders/aerial.ts.
+        gl_FragColor.rgb = lwShipAerial(gl_FragColor.rgb);`,
+      )}`;
   };
   mat.customProgramCacheKey = () => 'ship-ensign';
 

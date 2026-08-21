@@ -1,12 +1,17 @@
 /**
  * One material per visual family. Every one is a patched MeshStandardMaterial
  * so it inherits three's lighting, shadow receive and shadow cast for free,
- * plus three injections of our own:
+ * plus five injections of our own:
  *
  *   1. the `shipPart` vertex transform (see shaders/parts.ts)
- *   2. an analytic sky/ground indirect-specular lobe — the scene has no
- *      environment map yet, and without it copper, iron and brass read black
+ *   2. an analytic sky/ground indirect-specular lobe, used ONLY when no
+ *      environment map is bound — `sky/EnvProbe` normally binds one, and then
+ *      three's own specular IBL does this job and `uEnvAmount` scales that
  *   3. salt bleaching and grime on up-facing surfaces, from the world normal
+ *   4. the ship's own bounce light — canvas above, foam alongside — which a
+ *      sky-only environment probe structurally cannot contain (shaders/bounce.ts)
+ *   5. aerial perspective, which every other opaque thing in the frame already
+ *      had and the ship did not (shaders/aerial.ts)
  *
  * `makeDepthFor()` returns the matching customDepthMaterial so animated parts
  * cast the shadow they actually occupy.
@@ -18,6 +23,8 @@ import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
 import type { SharedUniforms } from '../../types';
 import { PARTS_DECL } from '../shaders/parts';
 import { DETAIL_DECL } from '../shaders/detail';
+import { SHIP_AERIAL_FN, SHIP_AERIAL_UNIFORMS } from '../shaders/aerial';
+import { SHIP_BOUNCE_FN } from '../shaders/bounce';
 import type { TexSet } from './textures';
 
 export interface PartUniforms {
@@ -203,6 +210,14 @@ export function makeShipMaterial(
     shader.uniforms.uGroundColor = shared.uGroundColor;
     shader.uniforms.uWetness = shared.uWetness;
     shader.uniforms.uTime = shared.uTime;
+    shader.uniforms.uSunDirection = shared.uSunDirection;
+    shader.uniforms.uSunColor = shared.uSunColor;
+    shader.uniforms.uSunIntensity = shared.uSunIntensity;
+    shader.uniforms.uMoonColor = shared.uMoonColor;
+    shader.uniforms.uMoonIntensity = shared.uMoonIntensity;
+    shader.uniforms.uFogColor = shared.uFogColor;
+    shader.uniforms.uFogDensity = shared.uFogDensity;
+    shader.uniforms.uVisibility = shared.uVisibility;
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${VERT_HEAD}`)
@@ -220,7 +235,7 @@ export function makeShipMaterial(
       );
 
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${FRAG_HEAD}\nuniform vec3 uSkyColor;\nuniform vec3 uGroundColor;\nuniform float uWetness;\nuniform float uTime;`)
+      .replace('#include <common>', `#include <common>\n${FRAG_HEAD}\nuniform vec3 uSkyColor;\nuniform vec3 uGroundColor;\nuniform float uWetness;\nuniform float uTime;\n${SHIP_AERIAL_UNIFORMS}${SHIP_AERIAL_FN}${SHIP_BOUNCE_FN}`)
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
@@ -309,6 +324,14 @@ export function makeShipMaterial(
       .replace(
         '#include <lights_fragment_end>',
         `#include <lights_fragment_end>
+        {
+          // The canvas overhead and the bow wave alongside, neither of which is
+          // in a sky-only environment probe. See shaders/bounce.ts. Diffuse
+          // only, and placed before 'aomap_fragment' so it takes both AO terms
+          // like every other indirect diffuse contribution.
+          reflectedLight.indirectDiffuse +=
+            material.diffuseColor * lwShipBounce(vShipWN, vShipWP.y);
+        }
         #ifndef USE_ENVMAP
         {
           // Analytic two-lobe sky reflection, ONLY when there is no environment
@@ -324,6 +347,15 @@ export function makeShipMaterial(
             amb * lwEnvBRDF(material.specularColor, material.roughness, NoV) * uEnvAmount;
         }
         #endif`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        // The atmosphere in front of the ship. See shaders/aerial.ts for why the
+        // ship was the only opaque geometry in the frame without it, and for the
+        // measurement: 1.08e-2 of in-scatter at the orbit camera's 143 m against
+        // 3.5e-4 of radiance on the shaded black topsides.
+        gl_FragColor.rgb = lwShipAerial(gl_FragColor.rgb);`,
       );
   };
   m.customProgramCacheKey = () => 'ship-std';

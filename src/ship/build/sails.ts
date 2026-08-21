@@ -31,6 +31,7 @@ import { GLSL, lwFloat } from '../../util/glsl';
 import { SHARED_UNIFORM_DECL } from '../../core/SharedUniforms';
 import { JIB_CUT, JIB_IDS, MASTS, PART, SAIL_YARDS, SPANKER_CLEW, squareCut } from '../dims';
 import { PARTS_DECL } from '../shaders/parts';
+import { SHIP_AERIAL_FN } from '../shaders/aerial';
 import {
   PANEL_TILE_M, PANEL_WIDTH_M, SAIL_VERT_BODY, SEAM_TILE_M, sailDecl,
   sailVertOuts,
@@ -586,7 +587,7 @@ function makeSailMaterial(
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
-        `#include <common>\n${GLSL.common}${GLSL.noise2d}${SHARED_UNIFORM_DECL}${FRAG_HEAD}${CLOTH_DETAIL}`,
+        `#include <common>\n${GLSL.common}${GLSL.noise2d}${SHARED_UNIFORM_DECL}${SHIP_AERIAL_FN}${FRAG_HEAD}${CLOTH_DETAIL}`,
       )
       .replace(
         '#include <color_fragment>',
@@ -840,6 +841,15 @@ function makeSailMaterial(
           reflectedLight.indirectDiffuse += through * (1.0 - sh) * front
             * uSunColor * uSunIntensity * INV_PI * lwCloudShadow(vSailWP);
         }`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        // The air in front of the canvas. Same term as the hull's, for the same
+        // reason — see shaders/aerial.ts. It matters least on a sunlit sail and
+        // most inside a shadow, which is where the cloth was reading as a
+        // hard-edged black sticker with nothing in it.
+        gl_FragColor.rgb = lwShipAerial(gl_FragColor.rgb);`,
       );
   };
   m.customProgramCacheKey = () => 'ship-sail';

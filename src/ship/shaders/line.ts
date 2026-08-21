@@ -22,6 +22,7 @@
 import * as THREE from 'three';
 import { PARTS_DECL } from './parts';
 import { sailDecl } from './sail';
+import { SHIP_AERIAL_FN, SHIP_AERIAL_UNIFORMS } from './aerial';
 import { lwFloat } from '../../util/glsl';
 import { GLSL_COMMON_SAFE, type PartUniforms } from '../materials/materials';
 import type { SharedUniforms } from '../../types';
@@ -190,6 +191,14 @@ export function makeLineMaterial(
     shader.uniforms.uWind = shared.uWind;
     shader.uniforms.uWindSpeed = shared.uWindSpeed;
     shader.uniforms.uTime = shared.uTime;
+    shader.uniforms.uSunDirection = shared.uSunDirection;
+    shader.uniforms.uSunColor = shared.uSunColor;
+    shader.uniforms.uSunIntensity = shared.uSunIntensity;
+    shader.uniforms.uMoonColor = shared.uMoonColor;
+    shader.uniforms.uMoonIntensity = shared.uMoonIntensity;
+    shader.uniforms.uFogColor = shared.uFogColor;
+    shader.uniforms.uFogDensity = shared.uFogDensity;
+    shader.uniforms.uVisibility = shared.uVisibility;
     Object.assign(shader.uniforms, sailU);
 
     shader.vertexShader = /* glsl */ `
@@ -268,6 +277,7 @@ export function makeLineMaterial(
 
     shader.fragmentShader = /* glsl */ `
       ${GLSL_COMMON_SAFE}
+      ${SHIP_AERIAL_UNIFORMS}
       varying float vEdgePx;
       varying float vRPx;
       varying vec3 vRightL;
@@ -278,6 +288,10 @@ export function makeLineMaterial(
         return clamp(min(d + 0.5, r) - max(d - 0.5, -r), 0.0, 1.0);
       }
       ${shader.fragmentShader
+        // After three's own '#include <common>', because lwShipAerial needs
+        // 'inverseTransformDirection' from it and the 'vViewPosition' varying
+        // three declares just above it.
+        .replace('#include <common>', `#include <common>\n${SHIP_AERIAL_FN}`)
         .replace(
           '#include <normal_fragment_begin>',
           `#include <normal_fragment_begin>
@@ -305,6 +319,14 @@ export function makeLineMaterial(
           vec3 manila = vec3(0.46, 0.38, 0.25);
           diffuseColor.rgb *= mix(tar, manila, vKind) * 2.0;
           diffuseColor.a *= lwLineCoverage(vEdgePx, vRPx) * uLineFade;`,
+        )
+        .replace(
+          '#include <opaque_fragment>',
+          `#include <opaque_fragment>
+          // The air in front of the rope. Tarred rigging is the darkest thing on
+          // the ship, so at any distance it was the first to clip to pure black
+          // and read as an ink line rather than as cordage. See shaders/aerial.ts.
+          gl_FragColor.rgb = lwShipAerial(gl_FragColor.rgb);`,
         )}
     `;
   };
