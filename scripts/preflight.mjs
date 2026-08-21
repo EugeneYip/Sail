@@ -96,7 +96,30 @@ if (!tracked.includes('public/social-card.jpg')) {
 const vite = await readFile('vite.config.ts', 'utf8');
 if (!/base:\s*'\.\/'/.test(vite)) fail.push("vite.config.ts: base must stay './' for a GitHub Pages subpath");
 
-/* 7. A licence is required to publish, and is the owner's choice. ----------- */
+/* 7. It must actually build. ------------------------------------------------ */
+/*
+ * An agent found `npm run preflight` printing "push-ready" while `npm run build`
+ * was red on four backticked GLSL comments -- the recurring build-breaker
+ * AGENTS.md warns about, and the one thing that most obviously disqualifies a
+ * tree from being pushed. Preflight was checking publication hygiene and calling
+ * the result push-readiness, which is a bigger claim than it was testing.
+ *
+ * `check-glsl` runs here because it is fast (well under a second) and because it
+ * now includes an esbuild parse, so "will not build" is a fact and not a
+ * heuristic. A full `tsc` is deliberately NOT run: it costs 24 s, agents run this
+ * gate repeatedly, and a slow gate gets skipped. The success line below says
+ * exactly what was and was not checked instead of implying both.
+ */
+try {
+  execFileSync(process.execPath, [new URL('./check-glsl.mjs', import.meta.url).pathname], {
+    encoding: 'utf8', stdio: 'pipe',
+  });
+} catch (e) {
+  const out = `${e.stdout ?? ''}${e.stderr ?? ''}`.trim();
+  fail.push(`the tree does not build — check-glsl:\n${out.split('\n').map((l) => `      ${l}`).join('\n')}`);
+}
+
+/* 8. A licence is required to publish, and is the owner's choice. ----------- */
 if (!tracked.some((f) => /^LICEN[SC]E/.test(f))) warn.push('no LICENSE — pick one before publishing');
 
 /* ------------------------------------------------------------------------- */
@@ -106,4 +129,5 @@ if (fail.length) {
   for (const f of fail) console.error(`  ${f}`);
   process.exit(1);
 }
-console.log(`\npreflight: push-ready (${tracked.length} tracked files)`);
+console.log(`\npreflight: push-ready (${tracked.length} tracked files, GLSL parses)`);
+console.log('  not checked here: tsc (24s — run `npm run typecheck`) or a real build.');
