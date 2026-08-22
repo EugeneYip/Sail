@@ -22,7 +22,24 @@ nothing else writes that path.
 ## The rule
 
 - **Agents** create `notes/<topic>.md` and write freely: use a plain descriptive
-  `#` heading, and **never a `§` or a `## <number>.` heading.**
+  `#` heading, and **never number your own sections.**
+
+  **Citing an existing section is encouraged.** `as §40 already proved`,
+  `see §71`, even `## Why §40 matters` — all fine, and referring back to earlier
+  findings is exactly what these notes are for. What fails the gate is a heading
+  that *is numbered*:
+
+  | | |
+  |---|---|
+  | `## 82. New diagnosis` | **allocation — fails** |
+  | `### §82 New diagnosis` | **allocation — fails** |
+  | `as §40 already proved` | reference — fine |
+  | `## Why §40 matters` | reference in a heading — fine |
+
+  The discriminator is heading *position*, not the presence of a section sign. An
+  earlier version of the check failed on any `§n` anywhere, and the very first
+  real note written under this convention tripped it on the words "as §40 already
+  proved".
 - **The integrating session on `main`** folds the content into `DIAGNOSIS.md`,
   assigns the next sequential number at that moment, and deletes the note.
 - A note left here is *unintegrated work*, not clutter — `preflight` reports them

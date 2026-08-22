@@ -77,7 +77,11 @@ investigation to an empty window.
 
 **If you are a background or worktree agent, write your findings to
 `notes/<topic>.md` and do not touch `DIAGNOSIS.md`.** Use a plain descriptive
-heading; never allocate a `§` number or a `## <number>.` heading.
+heading and do not number your own sections.
+
+**Cite existing sections freely** — `as §40 already proved`, `see §71` — that is
+what they are for. What fails is a heading that *is numbered*: `## 82. Title` or
+`### §82 Title`. The discriminator is heading position, not the section sign.
 
 Only the integrating session on `main` assigns numbers, and it does so at the
 moment of integration. The reason is that the highest number an agent can see is

@@ -181,12 +181,32 @@ async function findNotes(trackedFiles) {
  */
 {
   const notes = await findNotes(tracked);
+  /*
+   * ALLOCATING a number is the failure; CITING one is not.
+   *
+   * The first real note written under this convention said "as §40 already
+   * proved" — a perfectly good prose reference to an authoritative section — and
+   * a bare `/§\s*\d+/` failed the gate on it. Referring to earlier findings is
+   * exactly what these notes should do, so the discriminator is HEADING POSITION,
+   * not the presence of a section sign:
+   *
+   *   `## 82. New diagnosis`   -> allocation, fails
+   *   `### §82 New diagnosis`  -> allocation, fails
+   *   `as §40 already proved`  -> reference, fine
+   *   `## Why §40 matters`     -> reference in a heading, fine — the number is
+   *                               not what the heading is numbered BY
+   */
+  const ALLOCATES = [
+    /^#{1,6}[ \t]*\d+[.)]/m,        // '## 82. Title'
+    /^#{1,6}[ \t]*§[ \t]*\d+/m,     // '## §82 Title'
+  ];
   for (const n of notes) {
     const body = await readFile(n, 'utf8');
-    const stolen = body.match(/^##\s*\d+\./m) || body.match(/§\s*\d+/);
+    const stolen = ALLOCATES.map((re) => body.match(re)).find(Boolean);
     if (stolen) {
-      fail.push(`${n} allocates a DIAGNOSIS number (${stolen[0].trim()}) — only the`
-        + ' integrating session on main does that; use a descriptive heading');
+      fail.push(`${n} allocates a DIAGNOSIS number in a heading (${stolen[0].trim()})`
+        + ' — only the integrating session on main does that. Cite an existing section'
+        + ' in prose freely; just do not number your own.');
     }
   }
   if (notes.length) {
