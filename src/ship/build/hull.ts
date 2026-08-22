@@ -19,7 +19,7 @@ import { MeshBuilder } from './Builder';
 import {
   BULWARK_THICK, Bin, DECK_CAMBER, HULL_ROWS, HULL_THICK,
   ROW_COPPER_TOP, ROW_PORT_HEAD, ROW_PORT_SILL, ROW_SPAR_HEAD, ROW_SPAR_SILL,
-  Station, Z_TRANSOM, buildPorts, deckSideY, gunDeckY, keelY, sheerY, tAtZ, zAt,
+  Station, Z_STEM, Z_TRANSOM, buildPorts, deckSideY, gunDeckY, keelY, sheerY, tAtZ, zAt,
   type PortSpec,
 } from '../dims';
 
@@ -643,41 +643,96 @@ function buildStem(bins: Bins, stations: Station[]): void {
   const b = bins.black;
   b.setColorHexLinear(0xffffff, 1.08);
 
-  // The stem itself: a raked timber from the forefoot to the top of the head.
-  const stemPts: [number, number][] = [
-    [-25.9, -5.6], [-27.0, -3.0], [-27.9, 0.0], [-28.5, 2.4],
-    [-28.9, 4.4], [-29.0, 6.2], [-28.7, 8.1],
+  /*
+   * Knee of the head — the built-up timber between the raking cutwater profile
+   * and the hull's own leading edge.
+   *
+   * It has to be a SOLID wedge, because the lofted sections stop dead at
+   * `Z_STEM` while the cutwater rakes 4.6 m forward of it at head height. This
+   * was a free-standing fin 0.55 m deep plus a straight raked stem tube 1.6 m
+   * clear of the hull's leading edge, so the bow presented three detached stakes
+   * standing in the water — raycast confirmed: `ship-black` at ship-local
+   * (0.04, 4.34, -31.37), (-0.30, 2.37, -28.68) and (0.35, 0.74, -28.23) with
+   * open sea behind them.
+   *
+   * The knee replaces the stem tube outright rather than sitting in front of
+   * it: the tube's radius (0.44 to 0.33) exceeded this wedge's half-thickness,
+   * so it poked through the flanks, and its top two metres stood clear above
+   * the knee at head height with nothing behind them. Its foot met the keel
+   * only by accident. The wedge's foot lands on the forefoot at y = -5.0, where
+   * `buildKeel` is at z = -22.31 with the same 0.4 half-width, so they join.
+   *
+   * `hullLeadZ` is the hull's leading edge as a function of height: below the
+   * top of the forefoot it is where the keel curve reaches that height, and at
+   * and above it, the sections end in a plumb face at the stem rabbet.
+   */
+  const hullLeadZ = (y: number): number => {
+    if (y >= keelY(0)) return Z_STEM;
+    let lo = 0;
+    let hi = 0.25;
+    for (let k = 0; k < 26; k++) {
+      const m = (lo + hi) * 0.5;
+      if (keelY(m) > y) lo = m;
+      else hi = m;
+    }
+    return zAt((lo + hi) * 0.5);
+  };
+  /*
+   * Forward profile of the knee, forefoot to billethead. The foot lands ON the
+   * forefoot so the whole assembly is attached to the hull. Row 5 sits exactly
+   * on the boot top at the stem so the wedge can be split there: below it the
+   * knee is sheathed like the rest of the bottom, and running it black straight
+   * down through the copper is as wrong as leaving it detached was.
+   */
+  const cw: readonly [number, number][] = [
+    [-22.6, -5.0], [-25.2, -3.2], [-27.1, -1.4], [-28.5, 0.4],
+    [-29.6, 2.2], [-30.32, 3.5], [-30.6, 4.0], [-31.3, 5.4], [-31.6, 6.1],
   ];
-  const path: THREE.Vector3[] = stemPts.map(([z, y]) => new THREE.Vector3(0, y, z));
-  const radii = stemPts.map((_, i) => 0.44 - i * 0.018);
-  b.tube(path, radii, 7, true);
-
-  // Cutwater / knee of the head: a thin vertical fin forward of the stem.
-  const cw: [number, number][] = [
-    [-28.0, -1.6], [-29.4, 0.6], [-30.6, 2.6], [-31.4, 4.4], [-31.6, 5.9],
-  ];
-  for (let i = 0; i < cw.length - 1; i++) {
-    const [z0, y0] = cw[i];
-    const [z1, y1] = cw[i + 1];
-    const hw = 0.2 - i * 0.02;
-    b.grid(
-      2, 2,
-      (ii, jj, out) => out.set((jj === 0 ? -hw : hw), ii === 0 ? y0 : y1, ii === 0 ? z0 : z1),
-      null,
-    );
+  const NCW = cw.length;
+  const iBoot = 5;
+  // Half-thickness: the keel's own 0.4 at the foot, tapering to the head.
+  const kneeHalf = (s: number) => 0.40 - 0.22 * s;
+  const knee = (m: MeshBuilder, i0: number, i1: number) => {
+    const n = i1 - i0 + 1;
     for (const side of [1, -1] as const) {
-      b.grid(
-        2, 2,
+      m.grid(
+        n, 2,
         (ii, jj, out) => {
-          const z = ii === 0 ? z0 : z1;
-          const y = ii === 0 ? y0 : y1;
-          out.set(side * hw, y + (jj === 0 ? -0.55 : 0.0), z + (jj === 0 ? 0.5 : 0));
+          const [z, y] = cw[i0 + ii];
+          out.set(side * kneeHalf((i0 + ii) / (NCW - 1)), y, jj === 0 ? z : hullLeadZ(y));
         },
         null,
-        { flip: side > 0 },
+        { flip: side < 0 },
       );
     }
-  }
+    // The forward edge itself, across the thickness.
+    m.grid(
+      n, 2,
+      (ii, jj, out) => {
+        const [z, y] = cw[i0 + ii];
+        const hw = kneeHalf((i0 + ii) / (NCW - 1));
+        out.set(jj === 0 ? -hw : hw, y, z);
+      },
+      null,
+    );
+  };
+  bins.copper.setColorHexLinear(0xffffff, 0.85);
+  knee(bins.copper, 0, iBoot);
+  knee(b, iBoot, NCW - 1);
+  // Stem rabbet face. Station 0 is a 0.6 m wide open end from the forefoot to
+  // the sheer — from dead ahead you looked straight into the hull through it.
+  const st0 = stations[0];
+  const yFoot = keelY(st0.t);
+  const ySheer = sheerY(st0.t);
+  b.grid(
+    6, 2,
+    (ii, jj, out) => {
+      const y = yFoot + (ii / 5) * (ySheer - yFoot);
+      const w = st0.widthAt(y) + 0.008;
+      out.set(jj === 0 ? -w : w, y, Z_STEM + 0.01);
+    },
+    null,
+  );
 
   // Head rails: two curved rails per side sweeping from the bow up to the
   // bowsprit, with the trailboard between them.
@@ -696,9 +751,20 @@ function buildStem(bins: Bins, stations: Station[]): void {
       b.tube(rail, rad, 6, true);
       void k;
     }
-    // Trailboard: the carved panel between the rails.
-    bins.brass.setColorHexLinear(0xffffff, 0.9);
-    bins.brass.grid(
+    /*
+     * Trailboard: the carved panel between the rails.
+     *
+     * This was `bins.brass`, and brass is authored as a METAL
+     * (`makeBrass` sets `p.metal = mix(1.0, 0.45, tarnish)`). The panel's grid
+     * normal is purely horizontal, so from anywhere below it the reflected ray
+     * goes into the sky, and blue sky radiance through F0_BRASS's gold
+     * (0.91, 0.78, 0.42) came back as a mottled GREEN-TEAL patch — the one thing
+     * on a ship that cannot be any colour. It is a painted wooden panel, and the
+     * white band along the gunports runs forward onto it, so it belongs in
+     * `stripe`.
+     */
+    bins.stripe.setColorHexLinear(0xffffff, 0.9);
+    bins.stripe.grid(
       8, 2,
       (i, j, out) => {
         const s = i / 7;
@@ -711,13 +777,24 @@ function buildStem(bins: Bins, stations: Station[]): void {
     );
   }
 
-  // Billethead: the carved scroll at the top of the cutwater.
-  const g = bins.brass;
-  g.setColorHexLinear(0xffffff, 1.0);
-  for (let i = 0; i < 9; i++) {
+  /*
+   * Billethead: the carved scroll at the top of the cutwater.
+   *
+   * Ochre-painted carving, not solid brass — same sky-into-gold-mirror problem
+   * as the trailboard, and it sits in the same green patch. And a scroll is a
+   * tapering rod coiled, so it is a chain of spars: nine axis-aligned boxes
+   * presented the identical pair of lit faces at every sun angle and read as a
+   * stepped glyph, which is the mistake the hammock cranes already made.
+   */
+  const g = bins.buff;
+  g.setColorHexLinear(0xf2d79a, 1.0);
+  const billet = (i: number) => {
     const a = (i / 9) * Math.PI * 2.4;
     const r = 0.62 * (1 - i / 12);
-    g.box(0, 6.35 + Math.sin(a) * r, -31.5 + Math.cos(a) * r * 0.85, 0.11, 0.13, 0.13);
+    return new THREE.Vector3(0, 6.35 + Math.sin(a) * r, -31.5 + Math.cos(a) * r * 0.85);
+  };
+  for (let i = 0; i < 9; i++) {
+    g.spar(billet(i), billet(i + 1), 0.135 - i * 0.009, 0.126 - i * 0.009, 5);
   }
   // Gammoning: the lashing that holds the bowsprit down to the stem.
   bins.iron.setColorHexLinear(0xffffff, 0.9);
@@ -914,6 +991,9 @@ function buildTransom(
  *  Bulwarks and rails
  * ------------------------------------------------------------------ */
 
+/** Top of the rail cap above the sheer line. The hammock stow rests on it. */
+const RAIL_CAP_RISE = 0.06;
+
 function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quality: number): void {
   const ns = stations.length;
   const b = bins.buff;
@@ -986,12 +1066,16 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
       iEnd - iStart + 1, 2,
       (i, j, out) => {
         const st = stations[i + iStart];
-        const y = sheerY(st.t) + 0.06;
+        const y = sheerY(st.t) + RAIL_CAP_RISE;
         const wOut = st.widthAt(sheerY(st.t));
         const wIn = inner[i + iStart][levels.length - 1].x;
         out.set(side * (j === 0 ? wOut + 0.06 : wIn - 0.04), y, st.z);
       },
       null,
+      // d/dj runs inboard, so cross(d/di, d/dj) is (0, -0.4 * side, 0): without
+      // this the cap's one face points DOWN to starboard and every view of the
+      // starboard rail from above sees its back and culls it.
+      { flip: side > 0 },
     );
   }
 
@@ -1028,29 +1112,52 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
        */
       const j = Math.sin(z * 3.7) * 0.5 + 0.5;
       const lean = (j - 0.5) * 0.09;
-      const hUp = 0.34 + j * 0.05;
-      const base = new THREE.Vector3(side * (w + 0.02), y + 0.24, z);
-      const knee = new THREE.Vector3(side * (w + 0.02 + lean), y + 0.24 + hUp, z + lean * 0.4);
+      // A crane has to stand clear ABOVE the stow it retains, not inside it.
+      const hUp = 0.66 + j * 0.08;
+      const base = new THREE.Vector3(side * (w + 0.02), y + RAIL_CAP_RISE + 0.02, z);
+      const knee = new THREE.Vector3(side * (w + 0.02 + lean), base.y + hUp, z + lean * 0.4);
       const armEnd = new THREE.Vector3(side * (w + 0.25), knee.y + 0.035, z + lean * 0.6);
       ir.spar(base, knee, 0.019, 0.016, 5);
       ir.spar(knee, armEnd, 0.016, 0.013, 5);
     }
-    // The hammocks themselves: a pale canvas roll.
+    /*
+     * The hammocks themselves.
+     *
+     * This SITS ON THE RAIL CAP. It used to be a half-tube whose underside was
+     * 0.46 m above the sheer while the cap is at +0.06, so a 0.40 m band ran the
+     * whole length of the ship crossed only by 19 mm iron rods — from anywhere
+     * outboard the stow read as a buff plank floating clear of the hull with sea
+     * and sky behind it, and the gunport lids below it hung on a topside with
+     * nothing above them. Measured with a raycast: at the reported station the
+     * first front-facing surface across that band was the deck at 19 m, on the
+     * centreline.
+     *
+     * The section is a closed arch from the cap's inboard edge, over the crown,
+     * down to just outboard of the cap, so it is opaque from the deck as well as
+     * from outboard — the old half-tube's inboard face was a culled hole.
+     */
     bins.buff.setColorHexLinear(0xd8d2c2, 1.0);
+    const STOW_RISE = 0.52;
     bins.buff.grid(
-      26, 6,
+      26, 7,
       (i, j, out) => {
         const z = -18 + (i / 25) * 37;
         const t = tAtZ(z);
         const st = new Station(t);
         const y = sheerY(t);
-        const w = st.widthAt(y);
-        const a = (j / 5) * Math.PI;
-        const r = 0.33;
-        out.set(side * (w + 0.06 + Math.sin(a) * r * 0.7), y + 0.46 + (1 - Math.cos(a)) * r, z);
+        const wOut = st.widthAt(y);
+        const wIn = Math.max(0.15, wOut - BULWARK_THICK);
+        const cx = (wIn + wOut + 0.13) * 0.5;
+        const rx = (wOut + 0.13 - wIn) * 0.5;
+        const th = (j / 6) * Math.PI;
+        out.set(
+          side * (cx - rx * Math.cos(th)),
+          y + RAIL_CAP_RISE + 0.01 + STOW_RISE * Math.sin(th),
+          z,
+        );
       },
       null,
-      { flip: side > 0, colorFn: (i, _j, c) => c.setScalar(0.9 + 0.14 * fract(Math.sin(i * 12.9898) * 43758.5453)) },
+      { flip: side < 0, colorFn: (i, _j, c) => c.setScalar(0.9 + 0.14 * fract(Math.sin(i * 12.9898) * 43758.5453)) },
     );
   }
 }
