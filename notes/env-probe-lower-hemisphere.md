@@ -48,8 +48,54 @@ tarpaulin and the hue did not move at all (B-R +18.65 -> +20.56). Watch the hue.
 
 ## Instrument
 
-TBD — filled in below as it is built.
+`.tmp/probehemi.mjs` (gitignored). Locates the probe's render target by scanning
+the module list for a `WebGLRenderTarget` whose `.texture` **is** `scene.environment`
+— that identity is the lever assertion, so the thing measured is provably the map
+the scene lights from, not a lookalike. Reads the 256x128 equirect back with
+`readRenderTargetPixels` into a `Uint16Array` and decodes half-floats in JS
+(`readRenderTargetPixels` wants a buffer matching `HalfFloatType`). Weights every
+texel by `sin(theta)` for solid angle.
+
+Found at `modules[5]:Sky.probe.target`.
 
 ## Log
 
 (append-only, newest last)
+
+### Verified independently on main, before any change
+
+noon (`timeOfDay` 12.3), `seaState` 3, `cloudCover` 0.3, 256x128 equirect:
+
+| quantity | measured |
+|---|---|
+| upper-hemisphere mean radiance | 0.318 |
+| **lower-hemisphere mean radiance** | **0.484** |
+| zenith (within 8 deg) | 0.260 |
+| nadir (within 8 deg) | 0.207 |
+| **share of a vertical surface's cosine-weighted irradiance from below the horizon** | **55.4%** |
+
+The lower hemisphere is **1.52x brighter than the upper one**. Note this is a
+different and stronger statement than §87's nadir-outshines-zenith: at these
+conditions the nadir is *not* brighter than the zenith (0.207 against 0.260), but
+the hemisphere means still invert, because the bright near-horizon rows carry most
+of the solid angle. §87's 36.0% was measured at different conditions; the integral
+that matters reads 55.4% here. Both are the same defect.
+
+### Mechanism, read off the shader
+
+`EnvProbe` compiles `SKY_FRAG` with `SKY_ENV`, and `SKY_ENV` is set **nowhere
+else** — the probe is its only consumer. For a below-horizon ray the shader takes
+`hitsGround = viewZenithCos < horizonCos` and then reads the same sky-view LUT:
+
+    L = texture(tSkyView, skyViewToUv(hitsGround, viewZenithCos, lightViewCos, r)).rgb;
+
+`skyViewToUv` maps ground-hitting rays onto the LUT's lower half, which stores
+atmospheric in-scattering. At sea level `zenithHorizon` is 90 deg, so every
+downward direction lands there. **There is no sea term anywhere in the path.** The
+engine computes exactly the right quantity — `Radiometry.groundColor`, documented
+in `src/sky/index.ts` as "radiance bounced back up off the sea" and reaching
+`world.uniforms.uGroundColor` — and the probe never consults it.
+
+That the probe is `SKY_ENV`'s only consumer is what makes this safe to fix in the
+shader: the *visible* sky needs no synthetic sea because it has the real ocean mesh
+below the horizon.
