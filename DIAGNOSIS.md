@@ -7027,6 +7027,14 @@ at this geometry and the shadow term is removing it. That is why the
 
 ### And the streaky structure is the shadow pattern, not a radiance term
 
+> **CORRECTED BY §99.** This subsection and the shadow figure above it are wrong.
+> Both were measured on a `dt = 0` frozen frame, and at `dt = 0` the shadow map is
+> not re-rendered — so the "16.3 codes" and the attribution of the streaks to the
+> shadow pattern do not survive a properly settled measurement. §99 shows the sail
+> carries only about 4 codes of shadow in total and that the streaks are present
+> with the shadow lookup entirely disabled. The rest of this section — the sheen
+> refutation and the 93%-IBL decomposition — is unaffected and stands.
+
 The direct-light-only render is the informative one: the sails carry large, soft,
 amoeba-shaped dark regions while the deck in the same frame shows crisp, plausible
 mast and rigging shadows. **The pale streaky patches that read as "sea through the
@@ -7081,3 +7089,84 @@ the crop became a dark blue tarpaulin and the hue did not move at all (B−R +18
 +20.56). Options 1 and 3 both risk exactly that.
 
 **Handing the choice to the owner rather than picking one.**
+
+## 99. Sail shadow provenance: not self-shadow, not a shadow-map artefact — and `castShadow = false` is a no-op under VSM
+
+Phase A. Corrects §98's shadow subsection. **No source change.**
+
+### Three instrument errors, all mine, all worth keeping
+
+1. **At `dt = 0` the shadow map is not re-rendered.** §98's shadow measurements were
+   taken on a frozen frame ticked with a constant `t`, so caster toggles never
+   reached the map and the state was not a valid steady state. This is what produced
+   §98's 16.3-code figure. A sun-azimuth sweep with *advancing* time proves the map
+   updates correctly and tracks the sun (09:00 shadows fall right, 12:18 short,
+   15:30 fall left), so it is not stale — the earlier arms simply never re-rendered it.
+2. **Ticking each arm onward from the previous arm's end state** left the arms 0.4 s
+   apart in sim time. That produced an impossible ordering — both casters disabled
+   brightening *less* than either alone — which is a confound, not a result. Fixed
+   with **one fresh page load per arm**.
+3. **`castShadow = false` cannot exclude a receiver from the shadow map here.**
+   `three.module.js:9564` reads
+   `if ( ( object.castShadow || ( object.receiveShadow && type === VSMShadowMap ) ) && ... )`
+   and `Engine.ts:66` sets `VSMShadowMap`. Every earlier caster arm was therefore a
+   **silent no-op** — the flag flipped, the object kept casting. Correct lever: swap
+   the mesh's `customDepthMaterial` for one whose fragment shader `discard`s, which
+   removes it from the map while it still receives.
+
+### The isolation, once the instrument was right
+
+Fresh load per arm, 24 frames of advancing dt, sea box as the drift reference
+(3-5 codes):
+
+| arm | sail A | sail C | deck | sea (ref) |
+|---|---|---|---|---|
+| base | 0 | 0 | 0 | 0 |
+| **sail excluded from the map** (still receiving) | **+0.67** | −0.67 | +46.33 | −3.00 |
+| ship/rigging excluded | +2.67 | −3.67 | +68.33 | −4.00 |
+| both excluded | +4.67 | −1.67 | +66.33 | −3.00 |
+| shadow lookup disabled entirely | +3.67 | −3.33 | +68.00 | −5.00 |
+
+**The deck proves the shadow system works.** It responds strongly and correctly:
+sails account for +46.3 codes of its shadow and ship geometry for +68.3, and both
+are ordinary geometry-driven occlusion.
+
+**The sail is barely shadowed at all.** Disabling every shadow contribution moves it
+about 4 codes on a base of 92 — roughly 4%, comparable to the sea reference's own
+3-5 code drift. And all five arms are visually identical at 2x: the pale streaky
+patches are present with the shadow lookup **entirely disabled**.
+
+### Verdict on the four candidates
+
+- **A, target-sail self-shadow — REFUTED.** Excluding the sail from the shadow map
+  while it still receives moves it +0.67 codes, below the drift floor.
+- **B, other sails casting onto it — not the film.** Sails do cast, heavily, onto
+  the *deck* (+46.3), but the sail box itself barely moves.
+- **C, mast/rigging/ship casting onto it — not the film.** Same: +2.67 on the sail
+  against +68.3 on the deck.
+- **D, shadow-map artefact — REFUTED.** With the sail out of the map its shading is
+  unchanged, and the deck's response is geometrically correct and large.
+
+**So the film is not shadow-driven in any form**, and §98's contrary subsection is
+withdrawn. What remains is §98's decomposition, which is unaffected: the sail is
+**93% IBL** (43% indirect diffuse, 35% indirect sheen, 15% indirect specular) drawn
+from a sky-and-sea environment, with the diffuse term itself blue at B−R +27. The
+sail matches its background because its light *is* its background.
+
+That is a genuine art-direction fork, now on properly controlled evidence with
+self-shadow and shadow-map artefact both excluded. The axes remain as §98 listed
+them, unchanged and untouched: the sheen's environment coupling (35% of radiance,
+and specular reflects environment colour un-modulated by albedo), a local bounce
+term for shaded canvas (physically strongest, architecturally largest), the canvas
+albedo's value or saturation, or accepting the render. §87's constraint still binds:
+dimming alone reached ratio 0.370 and still read as a dark blue tarpaulin with the
+hue unmoved.
+
+### A real defect found in passing
+
+**`castShadow = false` is silently ignored for any shadow receiver** under
+`VSMShadowMap`. `ship-ensign` is configured `castShadow: false` with
+`receiveShadow: true`, so it casts anyway and the code's stated intent is violated.
+Harmless at 378 verts, but the pattern is a trap: on this renderer the only way to
+stop a receiver casting is a discarding depth material. Worth a comment at the
+`castShadow` site rather than a code change.
