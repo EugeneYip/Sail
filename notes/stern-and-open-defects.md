@@ -285,3 +285,36 @@ under-sampling. Keeping the wording precise: this establishes that *integrating 
 footprint* removes the artefact, but it does not by itself separate wave-normal
 footprint filtering from reflection-lobe roughness from the probe's own angular
 resolution. Those are the next arms, each measured against this reference.
+
+### CORRECTION: that reference was built in a state with no defect in it
+
+The stage-isolation arms above must be discarded, and here is the check that caught
+it. Two dark-block definitions were compared on the same capture:
+
+- **median-relative** (below 0.55x the frame's own median) — the proxy that
+  reproduced the player artefact: **0 blocks** in the far-sea mask.
+- **reference-residual** (below -6 after removing the global offset): 13 blocks, all
+  in one cluster at pixel y 75-175, x ~1450-1600, the top-right corner.
+
+**Overlap: zero.** And the residual set's absolute luma is 64.1 against a frame
+median of 68.1 — four codes below the median, not a dark blotch. It is a
+resolution-dependent corner difference.
+
+**Cause of the error:** I swapped the settle from a 14-15 s wall-clock wait to 600
+fixed ticks in order to make cross-load state deterministic. That changed the state
+enough that **the artefact is not present in it at all**. So the supersampled
+reference, the cross-load floor and all three stage arms were measured on a clean
+scene, which is exactly why none of them moved: there was nothing to move.
+
+That also explains the otherwise-odd result that widening alpha 2.5x made the
+*reference* error worse (3.577, LF correlation 0.956 to 0.922) while doing nothing
+for a blotch that was not there.
+
+**What survives:** nothing from the stage isolation. The reproduction from §104
+stands (wall-clock settle, cloudCover 0.8, 8.5 dark blocks, churn 15.2) as does its
+causal partition, because those were measured in a state that contained the defect
+and were driven to exactly zero by two independent ablations.
+
+**Lesson to carry:** determinism and reproduction can be in tension. Verify the
+defect is still present in the state you made deterministic BEFORE measuring anything
+against it. A floor and a reference are worthless if the artefact left the scene.
