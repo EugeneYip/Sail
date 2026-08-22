@@ -6564,3 +6564,66 @@ this fix, which is consistent with §87's separate finding that those patches ar
 containing exactly them. **That is now the strongest remaining candidate and it has
 NOT been causally tested.** No sheen A/B was run here. Do not promote it without
 one.
+
+## 94. P2 exclusion: the near-hull plate is not vfx, and §92's lead is dead
+
+§92 said to run §35's exclusion first because one capture could eliminate a
+subsystem. It did, and the subsystem it eliminated was the one §92 itself
+nominated.
+
+### The exclusion
+
+Same frozen frame, same station (6 m forward, 9 m up, 24 m to port, looking at the
+port waterline), sea state 4. Only variable: whether the vfx meshes draw. Hidden
+were `vfx-bow-wave`, `vfx-hull-skirt` and `vfx-particles` (the two rain meshes were
+already invisible at `rain: 0`).
+
+| region | all vfx | vfx hidden |
+|---|---|---|
+| inside the pale plate, x 260-360 | mean 152.7, sd 52.7 | mean 153.8, sd 53.1 |
+| outside it, same columns | mean 176.6, sd 31.4 | mean 176.7, sd 32.4 |
+| inside the plate, x 640-740 | mean 163.4, sd 44.7 | mean 164.2, sd 44.8 |
+| outside it, same columns | mean 158.9, sd 52.5 | mean 158.5, sd 53.2 |
+
+**The plate and its hard outer boundary are unchanged** — about 1 code, against a
+temporal noise floor of **3.25 codes** measured in open sea, where hiding vfx
+cannot matter at all. So §35's finding still holds on today's build even though §79
+has since rebuilt the hull skirt.
+
+**Therefore `waterYAt` is excluded.** It lives in `src/vfx/shaders/hullwater.ts`,
+which draws `vfx-hull-skirt`, and the artefact survives that mesh being hidden.
+§92's midships-kink lead is dead for P2. The comment/implementation mismatch it
+recorded is still a real (if cosmetic) defect and still worth correcting, but it is
+not this.
+
+### Where it actually lives, with the mechanism named
+
+`src/ocean/shaders/surface.ts`, and it is §40's family again — a threshold on a
+field too coarse to carry the detail:
+
+    line 131:  wakeFoam = max(wk.r - 0.06, 0.0) * (1.0 / 0.94) * wf;
+    line 594:  cover = max(cover, wakeFoam * 0.88);
+
+Two hard edges stacked. `WAKE_WORLD_SIZE` is 1024 m and the field is 1024 texels
+even at `ultra`, so it is **1 m per texel** — the file says so itself — and
+near-hull foam structure is sub-metre. So `wk.r` near the hull is a bilinear ramp
+between metre-spaced samples, `max(wk.r - 0.06, 0)` cuts it on a smooth iso-contour
+of that ramp, and then `max(cover, wakeFoam * 0.88)` **replaces** the ocean's own
+detailed foam wherever the smooth plate wins. The boundary is where those two
+quantities cross, which on an interpolated metre-scale field is a smooth, locally
+straight curve — a ruled edge with a flat plate on one side and textured foam on
+the other. That is the reported artefact's exact shape.
+
+`wakeFalloff` is a second, larger hard-ish edge — a radial `smoothstep` from
+`0.62 * fadeRadius` to `fadeRadius` centred on the ship — but that one is far out,
+not near-hull, and should not be confused with this.
+
+**Not causally tested.** Nothing here has been A/B'd yet: the exclusion is solid,
+the mechanism above is read off the source and is a strong candidate, not a
+demonstrated cause. The obvious discriminator is to vary the 0.06 threshold and the
+`max` blend independently and watch whether the ruled edge moves with them.
+
+**And P2's constraint still binds:** the owner forbids resolving this by globally
+blurring foam. Note that both candidate levers here are *sharpening* operations
+being applied to a field that cannot support them — so the fix direction is to stop
+thresholding a coarse field, not to soften the result.
