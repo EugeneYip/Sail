@@ -1079,6 +1079,61 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
     );
   }
 
+  /*
+   * Close the after end of the deck, and give her the taffrail she never had.
+   *
+   * The side bulwarks above run `iStart..iEnd`, and `iEnd` is the LAST STATION --
+   * but the transom is aft of that, bridged only by the counter band, so nothing
+   * ever capped the deck's after edge. From astern, or from straight above the
+   * poop, you looked down onto the INSIDE face of the transom with its window
+   * openings visible from within the hull, and the whole after deck read as an open
+   * tray. That is the "stern reads penetrable" the owner reported. `taffrail` is
+   * named in three comments in this file and was never built.
+   *
+   * The inboard face has to look FORWARD. d/di runs to starboard and d/dj runs up,
+   * so cross(d/di, d/dj) points aft; without the flip the face is culled from every
+   * view on deck, which is the same trap the rail cap above documents.
+   */
+  {
+    const stAft = stations[iEnd];
+    const cols = 9;
+    b.setColorHexLinear(0xffffff, 1);
+    b.grid(
+      cols,
+      levels.length,
+      (i, j, out) => {
+        const f = (i / (cols - 1)) * 2 - 1;
+        const p = inner[iEnd][j];
+        out.set(f * p.x, p.y, p.z);
+      },
+      null,
+      {
+        flip: true,
+        colorFn: (_i, j, c) => {
+          const f = j / (levels.length - 1);
+          c.setScalar(0.82 + 0.24 * f);
+        },
+      },
+    );
+
+    // The taffrail itself: a flat cap across the head of that bulwark, matching the
+    // side caps. j = 0 is the aft edge and j = 1 the forward one, so d/dj is -z and
+    // cross(d/di, d/dj) is +y -- it faces the sky with no flip.
+    const yCap = sheerY(stAft.t) + RAIL_CAP_RISE;
+    const wCap = inner[iEnd][levels.length - 1].x;
+    black.setColorHexLinear(0xffffff, 1.05);
+    black.grid(
+      cols,
+      2,
+      (i, j, out) => {
+        const f = (i / (cols - 1)) * 2 - 1;
+        out.set(f * (wCap + (j === 0 ? 0.08 : -0.04)), yCap, stAft.z + (j === 0 ? 0.10 : -0.16));
+      },
+      null,
+      {},
+    );
+  }
+
   // Hammock netting: iron cranes and a netted roll along the rail.
   const ir = bins.iron;
   ir.setColorHexLinear(0xffffff, 0.9);
@@ -1171,7 +1226,14 @@ function buildDecks(bins: Bins, stations: Station[]): void {
   const NZ = 96;
   const NX = 20;
   const t0 = 0.045;
-  const t1 = 0.968;
+  /*
+   * 0.992, not 0.968. The deck used to stop a station short of the transom while
+   * the hull and the taffrail carry on to it, which left an unfloored well at the
+   * after end: from above the poop you looked down past the deck's bare edge into
+   * the hull and saw the transom's inner side with its gilt window frames floating
+   * against the sky. A quarterdeck runs aft to the taffrail, so the deck does too.
+   */
+  const t1 = 0.992;
 
   const halfAt = (t: number) => {
     const st = new Station(t);
