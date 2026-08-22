@@ -335,3 +335,20 @@ and it is the concrete form of "a residual player-visible component may remain e
 if the table goes green". Fixing it means sub-stepping the rig's OUTPUT filter,
 which needs the mode's solved pose interpolated across sub-steps rather than
 re-solved, and that is a separate change with its own risk. Not attempted here.
+
+### What the fix costs in composition
+
+Sub-stepping does not only flatten the lag, it moves it: at a uniform 60 fps the
+lag goes from the half-step-biased value to the true continuous-time one.
+
+    mountPos   101.79 ms -> 108.09 ms
+    attitude   205.97 ms -> 218.08 ms
+
+which at 4 m/s of way and 3 deg/s of hull rotation puts the eye
+
+    25.2 mm further along-track
+    10.4 / 20.3 / 24.2 mm further behind the roll, at helm / jibboom / main top
+
+i.e. **two and a half centimetres on a 62 m ship**. Not a composition change, and
+the new value is the correct one — the old figure was biased small by exactly the
+half-step this fix removes.
