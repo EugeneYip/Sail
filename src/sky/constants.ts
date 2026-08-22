@@ -347,6 +347,21 @@ export const CLOUD_EXTINCTION_PER_M = 0.045;
  */
 export const CLOUD_ALBEDO = 0.98;
 /**
+ * Energy gain on the isotropic AMBIENT a cloud receives — sky above, sea and
+ * horizon below. See `Radiometry.cloudAmbientTop/Bottom`, its only consumer.
+ *
+ * This is a fit, not a derivation: a cloud is not a Lambertian surface and the
+ * two-colour gradient it is applied to is a stand-in for the whole rest of the
+ * deck. It used to be shared with the sun-lit octave gain below, on the grounds
+ * that both correct the same under-lighting. They do not: the ambient path runs
+ * no octaves at all, so it has no reason to move when the octaves' attenuation
+ * changes, and while they were shared a correction to the octaves silently
+ * raised the ambient floor by the same factor — which is a contrast fix paying
+ * for itself.
+ */
+export const CLOUD_MULTISCATTER_GAIN = 4.5;
+
+/**
  * Energy gain applied to the multiple-scattering octaves.
  *
  * The octave approximation is known to under-light. Summed to infinity it
@@ -359,18 +374,36 @@ export const CLOUD_ALBEDO = 0.98;
  * The anchor is checkable: at noon, E_sun is ~12 game units, so a thick sunlit
  * cumulus top must land near 0.85 * 12 / PI = 3.2 units of radiance, i.e. about
  * 30 % brighter than a sunlit white sail. That is the number this is set for.
+ *
+ * 4.5 -> 6.5 came with the per-octave two-stream coefficient below. Correcting
+ * the octaves' attenuation removed 35 % of the cloud's radiance, and this is the
+ * constant whose job is the level; measured on one frozen frame, restoring it
+ * put the scene-linear p90 of a cumulus body back to 3.525 against 3.534 before
+ * (-0.3 %) while KEEPING the contrast, because the bright side of a cloud is
+ * ~95 % multiple scattering too, so the gain scales both sides of the
+ * lit/shaded ratio almost equally. That is what separates a contrast fix from a
+ * darkening: 2.10 lit/shaded at the same brightness, not at 65 % of it.
  */
-export const CLOUD_MULTISCATTER_GAIN = 4.5;
+export const CLOUD_OCTAVE_GAIN = 6.5;
 
 /**
- * Two-stream diffusion coefficient, `T = 1/(1 + k tau)`.
+ * Two-stream coefficient for the multiple-scattering octaves:
+ * `T = 1/(1 + k tau)` with `k = CLOUD_TWO_STREAM_K * (1 - g)`.
  *
- * k = 0.75 (1 - g_eff). A single Mie scatter has g ~= 0.85, but after enough
- * scatters the effective asymmetry decays toward zero; 0.19 corresponds to
- * g_eff = 0.75, which is where the multiple-scattering octaves live. Only the
- * octaves use it — single scattering stays exact Beer-Lambert.
+ * THE 3/4 IS THE PHYSICS; THE PER-OCTAVE g IS THE FIX. This used to be one flat
+ * k = 0.19, which is 0.75 * (1 - 0.75), i.e. the asymmetry of the FIRST Mie
+ * scatter. But each octave stands in for a later scattering order and carries
+ * its own eccentricity — the loop's `c` decays 1, 0.6, 0.36, 0.216 and the phase
+ * uses g = 0.82 c — so the right k RISES with octave order: 0.38, 0.53, 0.62. A
+ * flat 0.19 under-attenuated the deep octaves by two to three times, and since
+ * those octaves carry ~80 % of the signal the result was a cloud whose interior
+ * radiance barely depended on how much cloud the sun had to get through.
+ * Measured: the sun term went 2.81 at tau 2 to 0.76 at tau 71 — a factor of 3.7
+ * across two decades of optical depth, and NON-MONOTONIC below tau 8.
+ *
+ * Single scattering is untouched and stays exact Beer-Lambert.
  */
-export const CLOUD_DIFFUSION_K = 0.19;
+export const CLOUD_TWO_STREAM_K = 0.75;
 
 /** Cirrus optical depth at full cover, along the vertical. Ice cloud is thin. */
 export const CLOUD_CIRRUS_OPTICAL_DEPTH = 0.55;

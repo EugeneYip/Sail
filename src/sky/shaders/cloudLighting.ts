@@ -1,11 +1,11 @@
 import {
   CLOUD_AIR_SHADOW,
   CLOUD_ALBEDO,
-  CLOUD_DIFFUSION_K,
-  CLOUD_MULTISCATTER_GAIN,
+  CLOUD_OCTAVE_GAIN,
   CLOUD_SHAFT_RANGE_M,
   CLOUD_SHAFT_STEPS,
   CLOUD_SUN_STEPS,
+  CLOUD_TWO_STREAM_K,
 } from '../constants';
 
 const f = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
@@ -31,7 +31,9 @@ const f = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
  *   multi-scatter      three octaves with halved extinction, scattering and
  *     octaves          phase eccentricity. Without them a deck this optically
  *                      thick has a black interior, which is the single most
- *                      obvious "hobby renderer" cloud failure.
+ *                      obvious "hobby renderer" cloud failure. Their two-stream
+ *                      coefficient is per octave, and the day it was not was the
+ *                      day cloud interiors read as spilled milk.
  *   sky/sea ambient    a two-colour gradient by height, so undersides pick up
  *                      the sea and tops pick up the zenith.
  *
@@ -44,8 +46,8 @@ export const CLOUD_LIGHTING_GLSL = /* glsl */ `
 const int CLOUD_SUN_STEPS = ${CLOUD_SUN_STEPS};
 const int CLOUD_SHAFT_STEPS = ${CLOUD_SHAFT_STEPS};
 const float CLOUD_ALBEDO = ${CLOUD_ALBEDO};
-const float CLOUD_MS_GAIN = ${CLOUD_MULTISCATTER_GAIN};
-const float CLOUD_DIFFUSION_K = ${CLOUD_DIFFUSION_K};
+const float CLOUD_MS_GAIN = ${CLOUD_OCTAVE_GAIN};
+const float CLOUD_TWO_STREAM_K = ${CLOUD_TWO_STREAM_K};
 const float CLOUD_SHAFT_RANGE_KM = ${f(CLOUD_SHAFT_RANGE_M / 1000)};
 const float CLOUD_AIR_SHADOW = ${CLOUD_AIR_SHADOW};
 
@@ -126,22 +128,44 @@ vec3 cloudScatteredRadiance(float tauLight, float cosView, float hFrac){
   float c = 1.0;   // phase eccentricity
   for (int n = 0; n < 4; n++) {
     float tau = tauLight * b;
-    // Octave 0 IS single scattering, so it gets exact Beer-Lambert. The higher
-    // octaves stand in for the diffusion regime, where a conservative slab
-    // transmits 1/(1 + k*tau) — the two-stream result — not exp(-tau). Using
-    // Beer for them is precisely why a naive octave march gives a 3 km
-    // nimbostratus a black underside instead of the flat grey it really has.
-    float trans = n == 0 ? exp(-tau) : 1.0 / (1.0 + CLOUD_DIFFUSION_K * tau);
+    /*
+     * Octave 0 IS single scattering, so it gets exact Beer-Lambert. The higher
+     * octaves stand in for the diffusion regime, where a conservative slab
+     * transmits 1/(1 + k tau) — the two-stream result — not exp(-tau). Using
+     * Beer for them is precisely why a naive octave march gives a 3 km
+     * nimbostratus a black underside instead of the flat grey it really has.
+     *
+     * AND k IS PER OCTAVE. 'c' is this octave's phase eccentricity and
+     * cloudPhase() uses g = 0.82 c, so k = 0.75 (1 - g) gives 0.38, 0.53, 0.62
+     * as the octaves get more isotropic — a later scattering order diffuses more
+     * and therefore attenuates more. One flat k = 0.19, which is the asymmetry
+     * of the FIRST scatter, under-attenuated all three by two to three times,
+     * and since they carry ~80 % of the signal that is what made cloud interiors
+     * flat: measured on the shipped constants, the sun term ran 2.81 at tau 2,
+     * 2.57 at tau 8 and 0.76 at tau 71 — non-monotonic, and under a factor of 4
+     * across two decades of depth.
+     */
+    float trans = n == 0 ? exp(-tau) : 1.0 / (1.0 + CLOUD_TWO_STREAM_K * (1.0 - 0.82 * c) * tau);
     float powder = 1.0 - exp(-2.0 * tau);
     float gain = n == 0 ? 1.0 : CLOUD_MS_GAIN * ms;
-    sun += a * gain * cloudPhase(cosView, c) * trans * mix(1.0, 2.0 * powder, powderMix);
+    /*
+     * Beer's-powder is the factor '(1 - exp(-2 tau))', and it used to be TWICE
+     * that. A factor that tends to 2 as tau grows is not a dark-rim term, it is
+     * a 2x gain on everything optically thick with a rolloff only at the thin
+     * edges — and because it is blended in by view-light angle, the 2x lands on
+     * the ANTI-SOLAR side. It was brightening precisely the shaded flank it was
+     * added to darken: measured on one frozen frame, a compact cumulus came back
+     * with its shaded flank BRIGHTER than its lit flank in scene-linear radiance,
+     * ratio 0.963.
+     */
+    sun += a * gain * cloudPhase(cosView, c) * trans * mix(1.0, powder, powderMix);
     a *= 0.5;
     b *= 0.5;
     c *= 0.6;
   }
 
   // Ambient arrives already carrying the 1/(4 pi) an isotropic phase would
-  // apply and the same multiple-scattering gain (see Radiometry.cloudAmbient*).
+  // apply and its own multiple-scattering gain (see Radiometry.cloudAmbient*).
   float up = hFrac * hFrac * 0.65 + hFrac * 0.35;
   vec3 amb = mix(uCloudAmbientBottom, uCloudAmbientTop, up) * (0.28 + 0.72 * up);
 
