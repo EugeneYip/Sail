@@ -198,9 +198,10 @@ void main() {
     float gLum = lwLuminance(col);
     float shape = (1.0 - smoothstep(0.35, 0.95, gLum)) * min(1.0, gLum / GRAIN_TOE);
     // White noise, and NOT 'animatedNoise'. That is interleaved gradient noise: a
-    // low-discrepancy lattice whose fractional part has a period near 2 px across
-    // and 3.2 px down. Exactly right for a dither TAA will average away over many
-    // frames, and a visible woven chequer when it is the still grain of one.
+    // low-discrepancy lattice whose fractional part advances 3.5557 per pixel
+    // across and 0.30927 down, so it repeats every 1.80 px and 3.23 px. Exactly
+    // right for a dither TAA will average away over many frames, and a visible
+    // woven chequer when it is the still grain of one.
     float mono = triangularNoise(hash12(gl_FragCoord.xy - vec2(uFrame * 0.3247180, uFrame * 2.2360679)));
     vec3 h = hash32(gl_FragCoord.xy + vec2(uFrame * 1.6180339, uFrame * 0.7548777));
     // Real film has per-layer grain, so some chroma belongs here — but only some.
