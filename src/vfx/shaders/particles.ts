@@ -251,6 +251,7 @@ void main(){
   vec2 axis = dl > 1e-4 ? d / dl : vec2(0.0, 1.0);
   bool drift = kind > 2.5 && kind < 3.5;
   bool sheet = kind > 0.5 && kind < 1.5;
+  bool fleck = kind > 3.5 && kind < 4.5;
   // A TORN SHEET IS NOT A BALL. Sheets took uStretch against a base size of
   // ~1 m, so 'dl * 0.028 / 1.0' gave about 1.3x elongation and every one of them
   // drew as a near-circular puff of the mist sprite — a metre-wide ball of
@@ -261,22 +262,50 @@ void main(){
   float stretchRef = sheet ? 0.25 : max(size, 0.02);
   float stretch = 1.0 + min(dl * stretchAmt / stretchRef, drift ? 14.0 : (sheet ? 7.0 : 6.0));
 
-  vec2 off = vec2(position.x * size, position.y * size * stretch);
-  vec2 o = vec2(off.x * axis.y + off.y * axis.x, -off.x * axis.x + off.y * axis.y);
-  mv.xy += o;
+  if (fleck){
+    // A RAFT OF FOAM LIES FLAT. Every other kind here is a body in the air and
+    // a camera-facing billboard is right for it; a fleck is pinned to the
+    // surface by the sim ('pos.y = wy + 0.04'), so a camera-facing quad stands
+    // it up VERTICALLY in the water like a coin on edge. That is most of why a
+    // field of them read as spheres rather than as foam: a circular sprite
+    // standing upright, with the depth-soft fade darkening the half that dips
+    // into the water, is a shaded ball — ablate the depth term and the same
+    // sprites are visibly flat-bottomed pucks instead.
+    //
+    // So build the quad in the world XZ plane, aligned to the particle's own
+    // horizontal drift, and rotate it into view space. It then foreshortens with
+    // viewing angle exactly as a patch of floating foam does, which is also what
+    // stops a 2 m raft at 25 m from covering 140 px of frame.
+    vec2 fl = length(V.xz) > 1e-3 ? normalize(V.xz) : vec2(0.0, 1.0);
+    vec2 rt = vec2(fl.y, -fl.x);
+    vec2 pl = rt * (position.x * size) + fl * (position.y * size * stretch);
+    mv.xyz += mat3(viewMatrix) * vec3(pl.x, 0.0, pl.y);
+    // Depth varies across a flat quad, and the depth-soft term compares against
+    // this, so it has to be the vertex's own depth and not the centre's.
+    vViewZ = -mv.z;
+  } else {
+    vec2 off = vec2(position.x * size, position.y * size * stretch);
+    mv.xy += vec2(off.x * axis.y + off.y * axis.x, -off.x * axis.x + off.y * axis.y);
+  }
   gl_Position = projectionMatrix * mv;
 
   // PER-PARTICLE SPRITE VARIATION. The quad is oriented along the screen-space
   // velocity, and every particle from one emitter shares nearly that velocity —
   // so without this every sprite in the fan showed the SAME texture at the SAME
   // orientation, which is what turns an anisotropic torn rag into a field of
-  // identical ovals. A rotation of up to +-0.35 rad plus a mirror in u gives
-  // four visually distinct draws of the same texture and costs two multiplies.
-  // The 0.80 inset keeps the rotated corners inside the sprite, where the
-  // texture's alpha is ~0 anyway.
-  float rot = (vSeed - 0.5) * 0.70;
+  // identical ovals. A rotation plus a mirror in u gives visually distinct draws
+  // of the same texture and costs two multiplies.
+  //
+  // The range is per-kind because the constraint is the inset: a rotated quad's
+  // corner samples at 'inset * sqrt(2)', so +-0.35 rad is as far as 0.80 goes
+  // before the corners leave the texture. A fleck's silhouette is distinctive
+  // enough that a 0.7 rad spread still reads as one repeated shape in a field of
+  // several hundred, so it insets to 0.70 (0.70 * sqrt(2) = 0.99) and takes the
+  // full turn. Mist and sheets read correctly as they are; they keep 0.80.
+  float inset = fleck ? 0.70 : 0.80;
+  float rot = fleck ? vSeed * 6.2831853 : (vSeed - 0.5) * 0.70;
   float cr = cos(rot), sr = sin(rot);
-  vec2 q = mat2(cr, -sr, sr, cr) * position.xy * 0.80;
+  vec2 q = mat2(cr, -sr, sr, cr) * position.xy * inset;
   if (fract(A.z * 7.31) > 0.5) q.x = -q.x;
   vUv = q * 0.5 + 0.5;
 
@@ -408,7 +437,17 @@ void main(){
     // surface uses (0.38), not a droplet's near-unit scattering. The bubble
     // channel varies the interior — a raft is not one flat tone, and a flat tone
     // is what made these read as paint however good the outline was.
-    if (fleck) col = 0.38 * (0.72 + 0.52 * tx.r) * (sky + sun * 0.9);
+    if (fleck) {
+      col = 0.38 * (0.72 + 0.52 * tx.r) * (sky + sun * 0.9);
+      // Same ceiling the mist path carries, and for the same reason: a raft of
+      // foam covers a lot of frame, and at full alpha a few hundred of them tile
+      // the near wake into one saturated white sheet. It is also honest about
+      // what this layer is — the ocean surface is drawing foam from the
+      // persistent wake field in the same water, so a fleck at alpha 1 is
+      // double-counting coverage that is already there. Half lets overlaps build
+      // density instead of reaching it in one sprite.
+      a *= 0.5;
+    }
     col += moon * 0.25;
   } else {
     // Mist / torn sheet: an optically thin scattering slab.
@@ -432,8 +471,14 @@ void main(){
 
   // Soft against the water: fade as the sprite approaches the real surface, so
   // spray dissolves into foam instead of showing a cut line.
+  //
+  // NOT FOR A FLECK, which is already foam. The sim pins it to 'wy + 0.04' and
+  // 'uSoftY' is 0.75 + waveHeight * 0.14, so 'smoothstep(-0.25, 0.90, 0.04)' was
+  // taking 84 per cent of a surface raft's alpha off for the crime of being on
+  // the surface. Its question is the opposite one — has the raft been pushed
+  // UNDER? — so the band sits below zero and a fleck at rest keeps its alpha.
   float above = vWorld.y - vWaterY;
-  a *= smoothstep(-0.25, uSoftY, above);
+  a *= fleck ? smoothstep(-0.40, 0.0, above) : smoothstep(-0.25, uSoftY, above);
   // Soft against the near plane so particles do not pop through the camera.
   a *= smoothstep(0.4, 1.6, vViewZ);
 
@@ -449,7 +494,17 @@ void main(){
   // Fade band scales with distance: at range a metre is sub-pixel, and a fixed
   // band there just makes far spray vanish.
   float band = (smoke ? 3.0 : 1.1) * (1.0 + vViewZ * 0.02);
-  a *= saturate1((sceneZ - vViewZ) / band);
+  // A FLECK'S OCCLUDER IS NOT THE WATER IT FLOATS ON. Its quad is now in the
+  // water plane 4 cm above the surface, so 'sceneZ - vViewZ' is the along-ray
+  // offset of 4 cm of height at a grazing view — 0.15 m from a chase camera —
+  // against a band of ~2 m. That crushed the flat prototype to nearly nothing
+  // and it is not an occlusion: the sea does not hide the foam on top of it.
+  // A bias of the same size as the band shifts the fade off the water entirely
+  // and leaves it doing the one job that IS occlusion here, softening the hull's
+  // silhouette edge; depthTest still hides a fleck that is genuinely behind
+  // geometry, so nothing is lost.
+  float bias = fleck ? band * 1.25 : 0.0;
+  a *= saturate1((sceneZ - vViewZ + bias) / band);
 #endif
 
   vec3 view = normalize(vWorld - uCameraPos);

@@ -362,36 +362,100 @@ export function makeMistTexture(size = 128): THREE.DataTexture {
  * crest's worth of them was a row of cotton tufts. A raft is flat, its outline
  * is jagged, and its interior is visibly cellular; all three are what
  * distinguishes it from a snowball at two metres.
+ *
+ * IT WAS STILL A SNOWBALL, and the number that says so is the radial alpha
+ * profile of the region the vertex shader actually samples — it insets to
+ * `position.xy * 0.80`, so texture radius beyond 0.8 is never seen:
+ *
+ *   old fleck  1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.99 0.96 0.79
+ *   droplet    1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 0.98 0.79   <- the sphere
+ *   mist       0.23 0.28 0.26 0.46 0.50 0.39 0.52 0.58 0.44 0.29
+ *
+ * The fleck was **69.7% fully opaque** over that inset against the droplet's
+ * 60.3% — more solid than the sphere it was written to replace — in ONE opaque
+ * component of 7151 px with nine 25 px specks beside it. The cellular detail
+ * was all there; it never reached the alpha channel, because
+ * `radial * (0.34 + 1.05 * cells)` carries an ADDITIVE FLOOR: where `cells` is
+ * zero the mask is still `0.34 * radial`, which clears a 0.19 threshold across
+ * the whole disc, so the cells could only brighten a solid silhouette from the
+ * inside. A field of these at 25-60 m is the cauliflower.
+ *
+ * The fix is the construction `makeMistTexture` already uses and §40 already
+ * proved: FLATTEN the field and threshold it at a coverage. Thresholding a
+ * flattened field has expectation exactly `c` at any ramp width, so the
+ * boundary can be as torn as the resolution allows while the area stays what
+ * was asked for — detail and correctness stop competing, and the peak coverage
+ * inside the raft becomes a stated number (0.62) instead of whatever an
+ * `sstep` on an unnormalised mask happened to leave.
+ *
+ * Two notes on the field it thresholds:
+ *   - it is Worley PLUS an fBm, not Worley alone. A raft made only of cell
+ *     cores is a tiling of equal convex polygons — cracked mud, which is a
+ *     different one-scale artefact and no improvement. The fBm breaks the
+ *     tiling into patches of unequal size.
+ *   - the envelope is a hard-warped radial (1.15 / 0.95 against the old
+ *     0.5 / 0.4) raised to 2.2, so the outline is a torn patch pulled off
+ *     centre rather than a circle with a wobble.
+ *
+ * The finest cell field is 19 across 128 px = 6.7 texels per cell. That is
+ * about the floor worth baking: the quad shows 102 texels, so at a sprite 40 px
+ * wide the mips have already averaged anything finer away.
+ *
+ * Measure with `.tmp/bake/silhouette.mjs`, which bakes this function in Node
+ * against a stub `three` and prints the profile above. Tuning a silhouette
+ * through captures is how a disc shipped under a comment calling it a raft.
  */
 export function makeFleckTexture(size = 128): THREE.DataTexture {
   const d = new Uint8Array(size * size * 4);
   const c = (size - 1) * 0.5;
-  const raft1 = featureGrid(6, 613);
-  const raft2 = featureGrid(15, 907);
+  const raft = featureGrid(9, 907);
+  const bub = featureGrid(19, 1511);
+  const patch = fbmStack(4, 4, 3, 613);
   const warp = fbmStack(3, 3, 2, 4001);
   const fine = fbmStack(8, 8, 3, 8087);
+  const n = size * size;
+  const field = new Float32Array(n);
+  const torn = new Float32Array(n);
+  const env = new Float32Array(n);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = (x + 0.5) / size;
       const v = (y + 0.5) / size;
+      const i = y * size + x;
       const w = fbmS(u * 3, v * 3, warp) - 0.5;
       const g = fbmS(u * 8, v * 8, fine);
-      const nx = ((x - c) / c) * (1 + 0.5 * w);
-      const ny = ((y - c) / c) * (1 - 0.4 * w);
-      const radial = sat(1 - Math.hypot(nx, ny));
+      torn[i] = 1 - Math.abs(g * 2 - 1);
       // k scales with the cell count — see the note in makeFoamTexture.
-      const cells =
-        cellCore(u * 6, v * 6, 6, raft1, 7.5) * 0.58 +
-        cellCore(u * 15, v * 15, 15, raft2, 18.8) * 0.42;
-      const torn = 1 - Math.abs(g * 2 - 1);
-      const mask = radial * (0.34 + 1.05 * cells) * (0.62 + 0.66 * torn);
-      const alpha = sstep(0.19, 0.36, mask);
-      const i = (y * size + x) * 4;
-      d[i] = b(cells);
-      d[i + 1] = b(g);
-      d[i + 2] = b(Math.pow(radial, 1.6) * (0.5 + 0.5 * cells));
-      d[i + 3] = b(alpha);
+      const coarse = cellCore(u * 9, v * 9, 9, raft, 11.25);
+      const bubbles = cellCore(u * 19, v * 19, 19, bub, 23.75);
+      field[i] = coarse * 0.42 + bubbles * 0.30 + fbmS(u * 4, v * 4, patch) * 0.28;
+      const nx = ((x - c) / c) * (1 + 1.15 * w);
+      const ny = ((y - c) / c) * (1 - 0.95 * w);
+      env[i] = sat(1 - Math.pow(Math.hypot(nx, ny), 2.2));
+      d[i * 4] = b(coarse * 0.45 + bubbles * 0.55);
+      d[i * 4 + 1] = b(g);
     }
+  }
+  flattenField(field);
+  for (let i = 0; i < n; i++) {
+    // Peak coverage inside the raft. 0.60 leaves 40% of it open water, which is
+    // what lets two overlapping flecks read as one broken sheet instead of two
+    // stacked tokens.
+    //
+    // The 0.14 ramp is slightly wider than the mist sheet's 0.13. A field
+    // thresholded with a narrow ramp is binary, and a first pass at 0.62/0.11
+    // made every raft a hard-edged opaque patch: measured on the `night` frame
+    // the fleck mask went from 758 components to 52 and the share of runs 3 px
+    // or under collapsed from 54% to 9.8% — discrete discs traded for two merged
+    // sheets of pack ice, the same one-scale failure in different clothes. Some
+    // of the sprite has to sit in partial alpha, because partial alpha at high
+    // spatial frequency is what fine structure IS.
+    const cov = env[i] * 0.60;
+    const bite = Math.min(cov, 1 - cov) * 2;
+    const thr = 1 - cov + bite * (torn[i] - 0.5) * 0.66;
+    const alpha = sat((field[i] - thr + 0.07) / 0.14);
+    d[i * 4 + 2] = b(Math.pow(env[i], 1.3) * (0.45 + 0.55 * field[i]));
+    d[i * 4 + 3] = b(alpha);
   }
   return tex(d, size, size, false);
 }

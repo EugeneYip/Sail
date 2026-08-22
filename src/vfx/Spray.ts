@@ -293,11 +293,30 @@ export class Spray {
     }
   }
 
-  /** Aerated foam riding the surface in the turbulent core astern. */
+  /**
+   * Aerated foam riding the surface in the turbulent core astern.
+   *
+   * RATE AND SIZE TOGETHER, because they trade against each other. 340/s of
+   * `0.28 + rand * 0.85` is a UNIFORM size over a 4:1 range, which puts every
+   * fleck in the field at one apparent scale — measured off the `night` capture,
+   * component widths of p10 13 / p50 27 / p90 80 px with 54% of the mask's runs
+   * at 3 px or under, i.e. one scale of blob plus its own antialiased rim, and
+   * nothing in between. That is half of why the field read as cauliflower rather
+   * than as broken water; the other half was the sprite (see `makeFleckTexture`).
+   *
+   * `0.13 + rand^2.4 * 1.25` is a 10:1 range weighted hard to the small end —
+   * the same shape the bow droplets already use for the same reason — so the
+   * field has a few large rafts, many small ones and a continuum between.
+   *
+   * The count rises with it because coverage goes as size squared: E[s^2] falls
+   * from 0.557 to 0.382, so 560/s lays down about 1.13x the old area from 1.65x
+   * the sprites. The frame budget is untouched at ~9 per frame against a
+   * MAX_EMIT of 2048.
+   */
   private wakeFlecks(ctx: VfxCtx, p: Particles, dt: number, d: number): void {
     const sN = ctx.speedN;
     if (sN < 0.14) return;
-    this.accFleck += 340 * Math.pow(sN, 1.6) * d * dt;
+    this.accFleck += 560 * Math.pow(sN, 1.6) * d * dt;
     let n = Math.floor(this.accFleck);
     this.accFleck -= n;
     n = Math.min(n, p.room);
@@ -324,10 +343,11 @@ export class Spray {
       _b.copy(ctx.windVel).multiplyScalar(0.10);
       _b.addScaledVector(ctx.fwd, -0.4 - Math.random() * 0.8);
       _b.y = 0;
+      const fine = Math.random();
       p.spawn(
         _a.x, _a.y, _a.z, _b.x, 0, _b.z,
         2.5 + Math.random() * 4.0,
-        0.28 + Math.random() * 0.85,
+        0.13 + Math.pow(fine, 2.4) * 1.25,
         KIND.FLECK, 0.05,
       );
     }
