@@ -6714,3 +6714,135 @@ inferring them from the composite, which is what every arm above had to do.
 **No fix committed.** The wake channel is confirmed as the source and two
 mechanisms are eliminated, which is real progress, but nothing here justifies
 source changes yet — and P2 still forbids resolving it by globally blurring foam.
+
+## 96. P2 closed: both halves are the `linstep`'s margin, and the fix is its ramp width
+
+Completes §94 and §95. Source: `7db3c9b`.
+
+### The instrument
+
+Per-quantity debug arms: the ocean's fragment output is replaced with one
+intermediate scalar as greyscale, plus an **in-frame calibration ramp** along the
+bottom 42 rows (`dbg = gl_FragCoord.x / 1600`), so display codes invert back to
+shader values under that arm's own exposure. `autoExposure` off and the spatial
+post terms off, so the transfer is fixed and nothing smears between regions. Two
+extra arms output constant 0 and 1 to build an **ocean mask** by identity — the
+debug output only replaces the *ocean* material, so hull pixels would otherwise
+invert to garbage. Captures are taken at each quantity's definition point, because
+several of these locals are reused later in `main()`.
+
+Measured: `0.0 -> code 0`, `1.0 -> code 224` (AgX compresses the top), hull 124 in
+both.
+
+**A circularity I caught in my own first pass.** I initially defined the plate mask
+as pixels where `foam > 215`, then reported that `decide` exceeded the threshold
+window there. That is selecting on the outcome. Redone on **geometric bands** —
+distance in pixels below each column's hull/water silhouette, no reference to foam
+at all.
+
+### The chain, per band, before the fix
+
+| | 0-25 px | 26-60 | 61-110 | 111-200 | 201-400 |
+|---|---|---|---|---|---|
+| `wk.r` | 0.655 | 0.709 | 0.709 | 0.255 | 0.007 |
+| `wakeFoam` | 0.631 | 0.696 | 0.681 | 0.207 | 0.003 |
+| **`cover` before wake** | **0.003** | **0.007** | **0.007** | 0.014 | 0.014 |
+| `cover` final | 0.556 | 0.606 | 0.606 | 0.200 | 0.014 |
+| `1 - cover` | 0.444 | 0.394 | 0.394 | 0.800 | 0.986 |
+| `thr` | 0.410 | 0.324 | 0.366 | 0.816 | 0.983 |
+| `decide` | 0.430 | 0.469 | 0.522 | 0.415 | 0.495 |
+| `wThr` | 0.061 | 0.061 | 0.061 | 0.061 | 0.061 |
+| **`(decide - thr)/wThr`** | **0.33** | **+2.37** | **+2.55** | **-6.55** | **-7.97** |
+| `foam` | 0.838 | 0.981 | 0.935 | 0.003 | 0.003 |
+
+### The answer to both halves
+
+**The exact operation is the `linstep` in the foam decision**, and A and B are the
+same statement about its margin:
+
+- **A, the featureless cream plateau.** Where `(decide - thr)/wThr` exceeds +1 the
+  `linstep` **clamps**. At +2.37 and +2.55 it is pinned at 1 across the whole band,
+  so *every* spatial structure in `decide` is discarded. The plate is not a smooth
+  input being drawn faithfully; it is a structured input being thrown away.
+- **B, the adjacent crazed near-solid foam.** The same ramp, half-width 0.061
+  against a `decide` spread of roughly 0.6, is a near-binary step. Where the margin
+  is near zero it yields hard-edged islands with thin fissures instead of graded
+  density.
+- **The ruled boundary between them** is where the margin sweeps that narrow
+  window, and it is abrupt because `cover` falls 0.606 to 0.200 between adjacent
+  bands as the wake field's own coverage drops away.
+
+### Two findings that reframe §94 and §95
+
+1. **`cover` before wake injection is 0.003 to 0.014 across the entire near field.**
+   The ocean contributes essentially no foam of its own alongside the hull, so the
+   wake is the *sole* source of coverage and **there was never any ocean detail
+   being replaced** — §94's framing was wrong twice over, and §35's "the ocean has
+   to add the breakup" is right: it currently adds none, because both `instant` and
+   `persistent` are ~0 there.
+2. **`thr` tracks `1 - cover` to within 0.05 in every band.** §40's zero-mean
+   construction is **intact**; the mean coverage was never the defect. That is what
+   makes the ramp width the safe knob.
+
+### Negatives preserved, all still standing
+
+- `waterYAt` / `vfx-hull-skirt` excluded (§94): the artefact survives hiding every
+  vfx mesh.
+- Near-hull `wThr` footprint widening excluded (§95), now doubly: `wThr` measures
+  an identical 0.061 in all five bands, pinned at its floor, so the `pxWorld` path
+  is not engaged here at all. It remains a plausible *far-field* story.
+- `cover <= 0.85` was a semantic no-op (§95): the wake's ceiling is 0.674, so the
+  clamp never bound. Proving the string was patched is not proving the constraint
+  binds.
+- Simple saturation-collapse refuted (§95): `bite` is 0.87 at these coverages, not
+  collapsed, and clamping cover to 0.45 barely opened the plateau.
+- `wakeFoam = 0` causally removes the plate (§95).
+
+### The fix, and why it is not a blur
+
+Widen the ramp **only where the wake supplies the coverage**:
+
+    wThr = max(wThr, 0.05 + 0.42 * smoothstep(0.20, 0.62, wakeFoam * 0.88));
+
+`E[linstep(t - w, t + w, d)] = 1 - t` at **any** width for zero-mean `d`, and
+finding 2 above shows that identity holds here, so **mean coverage does not move** —
+this is not a strength reduction and not a way of hiding the edge. It is keyed to
+`wakeFoam` rather than total `cover` so natural whitecaps keep the shipped ramp: a
+gale's own coverage is around 0.15 and must still tear. And it is a change to the
+*decision*, not a filter over the output — no neighbourhood is averaged anywhere.
+
+### Acceptance
+
+Mechanism level, post-fix bands: `margin/wThr` is **0.23 and 0.118** in the froth
+bands against +2.37 and +2.55 before, so the clamp is gone and `foam` grades
+(0.630, 0.575) instead of switching. `wThr` is 0.446-0.458 in the froth and an
+untouched 0.061 beyond the wake. (These are a separate page load from the
+before-run, so `cover` differs there for unrelated reasons; the same-frame
+comparison is below.)
+
+Same-frozen-frame A/B, ramp stripped by string patch:
+
+| | before | after |
+|---|---|---|
+| close-side froth HF | 5.72 | **3.71** |
+| close-side tight plate mean | 188.5 | 186.5 |
+| close-side tight plate % flat (±4) | 32.9 | 27.9 |
+| close-astern froth HF | 6.91 | 5.73 |
+| close-side far box mean | 72.3 | 72.3 |
+| bow-head far box mean | 54.0 | 54.1 |
+| close-astern far box mean | 118.9 | 119.1 |
+| open-orbit far box HF | 1.45 | 1.45 |
+
+**Open-sea and far-field foam are unchanged to within a tenth of a code**, which is
+the non-regression requirement. Verified visually at close-side (dead-flat band
+gains graded mottling; the abrupt transition softens), close-astern (hard-edged
+cut-out patches become graded aerated water, wake extent preserved) and bow-head
+(unchanged, as expected — the froth is behind the station).
+
+### The one judgement left for the owner
+
+Within the wake, the froth's *character* changes: crisp binary islands become
+graded density. That is the defect being removed rather than hidden — coverage is
+preserved and open sea is untouched — but how crisp the froth should read is a look
+decision, and the single constant `0.42` is where to tune it. Lower it toward 0.05
+to move back toward the shipped crispness.
