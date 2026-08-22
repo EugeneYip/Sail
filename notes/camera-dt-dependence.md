@@ -425,3 +425,26 @@ is 0.75-0.98 m/s against 0.09-0.28 on the whole-multiple arm — **four times mo
 ship-relative camera motion under a clock with the same mean interval.** A
 mode-independent, magnitude-dominated effect that the ShipFrame sub-stepping does
 not touch is unlikely to be in ShipFrame. Investigated next.
+
+### Cost, and the existing camera assertions
+
+`.tmp/camcost.mjs`, paired alternating bursts of 4000 direct calls to
+`ShipFrame.update` at dt = 1/60, median of six bursts (CPU inside the method
+only — this is not a frame-cost claim, and other renderers were on the box):
+
+    one step of the frame dt   0.800 us
+    sub-stepped at 1/240       3.125 us
+    delta                      2.325 us per frame
+
+2.3 us against a 16.67 ms budget is 0.014%. Four passes of scalar arithmetic and
+two slerps, as advertised.
+
+`.tmp/camdrag.mjs` (the existing 52-assertion probe: drag directions per mode,
+the yaw circle, the recentre, hold/stall handling, composition, pitch
+saturation): **50/52 pass.** Both failures are `cinematic`'s differential pan
+test, whose own header explains the confound — the director's autonomous motion
+has to cancel between the two passes and does not. `.tmp/camdrag.log` from 19 Aug
+records `cinematic / the yaw pan reaches the axis (differential)` already failing,
+plus two failures that now pass (`chase / a 3 s stall AFTER release` and
+`bowsprit / can look forward over the bow`). Nothing in `helm`, `bowsprit` or
+`masthead` fails.
