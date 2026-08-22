@@ -5881,7 +5881,7 @@ brass −136) and **no new draw calls** — geometry only moved between bins tha
 out against ten rival renderers); any frame cost (every run came back `LOADED` or `CONTENDED`);
 and the knee from a waterline or below-water camera.
 
-## 87. The sail "film" is the sail, and the cause is a probe with no sea in it
+## 87. The sail "film" is the sail, not a hole — and a probe with no sea in it is the leading suspect
 
 Integrated from `notes/sail-see-through.md`, whose agent has reported completion. **No source
 change** — it isolated the cause and stopped, which was the right call.
@@ -5907,8 +5907,22 @@ full sphere, so the lower hemisphere is sky-bright: mean radiance 0.306, **strai
 Independently reconfirmed on the main tree: **36.0% of a vertical surface's cosine-weighted
 irradiance arrives from below the horizon**, from a hemisphere that should be dim sea.
 
-That is `src/sky`, not the sail, and it is the actual root cause. Correcting it inside the sail
-alone moves the ratio only 0.601 → 0.519.
+That is `src/sky`, not the sail. **It is a verified environment-lighting defect in its own
+right** — the numbers above are measured and reconfirmed, and a probe whose nadir outshines its
+zenith is wrong whatever else is true.
+
+**But it is not yet the confirmed root cause of the sail film, and must not be written up as
+one.** What exists is a *contribution* measurement: single-term ablation attributes 67% of the
+sail's outgoing radiance to the probe. That is strong causal evidence and it is not proof,
+because removing 67% of a term is not the same as demonstrating that correcting the term's
+*hemisphere* materially removes the artefact — the replacement radiance could land in the same
+hue and read the same way. Correcting it inside the sail alone moved the ratio only
+0.601 → 0.519, which is consistent with either reading.
+
+**The test that would settle it:** a same-view causal A/B, holding the station, frame, clock and
+exposure fixed, changing *only* the lower-hemisphere contribution, and showing the film go. Until
+that is run, the standing statement is: **verified environment-lighting defect; strongest causal
+candidate for the close-view sail film; root cause not confirmed.**
 
 **The "clouds" painted on the canvas are `sheenSpecularDirect`** — rendering that accumulator
 alone gives a black frame containing exactly those patches.
