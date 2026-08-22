@@ -306,3 +306,32 @@ reason `npm run typecheck` currently reports one error, in that file only. It
 breaks the bulwark GEOMETRY, not `world.ship.position/quaternion`, so the jitter
 statistic is unaffected; but it does explain the black block in a bowsprit
 screenshot taken tonight.
+
+### A third arm, and it found something the first two could not
+
+`.tmp/jitter2.mjs` now carries a **fractional** arm as well as §85a's whole-refresh
+multiples: `1.0, 1.37, 0.82, 2.4, 1.1, 3.2, 0.9, 1.6, 1.05, 2.1` frames, same mean
+interval. Whole multiples are the best case for any fix that quantises the frame
+into sub-steps, so a fix scored only on them is a fix scored on its own terms.
+
+It immediately showed something §85a's arm hides. `chase`, the CONTROL, on the
+fractional clock:
+
+    dZ reversals 53-63%, both before and after the ShipFrame fix
+    (whole-multiple arm: 5-7%.  uniform arm: 0.3%)
+
+So there is a **second** instance of the same mechanism that my change does not
+touch, in the tethered path: `CameraRig.smooth` (`posSmoothTime` 0.34 for chase,
+0.30 for orbit) and each mode's own internal springs are still single-step
+zero-order holds. Their lag spread is the same ~25 ms, and chase's residual moves
+at 1-3 m/s, so the step is 25-75 mm against 25-75 mm of genuine per-frame travel —
+comparable, hence a coin-flip on the sign. Whole multiples repeat, so the wobble is
+periodic and reverses rarely; fractional intervals never repeat, so it reverses
+about half the time.
+
+That is not §85a's defect — the mode selectivity §85a measured is proven to be the
+`ShipFrame` terms by the ablation above — but it is the same disease one layer out,
+and it is the concrete form of "a residual player-visible component may remain even
+if the table goes green". Fixing it means sub-stepping the rig's OUTPUT filter,
+which needs the mode's solved pose interpolated across sub-steps rather than
+re-solved, and that is a separate change with its own risk. Not attempted here.
