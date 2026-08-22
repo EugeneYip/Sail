@@ -5352,3 +5352,109 @@ sessions claimed §75 concurrently), and the far-field `Nlow` work landed with i
 every row, where a flat plate is near zero, and the crop shows planking, gunport stripe, gun
 muzzles and copper sheathing. The AgX row-sum invariant holds at 1.0000000 on all three rows
 of the integrated file. §71's log-space contrast branch survived the LookLut overwrite.
+
+## 82. The bow-wave cauliflower was `KIND.FLECK`, and it was four defects stacked
+
+Integrated from `notes/fleck-cauliflower.md` — the first note written under the
+concurrency convention in §81, and the first that `preflight` surfaced while it was
+still untracked on disk.
+
+Localised by frozen-frame ablation (`Engine.stop()` then `tick(lastTime)`, so `raw = 0`
+and every module updates against `dt = 0`, making every variant the same frame with one
+term removed): `noFLECK` → the blob field is **gone entirely**; `onlyFLECK` → **reproduced
+exactly**; `noSHEET`/`noMIST`/`noDROPLET`/`noSPINDRIFT` → unchanged. `KIND.FLECK` has one
+spawn site in the tree, so the defect was completely localised before anything was changed.
+
+### It corrected my brief twice
+**The blobs are not clipped highlights.** I briefed them as "near 255". Measured over the
+field's own rectangle: p50 **9.1**, p99 94.7, **max 104.7** — and the same 104.7 is the max
+in the bow wash, because both are the same material at full coverage. The 255s in that frame
+are stars and HUD type; only 0.05% of the frame is at or above 200. What makes it read as
+blinding is the **ratio** — 105 against a sea at 11 is 9.5×. Nothing about the defect
+changed, but a later session should not go hunting a blown highlight.
+
+**The soft-particle fade was engaging.** I suspected it was not. The fault is the opposite:
+both softness terms are written for a body in the air and a surface raft fails both.
+`a *= smoothstep(-0.25, uSoftY, above)` with `above` = 0.04 and `uSoftY` 0.90 evaluates to
+**0.157** — it was taking 84% of a surface raft's alpha off for the crime of being on the
+surface.
+
+### The four defects
+1. **The sprite was a disc under a comment calling it a raft.** One additive floor did it:
+   `mask = radial * (0.34 + 1.05 * cells)` still gives `0.34 * radial` where `cells` is
+   zero, which clears the 0.19 threshold across the whole disc — so every ingredient the
+   comment claimed (F2−F1 cell cores, a warp, a torn fractal) **could only ever brighten a
+   solid silhouette from the inside**. Measured over the region the vertex shader actually
+   samples (it insets to 0.80, so radius past that is never seen): **69.7% fully opaque
+   against the droplet sphere's 60.3%**, in one opaque component of 7151 px. Fixed with
+   §40's construction — flatten the field and threshold at a stated coverage — giving mean
+   inset alpha 0.306, opaque share 24.0%, 59 components, and a radial profile that never
+   saturates. The field is Worley **plus** an fBm: Worley alone is a tiling of equal convex
+   polygons, i.e. cracked mud, a different one-scale artefact. That was built by mistake
+   first and is worth not rebuilding.
+2. **A camera-facing billboard stood the raft on edge.** A fleck is pinned to the surface by
+   the sim (`pos.y = wy + 0.04`), so a camera-facing quad plants it vertically like a coin
+   on edge — and *that*, not the texture, is why they read as **spheres** specifically. The
+   proof: ablate the depth-soft term and the identical sprites become flat-bottomed pucks,
+   because the top-bright/bottom-dark gradient that reads as a lit ball is the soft fade
+   darkening the half of an upright disc that dips into the water. The quad is now built in
+   the world XZ plane and rotated into view, so a 2 m raft at 25 m no longer claims 140 px
+   of frame height.
+3. **Both softness terms, per the correction above.** A fleck's surface fade now asks the
+   opposite question — *has it been pushed under?* — and the depth term gets a bias of
+   1.25 × band, leaving it doing the one job here that really is occlusion: softening the
+   hull's silhouette edge.
+4. **One uniform size and one repeated picture.** `0.28 + rand * 0.85` is uniform over 4:1,
+   so every fleck sat at one apparent scale; now `0.13 + rand^2.4 * 1.25`, a 10:1 range
+   weighted hard to the small end. Rate 340 → 560/s because coverage goes as size squared
+   (E[s²] falls 0.557 → 0.382). Per-particle variation was a ±0.35 rad rotation and a
+   mirror in u — every fleck the same picture at nearly the same angle — and is now the full
+   turn.
+
+### The measurement that actually shows it, and the one that does not
+**Component counts do not measure structure at more than one scale**, and were used first by
+mistake: separated discs score 758 components because black water lies between them, while a
+continuous trail that is visibly broken *internally* scores 73, because a low mask threshold
+links the patches. That is mask connectivity, not how the field reads.
+
+A **Laplacian pyramid** does measure it — contrast energy per spatial octave, normalised:
+
+| | 2 px | 4 px | 8 px | 16 px | 32 px | 64 px |
+|---|---|---|---|---|---|---|
+| before (discs) | 6.8% | 8.7% | 13.9% | 18.7% | 23.4% | **28.5%** |
+| after (rafts) | 7.9% | 12.3% | 17.0% | 20.0% | 22.1% | 20.7% |
+
+Before, energy climbs monotonically to the coarsest octave — **one scale of blob plus its own
+smooth rim, which is what "cauliflower" means numerically.** After, the peak has moved off the
+coarsest bin and the profile is flat from 4 to 64 px, with the 4 px octave carrying 2.4× the
+absolute contrast. Some of the absolute rise is simply more foam present; the *shape* of the
+normalised profile is the structural claim.
+
+### No shimmer regression, and it was worth checking
+Flat quads go near edge-on at range, and a sub-pixel high-contrast sprite is one of
+`RUBRIC.md`'s automatic failures. Wall-clock frame pairs cannot measure it, because the sim
+advances and the foam genuinely moves; stepping `tick(lastTime + 16.67)` by hand gives pairs
+separated by a known identical interval. Far-band mean |Δframe| 1.09 → 1.20 codes with the
+**peak excursion falling 37 → 30**, and the far band stays quieter than the near one, which
+is the correct ordering — aliasing would show as a far-band spike *above* the near.
+
+### Two instrument faults, and a standing blind spot
+- **`w.bus.emit('capture:scene', …)` is what dismisses the title card.** The first ablation
+  ran without it and shot every variant through `.intro`'s radial scrim, measuring the field
+  at roughly half its shipped codes. The attribution was unaffected; the numbers were wrong
+  and looked reasonable. `capture.mjs` has a tripwire for exactly this (§44) — any probe that
+  drives the page needs the same two lines.
+- **`world.ship` has no `speed`** — it publishes `speedKnots`, and `.speed` returns
+  `undefined` and prints `NaN kn`.
+- **The scene list has no framing that looks down a wake from close astern.** `orbit` is
+  110 m beam-on with the wake edge-on and distant, which is why this never showed there;
+  `night` is a 76 m chase that puts the wake between camera and ship at 25–60 m. **Any future
+  wake defect will hide in the same place.** That is the third time a blind spot has been a
+  hole in the scene list rather than in the engine (§62, §78).
+- `fov` is 30°, so metres-to-pixels is 1680/d at 900 px — a **1.7× magnification** over a 50°
+  lens. Anything sized by eye in a wider-fov engine reads large here.
+
+**Still open, deliberately:** the largest rafts read slightly lumpy at 1:1 in the near field.
+Four rafts in a 2×2 atlas selected by seed would cost nothing and remove the last repetition,
+but the full-turn rotation already broke the visible cloning, so it is left for a fresh
+complaint rather than done speculatively.
