@@ -5962,3 +5962,140 @@ measured at a single sun elevation.
 The hull reads 0.184 linear with a **neutral** B−R, and the white gunport stripe is only
 **1.49× brighter** than the "black" topsides. That is a hull *albedo* problem, separate from
 this one.
+
+## 88. Close-camera jitter in mounted modes was a zero-order hold on a moving target
+
+Supersedes §85's "not reproduced" and corrects §85a's acceptance statistic. Work
+by the `claude/camera-*` session, recorded in `notes/camera-dt-dependence.md`
+(now folded in and deleted); acceptance re-run independently by the integrating
+session on `.tmp/jitterrel.mjs`.
+
+**Root cause.** `ShipFrame`'s filters are exponential smoothers stepped once per
+frame. A one-step-per-frame smoother chasing a target that is itself moving
+settles to a lag of `v/rate - v*dt/2 + O(dt^2)` — the lag is a **function of the
+frame interval**, so every change in `dt` steps the output. Three facts follow and
+all three were measured:
+
+1. `mountPos` carries most of the amplitude. A 23.85 ms spread in lag at ~4 m/s of
+   way is ~95 mm of fore-and-aft step, which is why `dZ` is the worst axis and why
+   it is nearly equal across the three mounted modes.
+2. The attitude cascade multiplies by the lever arm — 16 to 38 m depending on the
+   mount — which is what separates `dY` by mode.
+3. Only the mounted modes show it because they are the only ones with no output
+   filter: HELM, BOWSPRIT and MASTHEAD take `mountPos`/`smoothQuat` straight to
+   the eye at `posSmoothTime = 0`, while CHASE and ORBIT pass the same step
+   through a 0.30-0.34 s output spring that smears it over ~20 frames so it never
+   reverses sign.
+
+**Fix** (`src/camera/ShipFrame.ts`, commit `c370272`). `update` runs
+`ceil(dt / FILTER_SUBSTEP)` equal sub-steps with the raw ship transform
+interpolated across them — lerp position, slerp attitude, linear scalars.
+`FILTER_SUBSTEP = 1/240`, not `1/60`: the sub-step *count* is an integer, and at
+`1/60` it flips between 1 and 2 exactly as `dt` crosses 16.7 ms — where players
+live — and that flip is itself a 4 ms lag step. Measured lag spread, as-is vs
+sub-stepped: mount 23.85 -> 0.33 ms, attitude 43.79 -> 0.69 ms, anchor
+24.81 -> 0.31 ms. `ShipFrame.substep` is left writable so a probe can collapse the
+loop to a single step.
+
+**Acceptance, re-measured independently by the integrating session** — five modes,
+one page load, regular clock plus two irregular repeats, on the corrected
+ship-relative frame (`inverse(shipQuat) * (camPos - shipPos)`, and
+`inverse(shipQuat) * camQuat` for attitude), whole-multiple irregular sequence:
+
+| mode | REG rev | IRREG rev x2 | was (irreg) |
+|---|---|---|---|
+| chase (control) | 0.5% | 1.1 / 0.8 | 0.8% |
+| orbit (control) | 0.8% | 0.8 / 0.8 | 0.7% |
+| helm | 0.5% | 0.8 / 0.8 | 3.5% |
+| bowsprit | 1.0% | 1.5 / 0.8 | 12.7% |
+| masthead | 0.5% | 1.1 / 0.8 | 12.2% |
+
+All three mounted modes return to the control floor; relative angular reversals
+are 0.0% throughout. **Magnitude, not only reversal rate:** irregular-arm
+`|dpos|/s` fell for all three (helm 0.418 -> 0.135/0.117, bowsprit
+0.323 -> 0.080/0.112, masthead 0.312 -> 0.254/0.189). Regular-arm magnitude *rose*
+for helm (0.107 -> 0.317) and masthead (0.173 -> 0.364), but ship `dAng/s` rose
+2.36x and 2.06x in those same samples while the camera residual rose 2.96x and
+2.10x — proportional, so it tracks sea state, not the fix. **P3 is accepted on the
+camera side.**
+
+**What this does not close.** See §89: on a *fractional* clock the same statistic
+is dominated by the hull, so it cannot be used as a camera acceptance test there
+at all. The acceptance above is valid because it uses whole multiples, on which
+the hull is independently confirmed smooth.
+
+## 89. The hull's heave is frame-rate dependent on fractional clocks — and the field it stands on is rough by design
+
+Found by the camera session as a control ("a camera filter cannot fix a target
+that jitters"), then reproduced and narrowed by the integrating session. Not in
+`src/camera`. **Not fixed — recorded.**
+
+**The statistic and why it is valid.** The reversal rate of the per-frame *change*
+in the hull's own velocity. For a smooth trajectory this cannot be large:
+`v_i = dy_i/dt_i` is `y'` at the interval midpoint by the mean value theorem, the
+midpoints advance monotonically however unevenly they are spaced, so
+`sign(dv_i) = sign(y'')`, and `y''` turns over only at the swell period. A large
+value means the hull's position itself is not smooth. (The coarser statistic —
+reversals of `vy` itself — reads 0.8% whatever happens underneath, because the
+swell dominates its sign. That is why §85a missed this.)
+
+**Reproduced**, `chase`, sea state 3, five runs, same mean interval throughout:
+
+| clock | hull d\|vy\| reversals | rms |
+|---|---|---|
+| whole multiples of 16.67 ms | 0.8, 1.1% | 0.0213 m/s |
+| fractional multiples | 64.7, 68.8, 64.3% | 0.43 m/s |
+
+A **20x amplitude increase** in vertical acceleration noise, not merely a sign
+statistic. Player-visible in every view including `chase`, on exactly the clock a
+real machine delivers.
+
+**Confined to the vertical channel.** Horizontal `d|speed|` reversals are 4.8-6.7%
+on the fractional arm and 6.1-8.7% on whole multiples — no separation. The camera
+note reports 64-72% for its speed statistic; that is very likely a 3-D speed,
+which inherits the vertical chatter, so this is a refinement of that row rather
+than a contradiction of the section's claim.
+
+**Two hypotheses eliminated.**
+
+1. *Not the CPU wave field's round-robin snapshot-span prediction.* `CpuWaves`
+   brackets the present as `[tA, tB]` with `tB = t + (t - lastTurn)`, so the
+   present sits inside the bracket only while a cascade's turn interval does not
+   shrink. That predicts the defect should track whether each cascade sees a
+   constant span, i.e. sequence length vs cascade count. Tested directly with four
+   cascades: whole multiples of *coprime* length 5 (varying span) is **clean at
+   1.1%**, and fractional of *aligned* length 4 (exactly constant span) **chatters
+   at 73.6%**. Falsified in both directions.
+2. *Not a fixed-timestep accumulator.* There is none. `Engine.ts:177` is
+   `time.dt = Math.min(Math.max(raw, 0), 0.1)` — raw dt, clamped only, passed
+   straight through. No quantisation anywhere in `src/`.
+
+**And the field is rough on both clocks, by design.** Sampling `IOcean.sample()`
+at a fixed world point with no hull and no camera in the loop, the *field's* own
+second difference reverses 72.2% (whole multiples) and 68.2% (fractional) — no
+separation. This is the documented interpolation scheme doing what it says:
+`CpuWaves` re-solves one cascade per frame and interpolates each cascade linearly
+between two snapshots, so `dh/dt` is piecewise constant and its difference is
+impulsive at every breakpoint, with a breakpoint every frame. The amplitude is
+millimetric (the file's own bound is under 2 mm at 60 fps), so this is harmless in
+itself — but it means the field is **not** the discriminator, and this statistic
+cannot attribute a subsystem on its own.
+
+**Where that leaves attribution.** The hull normally *rejects* the field's designed
+roughness — 1.1% out of a ~70% input — and on a fractional clock it stops
+rejecting it. So this is an interaction between the field's piecewise-linear time
+advance and the hull's integration, and the discriminating variable (whole vs
+fractional multiples of the *refresh* period, at equal mean interval) is not yet
+explained. Attribution to `src/physics` is **not** established; the camera note's
+"the ship's solver is frame-rate dependent" is narrower than the evidence
+supports. Note also that `src/physics/index.ts` records the solver's frame-rate
+independence as verified at *constant* dt (30 vs 144 fps) — the same blind spot
+§85 had.
+
+**Consequence for camera work.** The residual of a low-pass IS the high-frequency
+content of its input, so on a fractional clock a camera residual measures the
+hull. Confirmed by ablation: feeding the eye the *raw* hull position cuts the
+masthead residual by 73%, which is not an improvement — it means the camera then
+follows the chatter instead of rejecting it, which is what `ShipFrame` exists to
+prevent. **Do not use the §88 acceptance statistic on a fractional clock until
+this is fixed.**
