@@ -5588,3 +5588,86 @@ the lines removed, because the fix is in a baked texture an in-page ablation can
 low deck is measured unchanged). Cirrus is still world-axis-locked. And a pre-existing hazard
 sits in the way of fixing that: `uCirrusOffset`/`uFieldOffset` wrap at 48 km while the cirrus
 lookup divides by 96 km, so the field already teleports half a period every few hours.
+
+## 84. Reconciling `claude/nice-driscoll-b948a7`, and a candidate dropped after a controlled test
+
+A second session fixed the same wake-fleck defect in its own worktree, in parallel with the
+one main integrated as `843be25` / §82. It is **not an independent confirmation**: it read the
+other session's diff early, so where the implementations converge that is
+convergence-after-exposure, not two findings agreeing.
+
+Branch clean, two commits, based on `565f7f3` — i.e. before the foam work reached main.
+`640ea96` was **not** taken: its "§82" is stale and main's §82 is authoritative.
+
+### Disposition, by category
+- **(a) Already on main, identically:** the flat-quad orientation, the surface-fade inversion
+  for flecks, the alpha ceiling. Convergence-after-exposure.
+- **(b) Differently tuned, not transplantable:** rate and size. Main runs 560/s with
+  `0.13 + rand^2.4 * 1.25`; nice-driscoll keeps 340/s with `0.10 + rand^2.2 * 1.30`. Its rate
+  argument is explicitly a three-way cancellation against **its own** sprite coverage (0.23 of
+  the quad at full alpha) and quad foreshortening, so the number does not carry to a different
+  sprite. Main's is shipped and verified; both are defensible.
+- **(c) A genuinely unique insight, which neither implementation delivers** — below.
+- **(d) Dropped after a controlled test** — the alpha lifetime, below.
+
+### (c) The support-radius / inset coupling — real, and open
+Its observation is geometric and correct: the draw shader shows the texture over a square of
+half-side `inset` **rotated per particle**, so a texture point at radius r is inside that
+square at *every* rotation only for r ≤ inset. Support beyond `inset` is therefore clipped by
+the square's edges, and the clip depends on the rotation angle — **so each fleck becomes a
+different shape.**
+
+Measured, by baking both trees' `makeFleckTexture` in Node and finding the largest radius with
+non-zero alpha:
+
+| | inset | measured support radius |
+|---|---|---|
+| main | 0.70 | **0.963** |
+| nice-driscoll | 0.80 | **1.381** |
+
+**Neither delivers it, and nice-driscoll's is worse on the very statistic its comment claims
+to fix.** Its `SUPPORT = 0.80` does force `radialAt` to zero beyond r = 0.80 — but that makes
+`target = 0`, hence `thr = 1`, and the final `alpha = sstep(1 − RAMP, 1 + RAMP, shape)` with
+`RAMP = 0.10` returns **0.50** for any texel whose `shape` reaches 1.0. Measured peak alpha
+beyond r = 0.8 is 0.48, which matches that arithmetic almost exactly. **The guarantee is
+defeated by its own threshold ramp**; it would need alpha forced to zero where the target is
+zero, rather than thresholded at 1.
+
+So this is recorded as an **open defect with a measurement and a known one-line shape of fix**,
+and neither implementation was taken.
+
+### (d) The alpha lifetime — committed, tested, and dropped
+The opacity lifecycle overrides `fadeOut` for kind 2 and kind > 7.5 but not for flecks, so a
+raft holds alpha at exactly 1.0 for the first **62%** of its life. That is right for a droplet
+in the air and wrong for entrained air on the surface, which drains from the moment it is laid
+down. The physical argument is sound and the shader line is syntactically transplantable, so I
+took it.
+
+**Then the controlled test refused it.** Same process, sim frozen (`tick(lastTime)` ⇒ dt 0),
+TAA switched to SMAA so a render is a pure function of scene state, 24 ticks per variant to
+settle, and `KIND.FLECK` isolated by differencing against a variant with fleck alpha forced to
+zero — so the mask needs **no brightness threshold** and cannot admit a wave highlight:
+
+| | total fleck ink | contribution p90 | sd |
+|---|---|---|---|
+| `fadeOut` 0.62 | 1,181,692 | 16.5 | 23.35 |
+| `fadeOut` 0.10 | 1,027,984 | 12.1 | 20.27 |
+
+**−13% ink, a *narrower* distribution, and the two crops are visually indistinguishable.** My
+stated rationale was that it would spread the field into a continuum of thicknesses; measured,
+it removes the bright tail instead. Dropped.
+
+**Why it failed is the reusable part.** nice-driscoll's lifetime works in combination with its
+own 340/s rate, and main runs 560/s: at the higher rate a fade starting at 0.10 skews the
+steady-state population toward faded, cutting the top of the distribution rather than filling
+the middle. **The line was syntactically transplantable and behaviourally coupled** — which is
+exactly why a parallel session's tuning cannot be cherry-picked one line at a time.
+
+### Two instrument faults in my own first attempt
+- **A brightness-thresholded mask cannot measure a brightness change.** My first statistic
+  conditioned on luminance > 120, which drops precisely the dimmer flecks the change creates,
+  and admits ocean foam and wave highlights that are not flecks at all. Difference-against-
+  ablation needs no threshold.
+- **`tick(lastTime)` does not freeze the frame while TAA is on.** Two renders of the identical
+  variant differed by mean 1.12 and max 12.5 codes with SMAA — and mean **2.00**, max **98.55**
+  with TAA, which swamped an effect of this size entirely. Always render the null twice.
