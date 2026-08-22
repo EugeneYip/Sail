@@ -340,6 +340,12 @@ export class Sky implements Module {
     (su.uHazeColor.value as THREE.Vector3).set(rad.fogColor.r, rad.fogColor.g, rad.fogColor.b);
     su.uHazeBeta.value = Math.max(0, u.uFogDensity.value - KOSCHMIEDER / CLEAR_VISIBILITY_M);
 
+    // The sea the environment probe puts below its horizon. Same quantity as
+    // `uGroundColor` and it tracks the sun with it, so the probe's lower
+    // hemisphere dims at dusk instead of staying noon-bright.
+    (su.uSeaRadiance.value as THREE.Vector3).set(
+      rad.groundColor.r, rad.groundColor.g, rad.groundColor.b);
+
     (su.uCloudLightDir.value as THREE.Vector3).copy(rad.cloudLightDir);
     (su.uCloudLightIrradiance.value as THREE.Vector3).copy(rad.cloudLightIrradiance);
     (su.uCloudAmbientTop.value as THREE.Vector3).copy(rad.cloudAmbientTop);

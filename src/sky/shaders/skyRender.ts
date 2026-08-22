@@ -71,6 +71,7 @@ uniform float uPixelAngle;
 uniform float uMieMul;
 uniform float uSkyTime;
 uniform vec3  uHazeColor;
+uniform vec3  uSeaRadiance;
 // uHazeBeta and HAZE_H live in ATMOSPHERE_GLSL, because the cloud march culls
 // rays on the same column and the two must not be able to disagree.
 
@@ -137,6 +138,38 @@ void main(){
   bool hitsGround = viewZenithCos < horizonCos;
 
   vec3 L = texture(tSkyView, skyViewToUv(hitsGround, viewZenithCos, lightViewCos, r)).rgb;
+
+#ifdef SKY_ENV
+  /*
+   * Put a sea below the probe's horizon.
+   *
+   * skyViewToUv maps every ground-hitting ray onto the LUT's in-scattering half,
+   * so without this the whole lower hemisphere is sky and the probe lights the
+   * ship from below about as brightly as from above. Measured before this
+   * existed: lower hemisphere 1.52x the upper, and 55% of a vertical surface's
+   * irradiance arriving from underneath.
+   *
+   * A FLAT sea, which is what an IBL probe wants -- it is prefiltered into
+   * spherical harmonics and a roughness chain, so per-wave structure would be
+   * averaged away regardless. Fresnel-mirror the sky in it and let the water's own
+   * upwelling radiance through the rest: at grazing angles F goes to 1 and the sea
+   * correctly reads as sky, at the nadir F is 0.02 and it reads as water. That
+   * gradient is the whole point -- the defect was that the lower hemisphere had no
+   * gradient at all.
+   *
+   * No sun glitter here: the ocean draws its own statistical lobe and says not to
+   * add another, and the probe deliberately carries no sun disc either.
+   *
+   * SKY_ENV has no consumer but the probe, so the visible sky is untouched -- it
+   * has the real ocean mesh below the horizon.
+   */
+  if (hitsGround) {
+    float cosN = min(1.0, -viewZenithCos);
+    vec3 mirrorL = texture(tSkyView, skyViewToUv(false, -viewZenithCos, lightViewCos, r)).rgb;
+    float fres = 0.02 + 0.98 * pow(1.0 - cosN, 5.0);
+    L = mix(uSeaRadiance, mirrorL, fres);
+  }
+#endif
 
   float above = hitsGround ? 0.0 : 1.0;
   float am = airmassKY(viewZenithCos);

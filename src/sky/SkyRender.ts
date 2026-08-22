@@ -21,6 +21,12 @@ export interface SkyUniforms {
   uSkyTime: THREE.IUniform<number>;
   /** Horizon radiance the weather haze inscatters — the same value as uFogColor. */
   uHazeColor: THREE.IUniform<THREE.Vector3>;
+  /**
+   * Radiance the sea sends back up, i.e. `Radiometry.groundColor`. Only the
+   * environment probe reads it: it is the sea the probe puts below its horizon,
+   * and the visible sky has the real ocean mesh there instead.
+   */
+  uSeaRadiance: THREE.IUniform<THREE.Vector3>;
   /** Extinction in EXCESS of clear air, 1/m. 0 on a 30 km day. */
   uHazeBeta: THREE.IUniform<number>;
   [key: string]: THREE.IUniform;
@@ -52,6 +58,7 @@ export function createSkyUniforms(): SkyUniforms {
     uSkyTime: { value: 0 },
     uHazeColor: { value: new THREE.Vector3(0.6, 0.7, 0.82) },
     uHazeBeta: { value: 0 },
+    uSeaRadiance: { value: new THREE.Vector3(0.05, 0.09, 0.13) },
 
     /* --- cloud density field, written by CloudField --- */
     tCloudBase: { value: null },
