@@ -352,3 +352,76 @@ which at 4 m/s of way and 3 deg/s of hull rotation puts the eye
 i.e. **two and a half centimetres on a 62 m ship**. Not a composition change, and
 the new value is the correct one — the old figure was biased small by exactly the
 half-step this fix removes.
+
+### Acceptance table, before and after, one page load, three repeats per cell
+
+`node .tmp/jitter2.mjs --abl=single,none --modes=chase,orbit,helm,bowsprit,masthead --arms=irr,frac,reg --reps=3`.
+"before" is the same build with `ShipFrame.substep` set huge, so the loop
+collapses to one step of the whole frame — the pre-fix behaviour, measured in the
+same process, minutes apart from nothing.
+
+**uniform 16.67 ms**
+
+| mode | | dY rev x3 | mean | dX rev x3 | dZ rev x3 | \|dpos\|/s |
+|---|---|---|---|---|---|---|
+| chase | before | 0.8, 0.5, 0.8 | **0.7** | 0.8, 0.5, 0.8 | 0.3, 0.5, 0.8 | 0.50-1.92 |
+| chase | **after** | 0.5, 0.5, 0.5 | **0.5** | 0.5, 0.8, 1.0 | 0.5, 0.8, 0.5 | 0.81-2.49 |
+| orbit | before | 0.5, 0.5, 0.5 | **0.5** | 0.8, 0.8, 0.5 | 0.3, 0.5, 0.8 | 2.43-4.93 |
+| orbit | **after** | 0.5, 0.5, 0.5 | **0.5** | 0.8, 0.3, 0.5 | 0.8, 0.5, 0.5 | 1.96-2.34 |
+| helm | before | 0.5, 0.5, 0.8 | **0.6** | 0.5, 0.5, 1.0 | 0.5, 2.0, 1.3 | 0.06-0.17 |
+| helm | **after** | 0.8, 0.8, 0.8 | **0.8** | 0.5, 0.5, 0.5 | 1.0, 2.0, 3.8 | 0.12-0.27 |
+| bowsprit | before | 0.5, 0.5, 0.5 | **0.5** | 1.0, 0.5, 0.8 | 1.5, 0.5, 0.5 | 0.08-0.21 |
+| bowsprit | **after** | 0.8, 0.8, 0.8 | **0.8** | 0.8, 1.3, 1.5 | 0.8, 0.8, 0.8 | 0.09-0.14 |
+| masthead | before | 0.5, 0.5, 0.8 | **0.6** | 0.5, 0.5, 0.8 | 0.8, 0.5, 1.5 | 0.11-0.22 |
+| masthead | **after** | 0.8, 0.5, 0.8 | **0.7** | 0.8, 0.5, 0.8 | 1.0, 1.0, 0.8 | 0.09-0.23 |
+
+**whole refresh multiples**
+
+| mode | | dY rev x3 | mean | dX rev x3 | dZ rev x3 | \|dpos\|/s |
+|---|---|---|---|---|---|---|
+| chase | before | 0.8, 1.1, 0.8 | **0.9** | 0.8, 0.8, 0.8 | 4.9, 7.2, 6.1 | 0.80-1.50 |
+| chase | **after** | 1.1, 0.8, 0.8 | **0.9** | 1.1, 0.8, 1.5 | 6.1, 10.6, 3.8 | 1.17-1.58 |
+| orbit | before | 0.8, 0.4, 0.8 | **0.7** | 1.5, 0.4, 0.8 | 3.8, 4.5, 6.4 | 1.52-3.08 |
+| orbit | **after** | 0.8, 1.1, 1.1 | **1.0** | 1.1, 1.1, 0.8 | 10.2, 4.9, 6.8 | 1.60-4.10 |
+| helm | before | 6.8, 6.1, 1.1 | **4.7** | 14.4, 12.9, 8.0 | 25.1, 25.1, 25.1 | 0.32-0.36 |
+| helm | **after** | 1.1, 0.8, 0.8 | **0.9** | 0.8, 0.8, 0.8 | 0.8, 3.4, 1.5 | 0.15-0.26 |
+| bowsprit | before | 9.8, 12.9, 12.9 | **11.9** | 12.1, 15.9, 14.4 | 25.0, 25.4, 30.7 | 0.35-0.39 |
+| bowsprit | **after** | 0.8, 1.1, 1.1 | **1.0** | 0.8, 1.9, 1.1 | 1.1, 1.1, 1.1 | 0.09-0.25 |
+| masthead | before | 12.9, 10.6, 17.8 | **13.8** | 11.4, 12.5, 13.3 | 31.8, 25.0, 26.1 | 0.35-0.38 |
+| masthead | **after** | 1.1, 0.8, 1.1 | **1.0** | 1.1, 0.8, 0.8 | 1.5, 1.1, 1.1 | 0.12-0.28 |
+
+**fractional intervals**
+
+| mode | | dY rev x3 | mean | dX rev x3 | dZ rev x3 | \|dpos\|/s |
+|---|---|---|---|---|---|---|
+| chase | before | 1.6, 2.3, 0.8 | **1.6** | 4.7, 14.8, 2.3 | 53.5, 61.3, 52.7 | 1.16-2.82 |
+| chase | **after** | 4.3, 0.8, 2.7 | **2.6** | 7.0, 2.0, 7.4 | 62.9, 62.1, 58.2 | 1.32-1.81 |
+| orbit | before | 1.2, 2.0, 0.4 | **1.2** | 1.2, 2.0, 1.2 | 44.9, 51.6, 57.4 | 1.54-4.07 |
+| orbit | **after** | 0.8, 0.8, 0.4 | **0.7** | 0.8, 0.8, 1.2 | 62.1, 57.4, 61.7 | 1.79-4.00 |
+| helm | before | 19.1, 18.0, 19.9 | **19.0** | 23.0, 41.0, 20.7 | 69.1, 69.1, 68.4 | 0.80-0.87 |
+| helm | **after** | 27.0, 28.1, 16.0 | **23.7** | 23.4, 31.3, 36.3 | 62.1, 62.1, 62.1 | 0.75-0.79 |
+| bowsprit | before | 28.1, 20.7, 31.6 | **26.8** | 32.4, 34.8, 24.6 | 69.1, 69.1, 69.1 | 0.80-0.86 |
+| bowsprit | **after** | 27.3, 23.8, 11.7 | **20.9** | 25.0, 18.8, 28.5 | 62.1, 62.1, 62.1 | 0.84-0.85 |
+| masthead | before | 38.7, 32.8, 37.9 | **36.5** | 27.0, 23.4, 32.8 | 67.6, 69.1, 69.1 | 0.87-0.88 |
+| masthead | **after** | 34.8, 34.0, 29.3 | **32.7** | 26.2, 25.4, 24.6 | 62.1, 62.1, 62.1 | 0.89-0.98 |
+
+**§85a's acceptance criterion is met on §85a's own clock.** Under whole refresh
+multiples the three ship-mounted modes go
+
+    helm      4.7% -> 0.9%   (dX 8-14 -> 0.8,  dZ 25.1 -> 0.8-3.4)
+    bowsprit 11.9% -> 1.0%   (dX 12-16 -> 0.8-1.9, dZ 25-31 -> 1.1)
+    masthead 13.8% -> 1.0%   (dX 11-13 -> 0.8-1.1, dZ 25-32 -> 1.1-1.5)
+
+against controls that do not move (chase 0.9 -> 0.9, orbit 0.7 -> 1.0) and a
+uniform arm that does not move either (everything 0.5-0.8% both ways). The
+residual MAGNITUDE falls with the rate — bowsprit 0.35-0.39 -> 0.09-0.25 m/s,
+masthead 0.35-0.38 -> 0.12-0.28 — so this is not a reversal rate flattered by a
+quieter numerator.
+
+**On the fractional arm nothing is fixed, in any mode, including the controls.**
+dZ sits at 62.1% for all three mounted modes after the change (69.1% before), and
+44-63% for chase and orbit both before and after. And the residual magnitude there
+is 0.75-0.98 m/s against 0.09-0.28 on the whole-multiple arm — **four times more
+ship-relative camera motion under a clock with the same mean interval.** A
+mode-independent, magnitude-dominated effect that the ShipFrame sub-stepping does
+not touch is unlikely to be in ShipFrame. Investigated next.
