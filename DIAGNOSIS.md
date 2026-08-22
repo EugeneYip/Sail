@@ -6099,3 +6099,99 @@ masthead residual by 73%, which is not an improvement — it means the camera th
 follows the chatter instead of rejecting it, which is what `ShipFrame` exists to
 prevent. **Do not use the §88 acceptance statistic on a fractional clock until
 this is fixed.**
+
+## 90. The masthead shot was composed for 38 m and taken from 25.85 m
+
+Work by the masthead session, recorded in `notes/masthead-perch.md` (now folded in
+and deleted). Source landed as `a4b3d49`. Verified independently by the
+integrating session with a before/after A/B before reconciling.
+
+**Root cause: two modules mean different things by `mainTopY`, and the name
+agrees while the definition does not.** `Anatomy.ts` defaults `mainTopY: 38` under
+a comment describing the crosstrees — that 38 is **a perch chosen for this shot**,
+not an anatomical station. `readAnatomy` then lets `world.ext.ship` override it,
+and `src/ship/ext.ts` publishes `main.lowerTop - 2.15 + 1.5 = 25.85`, which is
+**the fighting top, one platform down**, plus a standing height. Both values are
+correct for what their author meant. `readAnatomy` copies any finite number under
+a name it recognises, so the shot silently lost **12.15 m** the moment the ship
+published its geometry, and every composition constant in the file went stale at
+once.
+
+Read backwards, the docstring's own numbers prove which height it was written for:
+"deck visible from 12 m forward of the mainmast" is the bottom edge of frame, and
+`BASE_PITCH + FOV/2 = 33 + 37 = 70` deg below horizontal gives
+`12*tan(70) = 33.0` m above the deck, `+ 5.5 = 38.5` m. The 38 was that identity
+solved for the height.
+
+**What 25.85 m did to the frame** — a 40x22 ray census classified by what it hits
+in ship-local metres:
+
+| | 25.85 m as shipped | 35.7 m after |
+|---|---|---|
+| main top platform | **40.6%** of frame | **0%** |
+| deck | 0.3% | 5.0% |
+| sea | 48.4% | 63.1% |
+| horizon, mean over columns | 12.8% from top | 9.0% from top |
+
+The platform's forward edge sat ~1.9 m ahead of an eye 1.52 m above it, subtending
+everything up to 5.7 deg *above* the axis, and the **fore top was at eye level**.
+Not looking down at a ship from a mast — looking across a platform at another
+platform. The height could not read, which was the one thing the shot existed to
+do.
+
+**Why the fix is not simply 38.5 m.** That satisfies the geometry and fails the
+picture: it parks the eye beside a sail. Main-mast canvas bands are course
+7.6-20.2, topsail 21.4-34.1, topgallant 37.3-46.4, royal 48.3-55.0, so the only
+clear air above the fighting top is **34.1-37.3 m**. A five-height sweep driving
+`ext.ship.mainTopY` on the live blackboard, so every variant went through the
+shipped solve, agreed: 32 m canvas fills 60%, 35 m clear, 36.5 m best, 38.5 m
+canvas fills the upper 40%, 42 m canvas fills 65%.
+
+**The fix is camera-side and scoped.** `DECK_NEAR_EDGE = 11` puts the eye at
+**35.7 m**, mid clear band; the height now follows `BASE_PITCH` and `FOV`
+automatically, so changing the lens cannot silently break the framing again;
+`anatomy.mainTopY` becomes a floor (never stand below the platform) and
+`mastheadY - TRUCK_CLEARANCE` the ceiling.
+
+**Independently verified.** A/B with the perch as the only variable, owner's file
+backed up and restored byte-for-byte (sha256 checked both ways). Before: the frame
+is fighting-top planking, shrouds and futtock timbers, no sea, no deck, no
+horizon, no drop. After: above the tops looking down the sail plan, sea, horizon,
+sky sliver, the drop reads. Accepted.
+
+**Debts, recorded deliberately and not fixed here.**
+
+1. `DECK_NEAR_EDGE = 11` is **calibration debt**. The module cannot see the clear
+   band — the sail plan reaches the camera only as `Collision`'s single cylinder —
+   so the constant is tuned against captures rather than derived. A topmast-head
+   station on `ext.ship` would make it derivable. Until then, moving the yards
+   needs a re-shoot of `--scene masthead`.
+2. `mainTopY` is doing two jobs and the name cannot serve both. A separate station
+   is the real fix. **This is recorded as debt, not opened as a ship-anatomy API
+   redesign.**
+3. **The same collision may sit in other overridden fields, unmeasured:**
+   `mainYardHalfSpan` is 20.5 in `Anatomy.ts` against 14.6 from `ext.ship`, and
+   `mainYardY` is 23.5 against 20.2. Nothing has been measured about either. The
+   cinematic yard shot reads both, and the mechanism that broke this shot was
+   name-level agreement with definition-level disagreement. Debt only.
+4. The docstring's promised clean deck wedge is still not true and cannot be from
+   here: the deck is geometrically in frame at 5.0% but the fore course and
+   topsail hang in front of most of it, so it reads through gaps. Honest for a
+   square-rigger seen from the main topmast; the docstring now says so. Confirmed
+   in my own capture — the deck is largely occluded and the near left of frame is
+   shrouds.
+
+**A trap for anyone re-measuring this.** A CPU raycast **cannot see the sails, the
+rigging or the ensign**: all three are GPU-expanded from a unit patch
+(`ship-sail-cloth` is 513 verts with a `[[0,0,0],[1,1,0]]` bounding box,
+`ship-rigging` is 26 verts), so `Raycaster.intersectObjects` returns nothing for
+them at any pixel and every ray that should have stopped at canvas reports the sea
+behind it. The census's `SEA` figure is therefore an **upper bound** and its `DECK`
+figure is "in frame", not "visible". The way round it is to hide the three meshes
+and shoot the frame.
+
+**Cross-corroboration of §88.** Converting the solved camera position through
+`shipRoot.matrixWorld` put the eye a consistent ~0.8 m aft of what the mode asked
+for, with `avoidHull` and `avoidRig` both off — independently the same
+`ShipFrame` `mountPos` lag that §88 identifies as the root cause of mounted-mode
+jitter, found by a different session through a different measurement.
