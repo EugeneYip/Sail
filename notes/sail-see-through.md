@@ -413,3 +413,20 @@ in a state that threw `Cannot read properties of null (reading 'flip')` in
 this note were taken in a **detached `git worktree` with its own dev server on
 port 5191**, which is what `AGENTS.md` prescribes and what I should have started
 with.
+### Confirmed against the tree as it stands
+
+Re-run on the main tree at `port-side` after `hull.ts` came back to a booting
+state, so nothing in this note rests on the worktree:
+
+| | linear | share of the sail |
+|---|---|---|
+| sail, as shipped | 0.2656 | |
+| what is behind it | 0.4542 | ratio **0.585** |
+| environment probe removed | 0.0876 | IBL is **67%** |
+| `sheen = 0` | 0.2122 | sheen is **20%** |
+| `uClothTrans = 0` | 0.2079 | translucency is **22%** |
+| flat magenta | R 199, G 94, B 203 | the silhouette is unmistakably the sail |
+
+Null against null again: mean 2.29 codes, 0.2 per cent of the mask over 8, none
+over 24. Ratios across four independent runs at this station: 0.585, 0.589,
+0.593, 0.601.
