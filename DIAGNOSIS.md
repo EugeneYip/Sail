@@ -7441,3 +7441,94 @@ any of these axes**, so whichever the owner picks, that part remains.
 Full-resolution captures plus a 2x crop sheet and a wide-context sheet are staged
 outside the repository, in this session's scratchpad under `sailpkg/`. Deliberately
 not committed.
+
+## 104. Issue 3 reproduced and causally isolated: the ocean reflecting the cloud-bearing env probe. Fix attempt reverted.
+
+Supersedes §97's NOT-REPRODUCED for this report. §97 measured a *fixed far station*
+looking forward at the horizon and found nothing; the owner's condition is different
+— **zoomed far out, high, looking down at a large area of sea, under heavy cloud** —
+and there it reproduces immediately. §97's negative was a negative about its own
+station, not about the player report.
+
+### Reproduction
+
+Free camera at ship-relative `[-140, 330, -90]` aimed at the ship: high, far astern,
+no horizon in frame, which is what the owner's zoomed-out screenshots show. Sea state
+3, noon, `renderScale` 1, adaptive off. Fresh load per cell, 16 frames, live ticking.
+
+Instrument: each frame is reduced to 25 px blocks (64x36) and a block counts as dark
+if it is below **0.55x that frame's own median** block luma, so exposure drift cannot
+manufacture or hide a blotch. Reported: dark-block count, max area, p5/median, and
+churn — blocks flipping dark between consecutive frames.
+
+| cloudCover | dark blk/frame | max area | p5/median | churn/frame |
+|---|---|---|---|---|
+| 0.0 | 0.00 | 0.00% | 0.889 | 0.00 |
+| 0.4 | 0.00 | 0.00% | 0.861 | 0.00 |
+| **0.8** | **8.50** | **1.30%** | **0.729** | **15.20** |
+
+Churn of 15 blocks per frame against only ~8 dark blocks means the dark set is almost
+**entirely resampled every frame** — salt-and-pepper noise, not a drifting shadow.
+Sixteen frames is 0.27 s, over which a cloud shadow barely moves.
+
+### Causal partition
+
+Same station, cloudCover 0.8, fresh load per arm, every lever asserted:
+
+| arm | dark blk/frame | max area | churn/frame |
+|---|---|---|---|
+| base (three independent runs) | 7.12 / 8.56 / 9.31 | 2.3-2.9% | 10.6 / 13.4 / 15.1 |
+| cloud shadow on the sea forced to 1.0 | 7.06 | 2.13% | 11.27 |
+| TAA off | 6.44 | 2.04% | 10.27 |
+| env probe refreshed EVERY frame | 6.38 | 2.60% | 9.47 |
+| **volumetric clouds off** | **0.00** | **0.00%** | **0.00** |
+| **ocean reflection forced off the probe** | **0.00** | **0.00%** | **0.00** |
+
+**Two independent ablations take it to exactly zero and they cut the same chain:** the
+ocean reflects the environment probe, the probe is compiled with `SKY_ENV_CLOUDS` so
+it carries the volumetric clouds, and at high cover that probe has violent dark/bright
+contrast. The sea samples it through wave normals that its own footprint cannot
+resolve, so adjacent pixels and successive frames tap wildly different probe texels.
+
+**Eliminated:** the cloud-shadow term on the sea, TAA history, and the probe's 6 Hz
+refresh cadence — refreshing every frame moves churn only 15.1 to 9.5, so the step
+is not the driver. This is spatial under-resolution of a high-contrast environment,
+not a temporal-cadence bug.
+
+### The fix attempt, and why it was reverted
+
+`oceanReflection` already widens its lobe with the unresolved slope variance
+(`alphaR` from `lostVar`), but not enough here. I tried a one-sided dark floor —
+`probe = max(probe, wide * 0.75 * saturate1(alpha * 2.5))` — chosen because it only
+ever raises darks, so the normal-dependent bright detail that the documented
+1.7-to-0.95 rate change exists to protect is untouched.
+
+At the tuned station it worked: dark blocks 8.33 avg to **3.81**, max area 2.3-2.9%
+to **0.69%**, churn 10.6-15.1 to **7.07** — well outside the base spread.
+
+**It failed acceptance at a second zoom and is reverted.** At `[-70, 190, -45]`, same
+cloud cover:
+
+| zoom B, cc 0.8 | dark blk/frame | max area | churn |
+|---|---|---|---|
+| pre-fix | **0.00** | **0.00%** | **0.00** |
+| with the floor | **25.06** | **2.86%** | **48.00** |
+
+The floor *created* the artefact where none existed. Not landed.
+
+### A caveat on my own instrument
+
+The dark test is relative to each frame's median, which makes it robust to exposure
+drift but means **a global brightening manufactures "dark" blocks**. Some of zoom B's
+25.06 is likely that rather than literal new dark patches. The root-cause isolation
+does not depend on it: the two decisive ablations drive the metric to exactly 0.00 by
+removing the dark content itself, which a threshold artefact cannot fake.
+
+### Where this leaves it
+
+Mechanism isolated and reproducible. The fix is a **filtering** problem — an
+unresolved footprint must integrate the environment rather than point-sample it — and
+the candidate directions (widen the lobe with footprint, prefilter the probe harder,
+reduce the probe's cloud contrast, clamp outliers) all trade against far-field detail,
+which §67 and §17C fought to win. No discriminator yet says which preserves it. That
+is a genuine stop, not an invitation to tune.
