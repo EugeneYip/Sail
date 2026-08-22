@@ -4946,3 +4946,409 @@ rather than a silhouette", then shot it: beam-on to a sun just down, the sail pl
 at low sun is what `sunset` is for — which is why that preset is a bowsprit shot. I also
 quoted 86/41/25 for those three luminances before measuring them; the real figures are
 above.
+
+## 79. The waterline plate is the hull SKIRT, and the mechanism is §40's with the sign flipped
+
+§64G recorded a hard-edged white plate along the hull's waterline in the `waterline`
+scene at both wake-field resolutions and said it was in the near-hull water rather than
+in the persistent field. It is, and it is not the ocean's foam term either: the ocean's
+consumption of the wake's R channel is intact and correct. **It is
+`hullSkirtFrag`, and specifically its SUBMERGED rows.**
+
+That makes it the **third** ruled-line artefact this one mesh has produced — §35's
+constant-height coverage cut, then the constant-depth `step(-1.6, vD)` and its
+constant-depth feather, now a threshold that saturates below the water. The band's
+shading is a function of `vD`, height above the local water, and every time a limit on
+`vD` has been written as a constant it has drawn a dead-level line the length of the ship.
+Anything here that clamps or cuts on `vD` should be assumed guilty until integrated.
+
+### Attribution, by ablation in one session
+`.tmp/skirtplate.mjs` shoots the same `waterline` shot with one draw removed at a time, after
+the camera rig has taken its deterministic capture hold, so every frame is the same
+composition. `HullWater.update` rewrites `mesh.visible` from `ctx.speedN` every frame, so
+a hide has to be `geometry.setDrawRange(0, 0)`; `.visible = false` from the console lasts
+less than a frame. Over a 560x70 rect on the plate, at 1600x900 dpr 1
+(`.tmp/plateStat.mjs`: mean luma, fraction above 150, fraction whose 3x3 luma range is
+under 6 codes, mean |dx|+|dy|, and the single strongest ROW of vertical gradient — a hard
+edge running the length of the ship is one big row, a torn boundary is none):
+
+| variant | mean | pale% | flat% | hf | strongest row |
+|---|---|---|---|---|---|
+| base | 109.1 | 27.1 | 30.8 | 13.17 | 30.73 |
+| `vfx-bow-wave` hidden | 114.3 | 29.8 | 37.2 | 12.76 | 42.79 |
+| `vfx-hull-skirt` hidden | 80.6 | **5.8** | 28.4 | 11.45 | 17.14 |
+| both hidden | 65.3 | 2.2 | 19.6 | 11.67 | 21.55 |
+
+The sheet is not involved. Colouring the skirt by `step(0.0, vD)` then puts the whole
+plate in the SUBMERGED half of the band with only a thin line of above-water band along
+its top edge, and a term-attribution pass (alpha forced to 1, the three alphas written to
+R/G/B) shows the band's above-water half rendering *black* — nothing at all — while the
+submerged half carries all of it.
+
+**Instrument note.** The `noWake` variant of that probe is a NO-OP and the run's own state
+readout is what caught it: `WakeField.update` ends with
+`this.strength = this.trackFilled > 3 ? 1 : 0`, so assigning 0 from the console is
+overwritten before the next frame, and the printed `wake=1` gave it away. Anyone ablating
+the wake this way has to `Object.defineProperty` the getter. The wake was excluded here by
+the skirt ablation removing the plate outright, not by a wake ablation.
+
+### The mechanism, integrated against the real bake
+`.tmp/skirtint.mjs` pulls the live 256² `tFoam` bake and the live skirt uniforms out of
+the running engine (16.6 kn, heel 0.33-0.39 rad, chop 0.7) and integrates the shader's own
+arithmetic, the way §40 did for the ocean. The froth field
+`s1*0.36 + s2*0.26 + s3*0.20 + s4*0.24`, over 57600 samples:
+
+    mean 0.338  sd 0.186
+    p05 0.043   p25 0.200   p50 0.331   p75 0.465   p95 0.661   max 1.006
+
+And the shipped threshold was `mix(0.20, 0.94, pow(above, 0.68))` with
+`above = saturate1(vD / reach)`. **`saturate1` is the defect.** It returns 0 for every
+fragment at or below the local water — 52.9% of the band's vertices — so the entire
+submerged strip was thresholded at 0.20, which is that field's own **25th percentile**.
+Integrated per height band:
+
+| vD, m | E[thr] | E[coverage] | E[froth alpha] | sd | wetBand→foamA | E[wetA] |
+|---|---|---|---|---|---|---|
+| -2.9 .. -2.4 | 0.200 | 0.722 | 0.639 | 0.348 | 0.000 | 0.306 |
+| -2.4 .. -1.2 | 0.200 | **0.825** | **0.720** | 0.288 | 0.144 | 0.475 |
+| -1.2 .. -0.3 | 0.200 | 0.714 | 0.634 | 0.342 | 0.385 | **0.700** |
+| -0.3 .. 0.0 | 0.200 | 0.588 | 0.526 | 0.391 | 0.312 | 0.404 |
+| 0.0 .. 0.3 | 0.370 | 0.750 | 0.665 | 0.356 | 0.015 | 0.017 |
+| 0.3 .. 0.8 | 0.610 | 0.140 | 0.144 | 0.312 | 0 | 0 |
+| 0.8 .. 1.6 | 0.777 | 0.055 | 0.057 | 0.211 | 0 | 0 |
+| 1.6 .. 3.0 | 0.885 | 0.003 | 0.003 | 0.048 | 0 | 0 |
+
+At -1.2 .. -0.3 the two froth means sum to 1.019 against a 0.90 cap, and the wet-paint
+layer goes over the top of that: the submerged strip was **very nearly opaque near-white,
+2.4 m deep and 53 m long**. Its bottom edge is `clamp(wl - 2.4, uSkirtFloor, ...)` with
+`uSkirtFloor = -2.9` — a dead-level line in ship-local Y for the whole length of the ship.
+A uniform partial wash inside a smooth contour is a flat pale plate. That is the defect,
+in one saturating call.
+
+**This is §40 with the sign flipped, and that is the generalisation worth keeping.** §40's
+form amplified a coverage and clamped it, so the coverage saturated at the TOP. This one
+saturated its threshold's ARGUMENT at the bottom, which puts the threshold outside the
+field and has the identical consequence: a threshold against a constant is not a
+threshold, it is a constant, and then the silhouette falls through to whatever drew the
+geometry. Check both ends of every coverage chain, not just the one that has bitten before.
+
+### The second defect in the same expression
+The old ramp's top of 0.94 is past the field's maximum of 1.006 once the 0.075 ramp
+half-width is taken off it, so the froth `frothReach` places ABOVE the water — the whole
+point of §35's per-station reach — rendered 0.14 coverage at half a metre and 0.003
+above 1.6 m. Every scrap of white this band produced was under the water, and none of it
+was where the reach put it. Removing the plate without also bringing the top of the ramp
+inside the field trades a plate for a bare contour, which is the defect the `frothReach`
+note was written to kill.
+
+### The fix, and what it measures
+`FROTH_SINK_M = 0.35`, `WETTED_SINK_M = 0.55`, `THR_WET 0.20 / THR_TORN 0.72 / THR_DRY 1.15`:
+
+    float sink = saturate1(-vD / FROTH_SINK_M);
+    float thr  = mix(THR_WET, THR_TORN, pow(above, 0.68)) + sink * (THR_DRY - THR_WET);
+
+The fade below the water is an ABSOLUTE depth, not a fraction of the reach — how high a
+hull throws its bow wave says nothing about how far the free surface drags entrained air
+under — and it is on the THRESHOLD, not multiplied over the result, because a multiplied
+ramp can only make a fade and a fade at a constant depth is one more ruled line. `THR_DRY`
+clears the field's maximum by more than the ramp half-width, so the submerged tail is
+**exactly** zero. Nearly zero over 53 m of hull is what a plate is made of. The `wetBand`
+and `submerged` terms get the same treatment with the same textured displacement on their
+lower boundary as on their upper. Same integral, same bake:
+
+| vD, m | coverage | froth alpha | wetBand→foamA | wetA |
+|---|---|---|---|---|
+| -2.9 .. -0.3 | 0.722-0.825 → **0.000** | 0.634-0.720 → **0.000** | 0-0.385 → 0.000-0.002 | 0.306-0.700 → 0.000-0.003 |
+| -0.3 .. 0.0 | 0.588 → 0.185 | 0.526 → 0.163 | 0.312 → 0.111 | 0.404 → 0.141 |
+| 0.0 .. 0.3 | 0.750 → 0.833 | 0.665 → 0.723 | 0.015 → 0.012 | 0.017 → 0.014 |
+| 0.3 .. 0.8 | 0.140 → **0.257** | 0.144 → 0.238 | — | — |
+| 0.8 .. 1.6 | 0.055 → 0.114 | 0.057 → 0.103 | — | — |
+| 1.6 .. 3.0 | 0.003 → 0.053 | 0.003 → 0.041 | — | — |
+
+In pixels, same harness, same capture-hold pose (16.7 against 16.6 kn, same heading),
+`.tmp/PLATE-{before,after}-waterline.png`, on that same 560x70 rect:
+
+    pale%   13.2 -> 12.5      flat%   32.2 -> 22.3
+    hf     12.30 -> 15.47     strongest row  53.46 -> 26.56
+
+The pale fraction barely moves at THIS pose because the rect catches less of the plate
+than the probe's pose did; the discriminating numbers are the other three, and they say
+the same thing three ways — a third less of the area is locally flat, a quarter more
+high-frequency energy, and **the hard straight edge is halved**. At dpr 2 (3200x1800) on a
+560x130 crop of the bow shoulder at 1:1, `.tmp/HI-{before,after}.png`: pale 41.5 → 13.8,
+flat 56.8 → 44.7, hf 8.11 → 10.87. By eye at 1:1 the plate is gone and the band reads as
+streaked froth on the plating with the copper showing between the filaments.
+
+No cost: 74 draw calls and 0.61 Mtri before and after, and on a genuinely quiet box
+(`rivals 0p/0b`) `waterline` p25 34.6 → 32.3 ms, `orbit` 35.1 → 34.2, `helm` 38.9 → 38.9,
+`storm` 42.2 → 47.3 — run-to-run noise in both directions, as §64G's error bar predicts.
+All 16 scenes shot clean afterwards, zero page errors.
+
+### What is left, and it is not fixed here
+- **The submerged rows are visible at all.** The ocean surface is
+  `transparent: false, depthWrite: true`, so a band 2.4 m under the fitted waterline
+  ought to be depth-rejected — and it is not, at any point along the hull. From a camera
+  at the surface the ray grazes a near crest and lands on the hull, so the band genuinely
+  stands proud of the intervening water. It matters because it means those rows are a
+  visible surface and not a hidden safety margin: whatever they draw, the owner sees.
+- **`SKIRT_ROWS = 6` now spends four rows where nothing is drawn.** `mix(-uSkirtDrop,
+  env * 1.35 + 0.45, v)` puts rows at about -2.4, -1.55, -0.71, +0.14, +0.98, +1.83 m.
+  Nothing is lost visually — every quantity that decides the froth is per-fragment — but
+  two thirds of the geometry is now inert. Left alone deliberately: those rows are the
+  guard against a crest lifting the water and exposing the band's floor, which is a
+  straight cut in ship-local Y, and that is the artefact this section is about.
+- **`waterYAt` is a three-sample piecewise-linear fit of the sea surface over 53 m.** The
+  live uniforms read 0.96 / 2.67 / -0.13 m to starboard against 0.78 / -1.50 / -0.68 to
+  port, consistent with 22 deg of heel rather than with fit error, but a 2.4 m wash used
+  to hide any error there and a decimetre-deep band will not. Not measured.
+- **A quiet-box frame time that does not match §64I.** These runs are the clean
+  `--wait-quiet`-grade window §64I asked for — `rivals 0p/0b`, sampled both sides of every
+  scene — and `noon` reads p25 36.5 ms at 1600x900 dpr 1, not the 16.5 ms §64I recorded
+  with a rival present. Do not read that as a contradiction: `rivals` counts headless
+  renderers and §64E puts most of the fixed term on the CPU, so a box with no rival
+  BROWSER can still be a box with no spare core. It wants one measurement on an idle
+  machine before anyone believes either number.
+
+## 80. `AGX_IN` was three's inset matrix transposed, and the four looks had been authored to cancel it
+
+§71 flagged this and correctly declined to fix it: "`src/util` is a shared library, so it is
+not the post agent's to change." Confirmed, fixed with the owner's sign-off, and the looks
+re-authored in the same change — because the transpose turned out to be **load-bearing for
+the grade**, which is the part §71 could not have known.
+
+### The confirmation, and the one-glance invariant
+
+three writes its AgX pair as `mat3(vec3, vec3, vec3)` in
+`ShaderChunk/tonemapping_pars_fragment.glsl.js:116`. Ours was written as `mat3(` nine
+scalars `)`. **Both constructors take COLUMNS**, so writing a published row-major table
+into either one transposes it, silently, with no compiler complaint and no black frame.
+
+Element-wise, ours against three:
+
+| compared as | max &#124;delta&#124; |
+|---|---|
+| ours vs three **transposed** | 9.4e-5 |
+| ours vs three **as written** | 6.4e-2 |
+
+A 670x gap. It is the transpose, with independent rounding in columns 1 and 2 — consistent
+with somebody pasting a *different* published row-major table than three's, which is exactly
+how this bug is normally born.
+
+**The invariant that catches it in one glance: the inset's mathematical rows must each sum to
+1.** A tonemapper that moves a neutral is not a tonemapper. Ours summed to
+**1.106 / 0.933 / 0.961**; luminance summed to 0.972, so it lost only 0.04 stops of
+brightness while pulling +0.15 / -0.10 / -0.06 stops of channel imbalance *into the input of
+the per-channel contrast curve*, which is where a tint stops being a tint and starts being a
+non-linear hue shift. It was never the shadow crush of §71 and it was never an exposure bug.
+
+### The instrument: a scene is the wrong way to measure a colour change
+
+The capture harness cannot resolve this. **Run it twice on identical code** and the
+whole-frame R-B moves by up to 16 codes, the sky mask by up to 39:
+
+| scene | sky d(R-B), identical code | whole-frame d(R-B), identical code |
+|---|---|---|
+| golden | **+39.2** | +1.3 |
+| helm | **+32.8** | +9.0 |
+| masthead | **+24.0** | **+16.1** |
+| noon | +12.2 | -12.1 |
+| shadow | **+0.1** | **+0.9** |
+
+That is the confound `capture.mjs:293` already warns about — the cloud field advects with
+wall-clock time — and the effect being measured here is only 9 to 16 codes. Two thirds of
+the sixteen panes cannot see it. `shadow` can, because it is the `cloudCover 0` scene built
+for exactly this, and it is the only pane whose numbers below are worth quoting.
+
+So the measurement was moved off the scene entirely, with a throwaway probe in `.tmp/` (so
+it is not in the tree — rebuild it, it is about 60 lines). It esbuild-bundles `GLSL.color`
+the way `check-shaders.mjs` does, compiles a one-row fullscreen pass that runs
+`agx(uBase * exp2(ev))` with `ev` swept across `gl_FragCoord.x`, and `readPixels` the result
+— **the real chunk on the real ANGLE/Metal driver**, once with each matrix, no engine and no
+scene, bit-repeatable. The one trick that makes it trustworthy: it asserts the shipping
+matrix is actually present in the chunk it pulled, and that the string swap actually changed
+something, so a probe that silently compared a chunk against itself would fail loudly rather
+than report a reassuring zero. **Promoting this to `scripts/` is worth considering** — it is
+the only instrument in the project that can resolve a colour change. A neutral grey in:
+
+| EV | transposed R,G,B | R-B | fixed R,G,B | R-B |
+|---|---|---|---|---|
+| -6.0 | 39, 33, 34 | +5 | 36, 36, 36 | **0** |
+| -3.9 | 88, 78, 80 | +8 | 82, 82, 82 | **0** |
+| -1.9 | 150, 140, 142 | +8 | 144, 144, 144 | **0** |
+| -0.9 | 181, 172, 173 | +8 | 176, 176, 176 | **0** |
+| +1.1 | 228, 222, 223 | +5 | 225, 225, 225 | **0** |
+
+Worst cast on a neutral: **9 codes, transposed; 1 code, fixed** (the 1 is quantisation).
+Note the shape — the cast peaks in the midtones and vanishes at both ends, because the log
+encode compresses the imbalance where the curve is flat. And note that at EV -1.9 red falls
+6 while green *rises* 4: a chroma rotation at constant luminance, not an exposure change.
+
+### Why it could not be landed alone: the looks were cancelling it
+
+Reading the **real baked** `Data3DTexture` — not a model of it — on its neutral diagonal,
+R-B in codes:
+
+| look | in=8 | in=12 | in=16 | in=20 | in=24 |
+|---|---|---|---|---|---|
+| Open Sea, before | -14.7 | -19.1 | -15.3 | -4.8 | +3.8 |
+| Open Sea, after re-author | -9.2 | -10.1 | -2.9 | +10.7 | +20.9 |
+
+Every look carried a cool bias, and on a neutral it very nearly cancelled AgX's spurious
++9 warm: **Open Sea landed a neutral at -3.8 codes before, and would have landed it at
+-16.4 with the matrix fixed and the look untouched.** Three of the four `temp` values were
+negative. That is not a coincidence and it is not a grade; it is half a tonemapper fix,
+spread across four look definitions by whoever tuned them against a tinted AgX.
+
+Fixing the matrix alone would therefore have cooled every frame by 10 to 16 codes and moved
+the game away from the warm direction AGENTS.md sets. So `temp` went up on all four looks.
+Solved numerically against the pre-fix chain, midtone-weighted:
+
+| look | temp before | temp after | delta |
+|---|---|---|---|
+| Blue Hour | -0.22 | -0.132 | +0.088 |
+| Cold Morning | -0.07 | **+0.022** | +0.092 |
+| Amber Reach | +0.13 | +0.227 | +0.097 |
+| Open Sea | -0.025 | **+0.069** | +0.094 |
+
+All four land within 0.009 of each other, which is the check on the whole exercise: the
+quantity being cancelled is a property of the tonemapper, not of any look, so it had better
+need the same correction everywhere. It did.
+
+### What the re-author does and does not restore
+
+Full chain, neutral in, against the pre-fix frame:
+
+| | EV -4 | EV -2 | EV 0 | EV +1 | EV +2 |
+|---|---|---|---|---|---|
+| residual d(R-B), Open Sea | -2.6 | -3.7 | **-0.7** | +2.5 | +6.6 |
+| residual d(luma), Open Sea | +0.8 | +1.8 | +2.6 | +2.6 | +2.4 |
+
+- **Midtones match to under a code**; shadows land 2-4 codes cool, highlights 6 codes warm.
+  That residual is structural and cannot be tuned out with `temp`: the bug was a per-channel
+  gain applied *before* the log encode, so its cast peaked in the midtones and died at both
+  ends, while `temp` is a display-space balance whose effect scales with level. Two different
+  shapes. Matching the midtones is the right trade — that is where white balance is judged.
+- **The frame is ~2.5 codes brighter at middle grey** (about 0.03 stops). `temp` is
+  luma-normalised at the point it is applied, but contrast, split tone, saturation and the
+  shoulder are all per-channel and non-linear, so re-balancing the channels moves each one
+  along the curve and the luma does not come back exactly. Not worth chasing; recorded so
+  nobody re-derives it.
+
+`AGX_OUT` also carried a typo: `-0.1413173` where three has `-0.1413298`, giving row sums of
+1.000012 instead of 1. Worth +0.000018 stops — about 200x below one 8-bit LSB — and
+corrected in passing only so the pair is verifiably three's and the next reader has no
+unexplained digit to wonder about.
+
+### On the sixteen panes, and the residual the re-author does NOT remove
+
+Gates green: `check-shaders` 42/42, `typecheck` 0 errors. Re-shot all sixteen. Whole-frame
+d(R-B) against the original, fix-only against fix-plus-re-author:
+
+| scene | fix only | fix + re-author | run-to-run noise |
+|---|---|---|---|
+| noon | +3.4 | **-0.9** | -12.1 |
+| dawn | -10.9 | **-1.4** | +0.3 |
+| fog | -10.4 | **-0.8** | +0.7 |
+| storm | -9.5 | **-2.7** | -2.2 |
+| orbit | -18.7 | **-2.4** | +7.0 |
+| helm | -19.3 | **-2.4** | +9.0 |
+| **shadow** | **-16.0** | **-5.9** | **+0.9** |
+| island | -19.0 | -10.6 | +1.6 |
+| wildlife | -21.6 | -14.5 | +6.6 |
+| waterline | -34.3 | -17.9 | +0.9 |
+
+Eleven of sixteen now sit inside ±3 codes. But the re-author is **not** a clean no-op, and
+the honest number is `shadow`'s: **-5.9**, against a run-to-run noise of +0.9. Real, and
+larger than the neutral-ramp residual of -0.7 predicted at middle grey.
+
+The reason is that a frame is not a grey card. Fitting `temp` on neutrals leaves saturated
+blues under-corrected, because the two operations differ across *saturation* as well as
+across level — the bug was a per-channel gain before the log encode, `temp` is a balance
+after the curve:
+
+| Open Sea, residual d(R-B) | EV -4 | EV -2 | EV 0 | EV +2 |
+|---|---|---|---|---|
+| neutral | -2.6 | -3.7 | **-0.7** | +6.6 |
+| flax canvas | -2.4 | -3.8 | **-1.0** | +6.4 |
+| sky blue | -1.2 | -3.9 | **-6.7** | -7.6 |
+| deep sea blue | -0.7 | -3.4 | **-7.6** | -11.9 |
+
+Which is exactly the ordering of the leftovers in the table above: the four panes still
+carrying -10 to -18 (`island`, `wildlife`, `waterline`, and `shadow` at -5.9) are the
+sky-and-sea-dominated ones. `noon`, `dawn`, `fog`, `orbit`, `helm` — all with more canvas,
+deck and hull in frame — land inside 3.
+
+**This was a deliberate choice, not a miss.** One `temp` knob can match neutrals or saturated
+blues, not both, and the trade is measurable:
+
+| extra dtemp | neutral @ EV0 | sky blue @ EV0 |
+|---|---|---|
+| +0.00 (shipped) | **-0.7** | -6.7 |
+| +0.04 | +4.4 | -2.8 |
+| +0.08 | +9.5 | +1.0 |
+
+Neutrals win: white balance is judged on canvas, foam, cloud and hull highlights, and 7 codes
+on an already -87-code stylised sky is 7% of an artistic choice, while 7 codes on white canvas
+is the difference between flax and bleached cotton. The proper instrument for the remaining
+blue shift is `blueTeal` and `shadowTint`, which are grade decisions and are listed below as
+not mine.
+
+Two of the sixteen panes are worth ignoring entirely rather than trusting: `masthead` (-13.0,
+noise +16.1) and `sunset` (sky noise +14.0), and `waterline`'s before/after pair caught the
+ship at visibly different positions, so its -17.9 is part composition. **A single control pair
+per scene is one sample of a noisy quantity** — it can understate the noise as easily as
+overstate it, and it did here.
+
+### What this does not fix, and one thing worth using
+
+- **Sail white balance was never measured per-material here.** Sunlit flax and a sunlit cloud
+  are colourimetrically identical in these frames (both R-B ~ +55), so no colour gate can
+  separate them, and hand-placed boxes are contaminated by the lit sea in `golden` and
+  `dawn`. §73 already built the right instrument for this — the sail meshes rendered alone
+  into a private RGBA8 target, clear alpha 0, so the alpha channel *is* the silhouette. That
+  is the tool for any future per-material colour question. It was not needed here, because
+  the change is now a no-op on screen by construction.
+- **The looks are still authored against a moving target in one respect**: the grade sits
+  downstream of the adapt pass, so a look tuned on one frame's exposure is not tuned on
+  another's. Out of scope, but it is the reason two of these `temp` values could drift again.
+- **Nothing here touched `blueTeal`, `shadowTint` or `highlightTint`**, which also carry
+  chroma and which a real colourist would probably rebalance now that the tonemapper is
+  neutral. That is a look decision, not a correctness one, and it belongs to whoever owns
+  the grade.
+
+## 81. Reconciliation of four worktrees, and what the audit itself found
+
+Four Claude worktrees existed. Audited before anything was deleted, pruned or reset.
+
+| worktree | branch | state | disposition |
+|---|---|---|---|
+| `dazzling-nightingale-d51005` | `claude/dazzling-nightingale-d51005` | clean, 0 commits off main | **obsolete** — fully represented on main |
+| `youthful-newton-84a949` | `claude/youthful-newton-84a949` | clean tip, **dirty**: `src/core/PostProcessing.ts` | **integrated** (§80's sibling; comment only) |
+| `reverent-jepsen-5ed163` | `claude/gifted-lalande-041ee3` | clean tip, **dirty**: `src/util/glsl.ts`, `src/post/luts/LookLut.ts` | **integrated** as §80 |
+| `frosty-pascal-b9e451` | `claude/frosty-pascal-b9e451` | clean, **2 commits off main** | **integrated** as §79, source commit cherry-picked to preserve it |
+
+`wip/sail-canvas` remains deliberately unmerged (§53) and is untouched. The two `src/ocean`
+sessions I had reported as running had in fact **completed**: earth curvature is on main in
+`OceanMesh.ts`/`surface.ts` (§75/§76 — one of which had to be renumbered because both
+sessions claimed §75 concurrently), and the far-field `Nlow` work landed with it.
+
+### Three things the audit turned up that were not in any task
+- **Section numbers collide when sessions run concurrently.** `frosty-pascal` wrote §65
+  against a main that had reached §78, and the two ocean sessions both took §75. Renumbered
+  on integration. A monotonically-numbered shared document is not concurrency-safe, and this
+  is now the third collision.
+- **The AgX fix is coupled to the look temps and could not have been integrated alone.**
+  Un-transposing the inset removes a +9-code warm bias that *every look was authored on top
+  of*, so their temps had drifted cool to cancel it. Landing the matrix without the temps
+  would have turned every frame cold. Verified on the neutral reference — the near-white
+  canvas reads R−B **−3.0 both before and after** — so the tonemapper is now correct and the
+  screen result is unchanged.
+- **A whole-frame R−B is not a white-balance test.** My first check read −51.7 at noon and I
+  nearly took it for a cold cast; noon is a blue ocean under a blue sky and reads −51.7
+  either way. The statistic has to be taken on something that is meant to be neutral.
+
+### Verified after integration, not assumed
+`waterline`: the flat pale plate is gone — mean |dL/dx| across the hull band is 6.7–15.0 at
+every row, where a flat plate is near zero, and the crop shows planking, gunport stripe, gun
+muzzles and copper sheathing. The AgX row-sum invariant holds at 1.0000000 on all three rows
+of the integrated file. §71's log-space contrast branch survived the LookLut overwrite.
