@@ -5938,6 +5938,13 @@ exposure fixed, changing *only* the lower-hemisphere contribution, and showing t
 that is run, the standing statement is: **verified environment-lighting defect; strongest causal
 candidate for the close-view sail film; root cause not confirmed.**
 
+> **SUPERSEDED by §93.** That test has now been run. The probe's missing sea was fixed and the
+> settling test came back **negative**: the sail's film ratio moves by at most 2.6% and its hue
+> moves the *wrong* way (bluer, i.e. closer to the sea's cast). The environment probe was a real
+> defect and is fixed, but it **is not the cause of the sail film** and is no longer the strongest
+> causal candidate. `sheenSpecularDirect` — see the note below in this same section — is, and it
+> has not been causally tested.
+
 **The "clouds" painted on the canvas are `sheenSpecularDirect`** — rendering that accumulator
 alone gives a black frame containing exactly those patches.
 
