@@ -6381,3 +6381,49 @@ expressed in output codes is a claim that every frame has the same brightness.**
 has `MAX_GAIN_STOPS = 4.5` and scenes that sit hard against it, so that claim is false here
 by construction. Grep the post stack for absolute constants and ask each one what it means
 on a frame whose sails are code 16.
+
+## 92. `waterYAt` says quadratic and is piecewise-linear — a verified mismatch, and an untested lead for P2
+
+Recorded by the integrating session while preparing the wake pass. **The code-level
+fact is verified by reading; the visual attribution is an untested lead and must
+not be cited as the cause of the near-hull seam until it is measured.**
+
+**The verified fact.** `src/vfx/shaders/hullwater.ts:36` comments the function
+"Quadratic through the three sampled water heights". The body is not a quadratic:
+
+    return u < 0.5
+      ? mix(w.x, w.y, u * 2.0)
+      : mix(w.y, w.z, (u - 0.5) * 2.0);
+
+Two straight segments joined at `u = 0.5`. A quadratic through three points is
+C1-smooth; this is C0 with a **slope discontinuity at midships**. The three
+samples `uWaterPort` / `uWaterStbd` are the ship-local water height at bow, mid
+and stern, so on a hull whose waterline §79 gives as ~53 m the samples sit ~26 m
+apart and the modelled sea surface along the side is a two-segment polyline.
+
+**Why it is a lead for P2.** The owner's P2 is a straight-line separation or
+partition in the near-hull foam, and a slope kink pinned to a fixed station is the
+right shape for a ruled crease running along the hull with a corner amidships.
+§79 already flagged this fit as unmeasured and said exactly why it should be
+looked at now: the live uniforms read 0.96 / 2.67 / -0.13 m to starboard against
+0.78 / -1.50 / -0.68 to port, which is consistent with 22 deg of heel rather than
+fit error, but "a 2.4 m wash used to hide any error there and a decimetre-deep
+band will not". Everything downstream keys off `wl = waterYAt(t, side)` —
+including the skirt's `clamp(wl + ..., uSkirtFloor, uSkirtCeil)` at line 404 — so
+a kink in `wl` propagates into the band's own edge.
+
+**What has NOT been shown.** That this kink is visible; that it is the seam the
+owner reported; that its magnitude at any real sea state is more than a few
+centimetres. It could easily be below the noise of the froth drawn on top of it.
+Two straight segments could also be *sufficient* for a swell whose wavelength is
+long against 53 m, which is the case this fit was presumably chosen for.
+
+**Discriminator for whoever picks this up.** The kink is at a fixed `t = 0.5`, so
+it is stationary in ship space while the sea moves through it — that is the
+signature to look for, and it distinguishes this from anything wave-locked.
+Raising the sample count, or fitting an actual C1 quadratic through the three
+points already sampled, changes the fit without touching the froth, which keeps
+the test clean. **This is the fix axis, not blur:** the owner's P2 explicitly
+forbids resolving the seam by globally blurring foam, and smoothing the underlying
+water fit is the opposite of that — it removes the straight edge rather than
+hiding it.
