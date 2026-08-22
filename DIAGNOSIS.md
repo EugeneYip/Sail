@@ -6057,6 +6057,16 @@ A **20x amplitude increase** in vertical acceleration noise, not merely a sign
 statistic. Player-visible in every view including `chase`, on exactly the clock a
 real machine delivers.
 
+> **RETRACTED BY §101.** The effect reproduces, but this figure is `rmsDv` — a
+> velocity-change statistic, not an amplitude — and "player-visible" does not follow
+> from it. Re-measured under fresh-load repeated arms with a validated estimator: the
+> *positional* second difference is unchanged between clocks (excess ~8 mm), and
+> screen-space high-frequency motion is ~0.1 px and **identical** on both clocks in
+> chase and helm alike. §101 also localises the source to the wave field's own
+> designed roughness rather than the solver, so "the ship's solver is frame-rate
+> dependent" below is too strong: what is clock-dependent is the solver's *rejection*
+> of a rough input.
+
 **Confined to the vertical channel.** Horizontal `d|speed|` reversals are 4.8-6.7%
 on the fractional arm and 6.1-8.7% on whole multiples — no separation. The camera
 note reports 64-72% for its speed statistic; that is very likely a 3-D speed,
