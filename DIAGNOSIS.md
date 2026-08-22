@@ -5674,6 +5674,10 @@ exactly why a parallel session's tuning cannot be cherry-picked one line at a ti
 
 ## 85. Close-camera jitter: not reproduced, and two plausible mechanisms killed
 
+> **Superseded by §85a. The conclusion here is wrong and the probe it rests on was
+> measuring the wrong quantity.** Read §85a first; this section is kept for the two
+> mechanisms it does correctly eliminate.
+
 A player reports visible repeated vibration in the HELM, BOW/BOWSPRIT and MAST views. I was
 asked to reproduce it before any camera agent was dispatched. **I could not**, and the way it
 failed is worth recording because two attractive hypotheses died.
@@ -5742,3 +5746,72 @@ input driven and at `--dpr 2 --adaptive`.
 **Instrument left behind:** `.tmp/jitterfixed.mjs` — fixed-clock camera stability with the
 sign-reversal statistic and a repeated control. `.tmp/inspect.mjs` — eight deterministic
 ship-relative inspection stations, which is what made the geometry defects reproducible at all.
+
+### 85a. Reproduced. The camera pipeline IS frame-rate dependent, in three modes only
+
+§85 concluded "not reproduced". That was wrong, and it was wrong for two reasons, both
+of which were pointed out to me.
+
+**The probe measured the wrong quantity.** It computed `camWorldDelta − shipWorldDelta`,
+which removes the ship's **translation only**. A camera rigidly attached at an offset
+moves in world space when the ship rolls, pitches or yaws, so that residual counted ship
+rotation as camera jitter — *in proportion to the lever arm*, which is longest at the
+bowsprit. That is very likely why bowsprit read highest in the first attempt, and why the
+numbers would not repeat. The correct residual is
+
+    localCamPos = inverse(shipQuat) · (camPos − shipPos)
+    relCamQuat  = inverse(shipQuat) · camQuat
+
+and jitter is the frame-to-frame change of *those*.
+
+**And a fixed clock removes the condition under test.** §85's "every mode reads 0.5–0.8%"
+was measured at a uniform 16.67 ms. The player's machine has an irregular interval, so
+that run could not speak to the defect at all. Correct smoothing primitives do not prove
+the *pipeline* is dt-independent — target updates, ship transforms, clamps and update
+ordering are all still in play.
+
+**Corrected measurement.** Same initial state, environment, mode, (empty) input trace and
+**total simulated time** in both arms. Regular arm: uniform 16.67 ms. Irregular arm: a
+fixed reproducible sequence of whole multiples of the refresh interval
+(`1,1,2,1,3,1,1,2,1,1,4,1,2,1,1,1`), which is what a struggling display actually delivers.
+Residual in the ship's frame, as above. Three repeats of the irregular arm per mode.
+
+| mode | regular | irregular ×3 | mean irregular |
+|---|---|---|---|
+| chase (control) | 0.8% | 0.8, 0.8, 0.8 | **0.8%** |
+| orbit (control) | 0.5% | 0.8, 0.4, 0.8 | **0.7%** |
+| **helm** | 0.5% | 3.0, 2.7, 4.9 | **3.5%** |
+| **bowsprit** | 0.5% | 14.4, 13.6, 10.2 | **12.7%** |
+| **masthead** | 0.8% | 13.6, 12.9, 10.2 | **12.2%** |
+
+(dY sign-reversal rate of the local position residual. Reversals distinguish vibration
+from motion: smooth motion keeps its sign, vibration reverses.)
+
+**The controls do not move.** They sit at 0.7–0.8% with a 0.4-point spread under exactly
+the same irregular clock that takes the three close modes to 3.5%, 12.7% and 12.2% —
+4×, 16× and 15× the control, with within-mode spreads (2.2, 4.2, 3.4 points) far smaller
+than the gap. **These are precisely the three modes the player named.**
+
+Two further narrowings, both useful:
+- **It is positional, not orientational.** Relative angular reversals are **0.0% in every
+  mode and every arm**. Whatever is wrong is in what computes the eye's *position*, not
+  its aim.
+- Bowsprit's positional residual *magnitude* is highly repeatable (0.3278, 0.3218,
+  0.3272 m/s) while its reversal rate varies — so the amount of motion is stable and it
+  is the direction-flipping that carries the defect.
+
+**What the three affected modes have in common** and the controls do not: they are
+**ship-mounted stations** — the eye is a fixed point on the vessel — rather than tethered
+followers that solve a distance. So they read the ship's anatomy and its heave directly.
+
+**A lead, not a conclusion.** `HelmMode` drives its vertical bob with
+`springDamp(this.bob, −frame.heaveResidual * KNEE_FLEX, this.vBob, 0.3, dt)`. If
+`heaveResidual` is computed as a per-frame *difference* without dt normalisation, it spikes
+on a long frame and that spike drives the bob spring — which would be **positional, on the
+vertical axis, in ship-mounted modes only**, matching every feature of the measurement.
+That has *not* been verified and must not be treated as the cause until it is.
+
+`damp` and `springDamp` remain individually dt-correct (§85), so the fault is elsewhere in
+the pipeline — which is exactly the case §85 argued could not exist.
+
+**Instrument:** `.tmp/jitterrel.mjs`.
