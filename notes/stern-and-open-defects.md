@@ -318,3 +318,46 @@ and were driven to exactly zero by two independent ablations.
 **Lesson to carry:** determinism and reproduction can be in tension. Verify the
 defect is still present in the state you made deterministic BEFORE measuring anything
 against it. A floor and a reference are worthless if the artefact left the scene.
+
+### Issue 3 BLOCKED: the artefact's severity is unstable across loads
+
+Take three used the wall-clock settle that reproduced in §104, at the identical
+station and cloudCover 0.8, and built the reference from a separate load at
+4800x2700. The result does not answer the reference question:
+
+| arm | dark blk/frame | max area | churn/frame | pixel HF |
+|---|---|---|---|---|
+| normal 1600x900 | 1.94 | 2.40% | 2.20 | 1.399 |
+| supersampled 3x, downsampled | 2.69 | 1.74% | 4.07 | 1.620 |
+
+Two problems. **The normal arm barely reproduced** — 1.94 dark blocks against
+7.12 / 8.56 / 9.31 / 8.50 measured at the same station, cover and settle earlier. And
+**the supersampled arm is not better**: more dark blocks, more churn, more pixel HF.
+
+So severity at this condition ranges from about **1.9 to 9.3 dark blocks between
+loads**, which is as large as any effect I have been trying to measure. A two-arm
+comparison cannot resolve a fix against that, and neither the earlier
+"supersampling removes it" reading (measured in a state that turned out to contain no
+defect at all) nor this one can be trusted.
+
+**What still stands, and why.** §104's causal partition: in runs where base measured
+7-9 dark blocks, two independent ablations — volumetric clouds off, and the ocean's
+reflection forced off the probe — drove the metric to **exactly 0.00 with 0.00
+churn**. An exact zero cannot arise from load-to-load luck when the base is 7-9, so
+the chain (cloud content in the probe -> ocean reflection -> dark blocks) holds. Also
+still standing: the cloud-shadow term, TAA, and the probe's 6 Hz cadence were each
+eliminated, and the one-sided dark floor was rejected for creating the artefact at a
+second zoom.
+
+**What is not established:** the magnitude, whether supersampling removes it, and
+which filtering stage is deficient. The mechanism wording stays where the owner put
+it: *unresolved-normal / insufficient angular filtering is the strongest candidate,
+not isolated from probe-resolution or reflection-filtering effects.*
+
+**The blocker, precisely.** Before any fix can be evaluated, the repro needs to be
+made *stable*, not just present. The fixed-tick settle removed the artefact entirely,
+so some state that the wall-clock settle reaches and the tick settle does not is what
+determines severity — cloud field maturity and probe contents are the obvious
+candidates. Finding and pinning that variable is the next piece of work, and it must
+come before another reference or another fix attempt. Guessing past it is how the
+last two attempts were wasted.
