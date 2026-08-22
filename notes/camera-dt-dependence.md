@@ -136,3 +136,121 @@ against a mounted camera's 0.07-0.20 m/s, so the same artefact is 15x smaller
 relative to the signal it is competing with. A reversal-rate statistic is a
 signal-to-noise measure, and a bolted-down camera is the quiet channel where a
 small artefact shows.
+
+### And why only the mounted modes: they are the only ones with no output filter
+
+`CameraSolve.posSmoothTime` is the rig's final second-order filter on the solved
+eye. Grepping the modes:
+
+    Chase.ts     posSmoothTime = 0.34
+    Orbit.ts     posSmoothTime = 0.30
+    Cinematic    0.4 - 0.75 (0 for the one hard-mounted shot)
+    Helm / Bowsprit / Masthead   0 (the CameraSolve default)
+
+and `CameraSolve` says why: *"Zero for anything bolted to the ship — a deck
+camera that lags its mount reads as the deck sliding under your feet."* That is
+correct as a composition rule and it is also the reason these three modes are the
+ones the player named. A lag STEP arriving at the eye is smeared over ~20 frames
+by a 0.3 s spring and never reverses sign; arriving unfiltered it is a
+frame-to-frame square wave.
+
+So the pipeline is dt-dependent for every mode. Only the three with no output
+filter show it.
+
+### Ablation, one term at a time, irregular arm, one page load
+
+`node .tmp/jitter2.mjs --abl=none,heave,attitude,mount,both --modes=chase,helm,bowsprit,masthead --arms=irr --reps=3`.
+Each ablation replaces what the CAMERA sees with the raw hull value while the
+filter keeps its own trajectory. dY / dX / dZ reversal %, and the residual
+magnitude:
+
+| ablation | mode | dY | dX | dZ | \|dpos\|/s |
+|---|---|---|---|---|---|
+| none | chase | 0.9 | 0.8-2.7 | 5.7-7.6 | 1.1-1.5 |
+| none | helm | 3.8 | 5.3-8.4 | 25-27 | 0.36-0.46 |
+| none | bowsprit | 11.5 | 12.2-13.3 | 25-28 | 0.32-0.38 |
+| none | masthead | 10.9 | 8.3-14.4 | 27-30 | 0.33-0.37 |
+| `heaveResidual := 0` | helm | **11.6** | 12.1-13.6 | 25-28 | 0.31-0.34 |
+| `heaveResidual := 0` | bowsprit | 15.5 | 11.4-13.6 | 25-26 | 0.31 |
+| `heaveResidual := 0` | masthead | 13.0 | 7.2-16.0 | 25-27 | 0.32-0.34 |
+| `smoothQuat := rigidQuat` | helm | 3.0 | 9.9-11.4 | 25.1 | 0.31-0.33 |
+| `smoothQuat := rigidQuat` | bowsprit | 11.8 | 9.9-11.4 | 25.1 | 0.28-0.32 |
+| `smoothQuat := rigidQuat` | masthead | 11.0 | 10.3-15.2 | 25.1 | 0.30-0.32 |
+| `mountPos := rigidPos` | helm | 4.2 | 12.2 | **12.2** | **0.062** |
+
+Three results, and the first two are the ones that matter:
+
+**1. The `heaveResidual` lead is not merely absent, it is BACKWARDS.** Zeroing it
+takes helm from 3.8% to **11.6%** — up to the level of the other two mounted
+modes. The knee-flex bob was *masking* the defect: it adds genuine smooth
+vertical travel to helm's residual, and a sign-reversal statistic is a
+signal-to-noise measure, so the extra smooth signal was holding helm's dY down.
+That is the whole of why helm read 3.5% in §85a while bowsprit and masthead read
+12%. **Lead killed, and the direction of its effect recorded so nobody chases it
+again.**
+
+**2. Ablating the attitude cascade alone changes nothing** — bowsprit 11.5 ->
+11.8, masthead 10.9 -> 11.0, dZ pinned at 25.1%. So the two-stage cascade, for
+all that it has the worst lag spread (43.8 ms), is not the dominant carrier.
+
+**3. Ablating `mountPos` collapses the residual MAGNITUDE**, helm 0.36-0.46 ->
+0.062 m/s — an 83% cut, back to the regular arm's own 0.06-0.23 m/s. Its dZ
+halves, 25 -> 12%. So `mountPos`'s dt-dependent lag against the ship's forward
+speed is where most of the *motion* is: 23.85 ms of lag spread at ~4 m/s of hull
+speed is 95 mm of fore-and-aft step, which is why **ship-local Z is the worst
+axis and reads the same 25% in all three mounted modes** — `mountPos` has no
+lever arm, so it hits all three equally. dY is where the lever arm shows, and dY
+is the axis that separates them.
+
+Note what ablating a term does to the *rate* as opposed to the magnitude: with
+`mountPos` raw, helm's dX rate goes UP (5-8% -> 12%) while its magnitude falls
+83%, because the attitude term is now the whole of a much smaller signal. **The
+reversal rate is a ratio.** Any fix therefore has to remove the dt-dependence of
+BOTH terms; removing one only re-weights the statistic.
+
+### Root cause
+
+Three facts compose into it:
+
+1. Every filter in `ShipFrame` is a zero-order-hold discretisation tracking a
+   target that moves, so its lag is `v/rate - v*dt/2 + O(dt^2)` — a function of
+   the frame interval. The attitude cascade pays the half-step twice.
+2. Under an irregular clock the lag therefore steps up and down frame by frame.
+   `mountPos` carries most of the amplitude (23.85 ms of lag spread against the
+   hull's ~4 m/s of way = ~95 mm of fore-and-aft step, hence dZ being the worst
+   axis and equal across all three mounted modes); the attitude cascade carries
+   the rest, multiplied by a 16-38 m lever arm, hence dY separating the modes by
+   lever arm.
+3. The three ship-mounted modes take `mountPos` and `smoothQuat` straight to the
+   eye with `posSmoothTime = 0`, on purpose. The two tethered controls pass the
+   same steps through a 0.30-0.34 s output spring, which smears each step over
+   ~20 frames so it never reverses sign.
+
+None of this is a defect in `damp` or `springDamp`, and none of it is
+`heaveResidual`. It is the pipeline feeding a correct primitive a target that
+jumped, exactly as §85a suspected the shape of.
+
+### Fix: sub-step the ship-frame filters
+
+`src/camera/ShipFrame.ts` only. `update` now runs `ceil(dt / FILTER_SUBSTEP)`
+equal sub-steps with the raw ship transform interpolated across them (`lerp` for
+position, `slerp` for attitude, linear for the scalar channels), so a 66.7 ms
+frame produces what four 16.7 ms frames would have produced. The primitives are
+untouched.
+
+`FILTER_SUBSTEP = 1/240` and not `1/60`, because the sub-step COUNT is an
+integer: at 1/60 the count flips between one and two exactly as dt crosses
+16.7 ms, which is where players live, and that flip is itself a 4 ms lag step.
+`.tmp/zohfix.mjs` scores the candidates on lag spread across dt from 1 to 4
+refresh intervals *including fractional ones*:
+
+| | mount 0.11 | attitude cascade | anchor 0.55 |
+|---|---|---|---|
+| as-is | 23.85 ms | 43.79 ms | 24.81 ms |
+| midpoint target | 1.48 | 6.21 | 0.39 |
+| sub-step 1/120 | 1.26 | 2.50 | 1.16 |
+| **sub-step 1/240** | **0.33** | **0.69** | **0.31** |
+
+`ShipFrame.substep` is a writable field rather than a constant so a probe can set
+it huge, collapse the loop to one step of the whole frame, and measure before and
+after in the same page load.
