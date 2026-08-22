@@ -73,6 +73,26 @@ agent's half-finished state as if it were reviewed.
 source changes makes `git log` useless for bisecting, and has already sent one
 investigation to an empty window.
 
+## Recording a diagnosis when you are not the integrating session
+
+**If you are a background or worktree agent, write your findings to
+`notes/<topic>.md` and do not touch `DIAGNOSIS.md`.** Use a plain descriptive
+heading; never allocate a `§` number or a `## <number>.` heading.
+
+Only the integrating session on `main` assigns numbers, and it does so at the
+moment of integration. The reason is that the highest number an agent can see is
+the one that was free when its worktree was created, not the one free when its
+work lands — that has collided three times, including two sessions both taking
+§75 and one writing §65 against a main that had reached §78.
+
+`notes/README.md` has the full rationale. `preflight` lists any unintegrated
+notes, so a paused session's findings are visible rather than lost.
+
+**Existing numbered sections are authoritative and are not renumbered** to tidy
+duplicates. §36, §40, §46 and §60 each appear twice from earlier collisions;
+they stay, because a stable reference someone has already cited is worth more
+than a tidy sequence.
+
 ## Keeping the repo publishable
 
 `npm run preflight` must stay green — it also runs in CI before any deploy. It

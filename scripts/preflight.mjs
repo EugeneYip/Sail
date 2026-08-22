@@ -119,6 +119,50 @@ try {
   fail.push(`the tree does not build — check-glsl:\n${out.split('\n').map((l) => `      ${l}`).join('\n')}`);
 }
 
+/* 8. Unintegrated diagnosis notes, and section-number collisions. ----------- */
+/*
+ * `notes/<topic>.md` is where a concurrent session records a diagnosis, because
+ * `DIAGNOSIS.md` is one monotonically-numbered file and therefore unsafe for
+ * concurrent writers — the numbers collided three times and the file conflicts
+ * even when they don't. See `notes/README.md`.
+ *
+ * Two jobs here. A note left behind is UNINTEGRATED WORK and is surfaced so a
+ * paused session's findings cannot be quietly lost — that has already happened
+ * once. And a `## <n>.` heading appearing in a note means an agent allocated a
+ * number it had no business allocating, which is the one thing this convention
+ * exists to prevent, so that is a failure rather than a warning.
+ */
+{
+  const notes = tracked.filter((f) => /^notes\/.+\.md$/.test(f) && f !== 'notes/README.md');
+  for (const n of notes) {
+    const body = await readFile(n, 'utf8');
+    const stolen = body.match(/^##\s*\d+\./m) || body.match(/§\s*\d+/);
+    if (stolen) {
+      fail.push(`${n} allocates a DIAGNOSIS number (${stolen[0].trim()}) — only the`
+        + ' integrating session on main does that; use a descriptive heading');
+    }
+  }
+  if (notes.length) {
+    warn.push(`${notes.length} unintegrated note(s) in notes/: ${notes.join(', ')}`
+      + ' — fold into DIAGNOSIS.md and delete');
+  }
+
+  // Duplicate section numbers are reported, never auto-fixed: an existing number
+  // someone has cited is worth more than a tidy sequence. Known duplicates from
+  // earlier collisions are allowed through so this cannot cry wolf.
+  const KNOWN_DUPES = new Set([36, 40, 46, 60]);
+  const nums = [...(await readFile('DIAGNOSIS.md', 'utf8')).matchAll(/^## (\d+)\./gm)]
+    .map((m) => Number(m[1]));
+  const seen = new Set();
+  const dupes = new Set();
+  for (const n of nums) { if (seen.has(n)) dupes.add(n); seen.add(n); }
+  const fresh = [...dupes].filter((n) => !KNOWN_DUPES.has(n));
+  if (fresh.length) {
+    fail.push(`DIAGNOSIS.md has NEW duplicate section number(s): ${fresh.join(', ')}`
+      + ' — a concurrent writer allocated a number; see notes/README.md');
+  }
+}
+
 /* 8. A licence is required to publish, and is the owner's choice. ----------- */
 if (!tracked.some((f) => /^LICEN[SC]E/.test(f))) warn.push('no LICENSE — pick one before publishing');
 
