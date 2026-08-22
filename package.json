@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "check-glsl": "node scripts/check-glsl.mjs",
     "preflight": "node scripts/preflight.mjs",
-    "check-shaders": "node scripts/check-shaders.mjs"
+    "check-shaders": "node scripts/check-shaders.mjs",
+    "measure-selftest": "node scripts/measure-selftest.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"
