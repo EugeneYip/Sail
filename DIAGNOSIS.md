@@ -8110,12 +8110,18 @@ Boston rendered as a near-black slab against a bright harbour in every capture, 
 and after the topology work — and it is a large part of what the player was reporting as
 dark terrain slabs.
 
-**Scope held.** `box()` is reached only by Boston: the ship has its own `MeshBuilder`.
-`tube`, `cyl` and `rope` in `wgeom.ts` share the same inverted convention and are also
-reached by `vesselGeom`, `Buoys` and `creatureGeom` — those are **left alone**, and
-Boston's two `tube` uses were corrected at the call site instead. Re-lighting the
-vessels, buoys and creatures is a separate pass with its own verification, and it is now
-the strongest remaining lead on world-wide shading.
+**Scope held, and the claim bounded.** `box()` is reached only by Boston: the ship has its
+own `MeshBuilder`. `tube`, `cyl` and `rope` in `wgeom.ts` are wound the same way and are
+also reached by `vesselGeom`, `Buoys` and `creatureGeom` — those are **left alone**, and
+Boston's two `tube` uses were corrected at the call site instead.
+
+What is *proven* here is the Boston land, island and box cases, each measured. Whether the
+vessels, buoys and creatures are actually mis-lit is **a strong cross-system lead, not a
+confirmed world-wide visual defect**: no representative vessel, buoy or creature consumer
+has been inspected visually or numerically, and a call site may reverse deliberately or an
+`nfix` entry may already correct it. `finish()`, `tube()`, `cyl()` and `rope()` must not be
+flipped globally without that per-consumer audit and a broad visual regression — the blast
+radius is far larger than Boston's `box()`.
 
 ### Player-route acceptance
 

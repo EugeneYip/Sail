@@ -542,10 +542,22 @@ player was calling giant dark terrain slabs. Reversed, all three now measure up.
 Scope held deliberately: `box()` is reached only by Boston (the ship has its own
 MeshBuilder), so that fix is contained. `tube`, `cyl` and `rope` in wgeom share the same
 inverted convention and are ALSO reached by vesselGeom, Buoys and creatureGeom — left
-untouched, Boston's two tube uses fixed at the call site instead. **Re-lighting the vessels,
-buoys and creatures is now the strongest lead on world-wide shading** and wants its own pass.
+untouched, Boston's two tube uses fixed at the call site instead.
+
+Bounding the claim: what is PROVEN is the Boston land, island and box cases. Whether the
+vessels, buoys and creatures are actually mis-lit is a **strong cross-system lead, not a
+confirmed world-wide defect** — no representative consumer of tube/cyl/rope has been
+inspected yet, and a call site could reverse deliberately or an nfix entry could already
+correct it. No global flip without a per-consumer audit and a broad visual regression.
 
 Two honest notes. Vertex counts near sea level are not acceptance — 26 % of the mesh is
 within ±5 m either way because 168 moored hulls float there and a beach is supposed to be
 shallow; my first instrument reported "no change" and was measuring the fleet. And the
 buildings still read dark, but that is albedo seen side-on, not normals.
+
+
+### Boston status
+
+**Boston topology engineering-accepted; deployed/player acceptance pending.** Frozen at the
+committed state. No facade polish, decorative windows, city beautification or collision
+physics in this or any following pass until player acceptance comes back.
