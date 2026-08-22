@@ -239,12 +239,22 @@ vec3 linearToSrgb(vec3 c){
 }
 // AgX — the modern filmic curve. Far better highlight hue retention than ACES
 // approximations, which is what keeps a bright sky from going cyan.
+//
+// Both matrices below are three's AgX pair, in three's orientation. GLSL's
+// scalar mat3 constructor takes COLUMNS, so each line here is a column and NOT
+// a row — every published AgX table is row-major, and pasting one in unchanged
+// silently transposes it. That was a real bug here for a long time; see
+// DIAGNOSIS 74. The invariant that catches it in one glance: the inset's
+// mathematical ROWS must each sum to 1, so that a neutral stays neutral.
+// Transposed, they sum to 1.106 / 0.933 / 0.961 and a grey enters the
+// per-channel contrast curve already tinted +0.15 / -0.10 / -0.06 stops —
+// only 0.04 stops of luminance, so it reads as a warm cast, not as exposure.
 const mat3 AGX_IN = mat3(
-  0.8566271, 0.0951212, 0.0482516,
-  0.1373401, 0.7612019, 0.1014577,
-  0.1118377, 0.0767050, 0.8113217);
+  0.8566272, 0.1373190, 0.1118982,
+  0.0951212, 0.7612420, 0.0767994,
+  0.0482516, 0.1014390, 0.8113024);
 const mat3 AGX_OUT = mat3(
-   1.1271006, -0.1413173, -0.1413173,
+   1.1271006, -0.1413298, -0.1413298,
   -0.1106066,  1.1578237, -0.1106066,
   -0.0164939, -0.0164939,  1.2519364);
 vec3 agxDefaultContrast(vec3 x){

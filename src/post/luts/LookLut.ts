@@ -28,7 +28,18 @@ import * as THREE from 'three';
 
 export interface Look {
   name: string;
-  /** -1 cool .. +1 warm, applied as a von-Kries-ish channel balance. */
+  /**
+   * -1 cool .. +1 warm, applied as a von-Kries-ish channel balance.
+   *
+   * These went up by ~0.09 each when the AgX inset matrix was un-transposed
+   * (DIAGNOSIS 74). The transposed inset had been handing the grade a frame
+   * already +9 codes warm in R-B, and every look here was authored to sit on
+   * top of that, so their temps had drifted cool to cancel it. With the inset
+   * neutral, that cool bias was left uncompensated and every frame went cold;
+   * these values put a neutral back where it was on screen. That is why a look
+   * called 'Cold Morning' now carries a slightly positive temp -- the number is
+   * the look's own white balance now, and no longer half a tonemapper fix.
+   */
   temp: number;
   gain: [number, number, number];
   lift: [number, number, number];
@@ -56,7 +67,7 @@ export const LOOK_KEYS = [-0.2, 0.0, 0.16, 0.5];
 export const LOOKS: Look[] = [
   {
     name: 'Blue Hour',
-    temp: -0.22,
+    temp: -0.132,
     gain: [0.9, 0.96, 1.12],
     lift: [0.004, 0.006, 0.012],
     gamma: [1.0, 1.0, 1.06],
@@ -74,7 +85,7 @@ export const LOOKS: Look[] = [
   },
   {
     name: 'Cold Morning',
-    temp: -0.07,
+    temp: 0.022,
     gain: [1.0, 1.0, 1.035],
     lift: [0.002, 0.003, 0.007],
     gamma: [1.0, 1.0, 1.0],
@@ -91,7 +102,7 @@ export const LOOKS: Look[] = [
   },
   {
     name: 'Amber Reach',
-    temp: 0.13,
+    temp: 0.227,
     gain: [1.055, 1.0, 0.935],
     lift: [0.0, 0.002, 0.006],
     gamma: [0.99, 1.0, 1.025],
@@ -113,7 +124,7 @@ export const LOOKS: Look[] = [
   },
   {
     name: 'Open Sea',
-    temp: -0.025,
+    temp: 0.069,
     gain: [1.0, 1.0, 1.012],
     lift: [0.0, 0.0005, 0.002],
     gamma: [1.0, 1.0, 1.0],
