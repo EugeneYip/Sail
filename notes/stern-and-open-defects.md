@@ -561,3 +561,34 @@ buildings still read dark, but that is albedo seen side-on, not normals.
 **Boston topology engineering-accepted; deployed/player acceptance pending.** Frozen at the
 committed state. No facade polish, decorative windows, city beautification or collision
 physics in this or any following pass until player acceptance comes back.
+
+### Issue 2: owner CLOSED (HullWater's transom pad). Exact operation NOT closed.
+
+DIAGNOSIS §111.
+
+**Why dt = 0 never worked.** It did freeze the wake — measured, WakeField 0 % of texels
+changed per frame, FoamSim 0 % after two settle frames. What it never froze was the image:
+`time.frame++` runs regardless of dt, so TAA's Halton jitter (`frame % SEQUENCE_LENGTH`)
+re-jitters, film grain re-dithers ~90 % of pixels by 1–2 codes, the cloud march re-marches on
+`frame % 64`, and a 1-LSB output dither fires. Every earlier screen-space instrument was
+reading those and concluding the wake was alive. The freeze that actually works: dt = 0, TAA
+off, grain off, bloom/DoF/AE off, clouds off, three settle frames — asserted on the buffers
+AND the framebuffer (static to ±3 codes).
+
+**Owner.** Ablation masks under that freeze, with particles held off in every arm so the
+control is clean: null control **8 px (0.0006 %)**; hiding HullWater's `sheet` masks
+**26,903 px** and removes the plate and its ruler-straight edge; hiding the `skirt` masks
+**7 px**; hiding particles leaves the plate and edge intact. So it is the **sheet's transom
+pad**, 9.5 m astern on a 47.5 m Lwl. Ablation beats colour ID here precisely because AgX
+cannot corrupt a difference mask.
+
+**What is not closed, and why.** The `rawA` debug render shows the pad as a hard-edged quad
+with non-zero alpha at its boundary, and the alpha line has two structures that could rule the
+edge — the `0.30 +` floor on vThick, and the `* 1.75` gain against the `min(.., 0.95)` cap,
+whose saturation contour is a line of constant distance astern. I could not separate them:
+three attempts encoded the value in colour channels and read it back from the COMPOSITED
+framebuffer, and AgX plus the look LUT wrecked all three. Same trap as the old ID-colour pass.
+
+Rule for next time: **never read numeric fields out of a tonemapped framebuffer** — sample a
+pre-tonemap target or write a dedicated debug target. No fix landed, because the two
+candidates imply different fixes and the brief requires closure first.

@@ -8150,3 +8150,109 @@ piles. One mesh, one draw call, unchanged.
 The buildings still read dark, but that is albedo — brick 0x7a4a3a and slate 0x4a4c52 seen
 mostly side-on — not the normals, and façade work is out of scope. The camera still
 enters rigging and terrain at close quarters; that is camera collision, not topology.
+
+## 111. Issue 2: the stern/wake partition is HullWater's transom pad. Owner closed, exact operation not yet closed.
+
+### Phase 1 — why dt = 0 never froze the wake
+
+It did freeze the wake. It never froze the *image*, and every earlier instrument was
+reading the image.
+
+`Engine.tick` does `time.elapsed += time.dt`, so at dt = 0 `uTime` holds. Measured with a
+readback of every candidate buffer (each checked for being non-trivially non-empty first,
+so a 0 % delta cannot be a silently empty buffer):
+
+| buffer | dt = 0 | dt = 1/60 |
+|---|---|---|
+| WakeField target (1024²) | **0 %** every frame | 5.5–8.2 % of texels per frame |
+| FoamSim ping/pong (512²) | 7.9 % then 4.1 % then **0 %** | ~3.6 % per frame |
+
+So the persistent wake is genuinely static, and FoamSim needs **two settle frames** for its
+ping-pong halves to converge — compare frame 0 with frame 1 and you conclude "not frozen".
+
+What kept moving is frame-indexed, not dt-indexed. `time.frame++` runs unconditionally, and:
+
+- **TAA jitter** — `Jitter.advance(frame, …)` picks `this.index = frame % SEQUENCE_LENGTH`,
+  so the sub-pixel offset and the TAA history change every tick at dt = 0;
+- **film grain** — measured as ~90 % of pixels moving 1–2 codes, uniformly, frame to frame;
+- **the cloud march** — `uFrameIndex = frame % 64`, giving the larger deltas confined to the
+  sky rows;
+- **a 1-LSB output dither** in the composite, which is deliberate.
+
+**The explicit freeze**, asserted rather than assumed: dt = 0, `antialias: 'off'`,
+`filmGrain: false`, bloom / DoF / autoExposure off, volumetric clouds off, and three settle
+frames discarded. Under it the wake target and the foam buffer both read 0 % changed across
+four frames while non-empty, and the framebuffer is static to within ±3 codes — the
+deliberate dither, nothing else.
+
+### Phase 2 — ownership, by ablation mask rather than colour ID
+
+The earlier ID-colour pass failed its own control because AgX pulled the palette together.
+An ablation mask cannot fail that way: freeze the state, remove one system, and every pixel
+that changed belonged to it.
+
+| arm | mask | verdict |
+|---|---|---|
+| base vs base2 (**null control**) | **8 px, 0.0006 %** | control passes |
+| hide HullWater `sheet` | **26,903 px, 1.868 %** | **owner** |
+| hide HullWater `skirt` | 7 px, 0.0000 % | not involved here |
+| hide particles | plate and its straight edge **remain** | not involved |
+
+The first attempt at this had a 1.578 % control and was binned: particles are the only
+stochastic element left under the freeze, so they are now held off in *every* arm of the
+comparison, which took the control to 8 px.
+
+The owner is **`HullWater`'s `sheet` mesh, and within it the transom pad** (`aPart = 1`).
+Visually decisive: with HullWater hidden the bright plate and its ruler-straight edge are
+gone and the wake is a continuous speckled field; with only particles hidden the plate and
+its edge are still there.
+
+One lever needed fixing to get there: `HullWater.update` writes `sheet.visible` from
+`ctx.speedN` every frame, so hiding it once does nothing. It has to be re-applied after the
+real update, and asserted after the ticks — the first run reported `visible = true` in the
+arm that was supposed to have hidden it.
+
+### Phase 3/4 — where it is, and what is NOT yet closed
+
+The pad is built as a `PAD_STATIONS × PAD_ACROSS` grid at `z = uLwl*0.5 + aft*uLwl*0.20`,
+so with `uLwl = 47.5` it runs **9.5 m astern of the transom**, half-width
+`uBeam*0.52*(1 + 0.25*aft)` on a 13.3 m beam. Rendering `rawA` — the pad's alpha before its
+clamp — shows the pad as a **hard-edged quad with dead-straight boundaries and a clearly
+non-zero value at those boundaries**: the fade does not finish inside the geometry.
+
+The alpha is
+
+```glsl
+a = min(cover * (0.34 + 0.66*bubbles) * (0.30 + 0.88*vThick) * edge * uOpacity * 1.75, 0.95);
+```
+
+and two things in it are structurally capable of producing a ruled edge:
+
+1. the **`0.30 +` floor** — where `vThick` reaches 0 the factor is still 0.30, so thickness
+   cannot switch the pad off, only `edge` and `bubbles` can;
+2. the **`* 1.75` gain against the `0.95` cap** — the product saturates wherever it exceeds
+   0.543, and inside the saturated region alpha is a flat 0.95, so the *cap contour* decides
+   the silhouette rather than the fade. `edge`'s aft factor is
+   `1 - smoothstep(0.45, 1.0, vT)`, a function of aft alone, so that contour is very nearly a
+   line of constant distance astern — which is exactly a ruled line across the wake.
+
+**This is indicated, not closed.** I could not produce a trustworthy alpha-versus-aft profile,
+and the reason is an instrument fault worth recording: three separate attempts encoded the
+quantity in colour channels and read it back from the *composited* framebuffer, and AgX plus
+the look LUT corrupted all three — a zero blue channel came back lifted, and silhouette
+selections leaked across the whole frame. This is the same trap the earlier ID-colour pass
+fell into.
+
+> **Do not read numeric fields out of a tonemapped framebuffer.** The next instrument has to
+> sample a pre-tonemap render target, or write to a dedicated debug target, and only then can
+> the exact operation be attributed between (1) and (2).
+
+No fix implemented: the brief requires causal closure first, and the two candidates imply
+different fixes — removing the floor versus removing the gain-against-cap.
+
+### The file already warned about this class
+
+The alpha line's own comment says `vThick * cover` "made vThick the sole author of the
+silhouette, and vThick is linear across a triangle — a straight edge", and moved authorship
+to the bubble texture to fix it. The gain-and-cap appears to have re-created a flat-topped
+silhouette by a different route.
