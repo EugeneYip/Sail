@@ -74,7 +74,19 @@ export class MeshBuilder {
       const i1 = this.vert(cx + s[o + 3] * hx, cy + s[o + 4] * hy, cz + s[o + 5] * hz, c, a);
       const i2 = this.vert(cx + s[o + 6] * hx, cy + s[o + 7] * hy, cz + s[o + 8] * hz, c, a);
       const i3 = this.vert(cx + s[o + 9] * hx, cy + s[o + 10] * hy, cz + s[o + 11] * hz, c, a);
-      this.quad(i0, i1, i2, i3);
+      // Reversed. `finish()` takes its face normal as (b - a) x (c - a), and under
+      // that order the table's own winding comes out INWARD: the +Y face reads
+      // e1 x e2 = (2,0,0) x (2,0,2) = (0,-4,0). Measured on a committed box whose
+      // top face is at a known height, all four of its vertices carried
+      // normal.y = -1, so every box was lit as though its roof were its floor.
+      // That is why Boston's quays, wharf and buildings rendered as black slabs.
+      //
+      // Only Boston reaches this method -- the ship has its own MeshBuilder --
+      // so the correction is contained. `tube`, `cyl` and `rope` here share the
+      // same inverted convention and are NOT touched: those are also reached by
+      // the vessels, the buoys and the creatures, and re-lighting all of them is
+      // its own pass with its own verification.
+      this.quad(i0, i3, i2, i1);
     }
   }
 
@@ -242,7 +254,7 @@ export function toInstanced(src: THREE.BufferGeometry): THREE.InstancedBufferGeo
   return g;
 }
 
-/** Unit-cube corner triples, four per face, wound counter-clockwise outward. */
+/** Unit-cube corner triples, four per face. `box()` reverses them; see there. */
 const BOX_FACES = [
   1, -1, -1, 1, -1, 1, 1, 1, 1, 1, 1, -1, // +X
   -1, -1, 1, -1, -1, -1, -1, 1, -1, -1, 1, 1, // -X

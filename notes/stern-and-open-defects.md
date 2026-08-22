@@ -514,3 +514,38 @@ Fix direction (not started): let landHeight go negative seaward of a declared sh
 the surface crosses y = 0 on a line; stand wharves on footings below the trough; drop island
 bases below the wave band; close the shell. All of it wants the missing navigable-water
 region defined first.
+
+### Boston topology FIXED — and the normals were inside out all along
+
+DIAGNOSIS §110. The topology went the way §109 predicted: a shoreline curve with a 220.9 m
+throw instead of a straight rectangle edge; height signed about that curve so the surface
+crosses sea level on ONE row instead of a 2600 × 75 m plate; a footprint mask taking the
+ends and the back down to the shelf so there are no straight side or back walls; the
+boundary ring walled to −52 and capped, so the land is watertight instead of a shell; Long
+Wharf lifted onto piles with its deck at y ∈ [3.2, 5.2] and abutted into the shore; the
+quays turned into a segmented seawall straddling the contour; islands based at −18 and held
+off the fairway. And the thing that never existed — a declared navigable corridor — now
+does, Boston-specific and not a navigation framework.
+
+Measured on the committed mesh: height **exactly 0** at all 400 contour samples, max terrain
+height in the corridor **−34.00 m**, zero solid intruders and zero moored hulls in the
+fairway, floating origin still exact to the centimetre across a 4 km rebase.
+
+**The surprise.** `finish()` takes face normals as (b−a)×(c−a), and under that order the
+land's rows, the islands' rings and `BOX_FACES` were ALL wound to give inward/downward
+normals. Measured: 0 of 1764 land vertices pointed up (mean −0.9909); 0 of 426 island
+vertices; and a seawall's top face at a known y = 3.6 carried normal.y = −1 on all four
+vertices. The town's shader is a bare `normalize(vNormal)` that only flips for cloth, so
+Boston was lit as though every surface faced away from the sun — which is most of what the
+player was calling giant dark terrain slabs. Reversed, all three now measure up.
+
+Scope held deliberately: `box()` is reached only by Boston (the ship has its own
+MeshBuilder), so that fix is contained. `tube`, `cyl` and `rope` in wgeom share the same
+inverted convention and are ALSO reached by vesselGeom, Buoys and creatureGeom — left
+untouched, Boston's two tube uses fixed at the call site instead. **Re-lighting the vessels,
+buoys and creatures is now the strongest lead on world-wide shading** and wants its own pass.
+
+Two honest notes. Vertex counts near sea level are not acceptance — 26 % of the mesh is
+within ±5 m either way because 168 moored hulls float there and a beach is supposed to be
+shallow; my first instrument reported "no change" and was measuring the fleet. And the
+buildings still read dark, but that is albedo seen side-on, not normals.

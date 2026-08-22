@@ -82,6 +82,83 @@ const CREST_Z = 330;
  */
 const BEACON_H = 90;
 
+/**
+ * Seaward profile. The ground reaches SHELF_DEPTH metres down SHELF_RUN metres
+ * off the shoreline, so the harbour has a floor that is nowhere near sea level.
+ */
+const SHELF_RUN = 300;
+const SHELF_DEPTH = 34;
+/** How fast the ground gets out of the water: the beach is deliberately narrow. */
+const BEACH_RUN = 26;
+const BERM_H = 2.4;
+/** Metres inland over which the hills take over from the berm. */
+const HILL_RUN = 200;
+/** Underside of the closed land volume. Below the shelf, so the solid is sealed. */
+const LAND_FLOOR = -52;
+/** Where a harbour drumlin's base sits. Well under the deepest trough. */
+const ISLAND_BASE_Y = -18;
+
+/**
+ * The navigable corridor, town-local: a funnel from the roads in to the head of
+ * Long Wharf. This is the piece the environment never had — with nothing
+ * declaring where the water was supposed to be, nothing kept the land out of it.
+ * Islands are held clear of this and the shoreline is built around it.
+ */
+const CHANNEL_X = 60;
+const CHANNEL_HEAD_Z = -400;
+function channelHalfWidth(z: number): number {
+  const t = Math.min(1, Math.max(0, (-z + CHANNEL_HEAD_Z) / 2600));
+  return 240 + 520 * t;
+}
+
+const smoothstep01 = (s: number): number => s * s * (3 - 2 * s);
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * How much land there is at a place: 1 on the peninsula, 0 out in the harbour.
+ *
+ * This is what stops the footprint being a rectangle. Without it the grid simply
+ * ended at x = +-1300 and at its last inland row, and because the hill Gaussians
+ * are spent by then the ground out there was nothing but the 2.4 m berm — a low
+ * spit running to a ruler-straight edge, walled off to the floor. Seen from
+ * anywhere but dead ahead those two side walls and the back wall are the hard
+ * diagonal land boundaries in the player's frames.
+ *
+ * Multiplied in, the mask takes the ground down to the shelf instead, so the
+ * land's own boundary is a depth contour and the peninsula ends in water on
+ * three sides — which is also what Beacon Hill actually does, falling away to
+ * the Charles behind.
+ */
+function landMask(x: number, d: number): number {
+  const lat = 1 - smoothstep01(clamp01((Math.abs(x) - 1090) / 300));
+  const back = 1 - smoothstep01(clamp01((d - 690) / 310));
+  return Math.min(lat, back);
+}
+
+/** Stable per-position jitter, so the terrain and what stands on it agree. */
+function landJitter(x: number, z: number): number {
+  const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+/**
+ * The shoreline: the town-local z at which the ground crosses mean sea level,
+ * as a function of x.
+ *
+ * Wiggly on purpose. The old waterfront was the front row of a rectangular grid
+ * at constant z, which is what made the harbour edge a straight barrier 2600 m
+ * long — visible as a knife cut from any station and as a hard diagonal once the
+ * town's bearing was not square to the eye. Three octaves give coves and points
+ * with a 130 m throw, so no run of the shore is straight for long.
+ */
+function shoreZ(x: number): number {
+  const t = x / (TOWN_LEN * 0.5);
+  return -40
+    + 74 * Math.sin(t * 2.15 + 0.6)
+    + 38 * Math.sin(t * 5.1 - 1.3)
+    + 17 * Math.sin(t * 9.7 + 2.2);
+}
+
 interface Slice {
   label: string;
   run: (b: MeshBuilder, rng: () => number) => void;
@@ -187,40 +264,94 @@ export class Boston {
    * cross-sections so the skyline is a silhouette rather than a box.
    */
   private buildLand(b: MeshBuilder, rng: () => number): void {
+    void rng;
     const grass = srgb(0x54603a);
     const dry = srgb(0x6d6b46);
     const beach = srgb(0xb9ac8b);
+    const seabed = srgb(0x2c3a34);
     const aux: Aux = [0, 0, 0, 0.9];
 
-    const nx = 56;
-    const nz = 12;
-    const halfL = TOWN_LEN * 0.5;
-    const depth = TOWN_DEPTH;
+    const nx = 84;
+    // Past the town on every side, so the mask has room to take the ground down
+    // to the shelf and the boundary ring is a uniform depth instead of a cliff.
+    const gridHalf = TOWN_LEN * 0.5 + 260;
+    /*
+     * Rows are offsets FROM THE SHORELINE, not constant z.
+     *
+     * That is the whole trick, and it is what the old grid could not do. Its rows
+     * were lines of constant z, so the waterline was wherever those lines happened
+     * to cross sea level — which, with the height clamped to zero seaward, was an
+     * entire 75 m band of rows at once. Here the row at offset 0 IS the shoreline:
+     * `landHeight` is zero at d = 0 by construction, so that row lies exactly on
+     * the waterline and every other row is strictly above or strictly below it.
+     * The crossing is a curve one row thick, and it costs no extra vertices.
+     */
+    const OFF = [-460, -330, -235, -160, -105, -62, -30, -12, 0, 12, 30, 62,
+      105, 160, 235, 330, 470, 650, 840, 1040, 1240];
     const rows: number[][] = [];
-    for (let j = 0; j < nz; j++) {
-      const v = j / (nz - 1);
-      // v = 0 is the waterfront, v = 1 is inland.
-      const z = -depth * 0.15 + v * depth;
+    for (const d of OFF) {
       const row: number[] = [];
       for (let i = 0; i < nx; i++) {
-        const u = i / (nx - 1);
-        const x = -halfL + u * TOWN_LEN;
-        row.push(b.vert(x, this.landHeight(x, z, rng), z, this.landColour(x, z, grass, dry, beach), aux));
+        const x = -gridHalf + (i / (nx - 1)) * gridHalf * 2;
+        const z = shoreZ(x) + d;
+        const y = this.landHeight(x, z);
+        row.push(b.vert(x, y, z, this.landColour(x, z, y, grass, dry, beach, seabed), aux));
       }
       rows.push(row);
     }
-    b.tube(rows, false);
+    /*
+     * Stitched INLAND -> SEAWARD, and that is not cosmetic.
+     *
+     * `finish()` derives normals from winding and the town's fragment shader is a
+     * bare `normalize(vNormal)` with no `gl_FrontFacing` flip. Stitched the other
+     * way the quads run +x by +z-inland, whose cross product points DOWN, so the
+     * peninsula was lit as a downward-facing surface: no direct sun ever reached
+     * it and the whole of Boston rendered as a near-black slab against a bright
+     * harbour. That is most of what read as "giant dark terrain" in the reports.
+     * Reversed, the same vertices give an upward normal and the land is lit.
+     */
+    b.tube([...rows].reverse(), false);
 
-    // A skirt down to the seabed, so the town is never a floating slab seen
-    // from a wave trough.
-    const front = rows[0];
-    const skirt: number[] = [];
-    for (let i = 0; i < nx; i++) {
-      const u = i / (nx - 1);
-      const x = -halfL + u * TOWN_LEN;
-      skirt.push(b.vert(x, -26, -depth * 0.15 - 60, mixRGB(beach, srgb(0x2c3a34), 0.7), aux));
+    /*
+     * Close the volume.
+     *
+     * The old land was a single open height surface plus one skirt band across the
+     * front, so its sides, its back and its underside were all missing. Rendered
+     * `DoubleSide`, that meant a camera anywhere inside the footprint saw the
+     * unlit inside of a shell — a black void with the town's buildings hanging
+     * detached in it, which is exactly the frame the player sent.
+     *
+     * Making it opaque from more angles would have kept the bad topology. Instead
+     * the boundary ring is walled down to a floor and the floor is capped, so the
+     * land is a closed solid and there is no interior surface to expose.
+     */
+    const nz = rows.length;
+    const ring: number[] = [];
+    const ringXZ: [number, number][] = [];
+    const push = (j: number, i: number): void => {
+      ring.push(rows[j][i]);
+      const x = -gridHalf + (i / (nx - 1)) * gridHalf * 2;
+      ringXZ.push([x, shoreZ(x) + OFF[j]]);
+    };
+    for (let i = 0; i < nx; i++) push(0, i);
+    for (let j = 1; j < nz; j++) push(j, nx - 1);
+    for (let i = nx - 2; i >= 0; i--) push(nz - 1, i);
+    for (let j = nz - 2; j >= 1; j--) push(j, 0);
+
+    const floor: number[] = [];
+    const wall = mixRGB(seabed, srgb(0x1b211e), 0.5);
+    for (const [x, z] of ringXZ) floor.push(b.vert(x, LAND_FLOOR, z, wall, aux));
+    b.tube([ring, floor], true);
+
+    let cx = 0;
+    let cz = 0;
+    for (const [x, z] of ringXZ) { cx += x; cz += z; }
+    cx /= ringXZ.length;
+    cz /= ringXZ.length;
+    const hub = b.vert(cx, LAND_FLOOR, cz, wall, aux);
+    for (let k = 0; k < floor.length; k++) {
+      b.tri(hub, floor[(k + 1) % floor.length], floor[k]);
     }
-    b.tube([skirt, front], false);
   }
 
   /**
@@ -233,7 +364,26 @@ export class Boston {
    * 1300 m half-length, so it swallowed both its neighbours and the ridge came
    * out as one broad swell with two imperceptible shoulders.
    */
-  private landHeight(x: number, z: number, rng: () => number): number {
+  /**
+   * Ground height, town-local: POSITIVE inland, NEGATIVE to seaward.
+   *
+   * The old version ended with `shore = clamp((z + 60) / 150, 0, 1)`, which
+   * pinned the height to exactly 0 for every z <= -60 while the grid's front row
+   * sat at z = -135. That is a 2600 x 75 m plate at precisely mean sea level,
+   * coplanar with the ocean: it surfaced in every wave trough, it gave the
+   * harbour a straight knife-cut edge, and it is the pale plane the player was
+   * sailing across. 152 vertices sat at exactly y = 0 and a quarter of the whole
+   * town was inside +-5 m of it.
+   *
+   * Now the height is a signed function of distance from `shoreZ`, so the surface
+   * crosses zero on a CURVE and keeps going down past it. Nothing is coplanar
+   * with the sea, because only the contour itself is ever at sea level.
+   *
+   * Pure, unlike the old one. That took the rng and so handed a building a
+   * different jitter than it had given the terrain underneath it, which let
+   * buildings float or sink by up to 1.2 m.
+   */
+  private landHeight(x: number, z: number): number {
     const halfL = TOWN_LEN * 0.5;
     const t = x / halfL;
     // Copp's Hill to the north, Beacon in the middle, Fort Hill to the south.
@@ -249,14 +399,31 @@ export class Boston {
     const ridge = z < CREST_Z
       ? 0.16 + 0.84 * Math.pow(Math.max(0, z) / CREST_Z, 1.25)
       : Math.max(0.32, 1 - 0.68 * Math.pow((z - CREST_Z) / (TOWN_DEPTH - CREST_Z), 1.25));
-    const shore = Math.min(1, Math.max(0, (z + 60) / 150));
-    const jitter = (rng() - 0.5) * 2.4;
-    return hills * ridge * shore + jitter * shore;
+
+    const d = z - shoreZ(x);
+    /*
+     * Both branches are zero at d = 0, so blending each of them against the
+     * shelf by the same mask stays continuous across the waterline: where the
+     * mask is partial the coast simply retreats, and where it reaches zero there
+     * is no coast at all, only harbour.
+     */
+    const m = landMask(x, d);
+    const inner = d <= 0
+      ? -SHELF_DEPTH * smoothstep01(Math.min(1, -d / SHELF_RUN))
+      : BERM_H * smoothstep01(Math.min(1, d / BEACH_RUN))
+        + (hills * ridge + (landJitter(x, z) - 0.5) * 2.4)
+          * smoothstep01(Math.min(1, d / HILL_RUN));
+    return inner * m - SHELF_DEPTH * (1 - m);
   }
 
-  private landColour(x: number, z: number, grass: RGB, dry: RGB, beach: RGB): RGB {
-    if (z < 10) return beach;
-    const t = Math.min(1, Math.max(0, (z - 10) / 260));
+  private landColour(x: number, z: number, y: number, grass: RGB, dry: RGB,
+                     beach: RGB, seabed: RGB): RGB {
+    // Keyed on the height that was actually built, so the masked ends read as
+    // seabed rather than as beach sand sitting 20 m under water.
+    if (y < -0.15) return mixRGB(beach, seabed, Math.min(1, -y / 11));
+    const d = z - shoreZ(x);
+    if (y < BERM_H * 0.95) return beach;
+    const t = Math.min(1, Math.max(0, (d - BEACH_RUN * 1.6) / 260));
     return mixRGB(mixRGB(beach, grass, t), dry, 0.25 + 0.2 * Math.sin(x * 0.004));
   }
 
@@ -273,13 +440,32 @@ export class Boston {
       [1150, -1350, 220, 12],
       [-1900, -1500, 200, 14],
     ];
-    for (const [cx, cz, rad, h] of spots) {
+    for (const [cx0, cz, rad, h] of spots) {
+      /*
+       * Held clear of the navigable corridor. Two of these six sat inside it —
+       * (-450, -3150) and (700, -2500) overlapped the channel by 490 m and 250 m
+       * — so a ship standing in on the fairway ran into a drumlin. Pushed out to
+       * the near edge plus their own radius plus 60 m of water.
+       */
+      const need = channelHalfWidth(cz) + rad + 60;
+      const off = cx0 - CHANNEL_X;
+      const cx = Math.abs(off) < need
+        ? CHANNEL_X + (off < 0 ? -need : need)
+        : cx0;
       const ringN = 14;
       const rings: number[][] = [];
       for (let k = 0; k < 5; k++) {
         const s = k / 4;
         const rr = rad * Math.cos(s * Math.PI * 0.5);
-        const y = h * Math.sin(s * Math.PI * 0.5) * (0.7 + 0.3 * s);
+        /*
+         * Base at ISLAND_BASE_Y, summit still at h. The old form was
+         * `h * sin(..) - 3`, which put the base 3 m under a sea running metres:
+         * the drumlins flooded and re-emerged instead of having a shore. Lifting
+         * the whole curve off a deeper base keeps the summit exactly where it was
+         * — Boston Light stands on the outermost of these at y = 26.
+         */
+        const y = ISLAND_BASE_Y
+          + (h - ISLAND_BASE_Y) * Math.sin(s * Math.PI * 0.5) * (0.7 + 0.3 * s);
         const ring: number[] = [];
         for (let j = 0; j < ringN; j++) {
           const th = (j / ringN) * Math.PI * 2;
@@ -287,19 +473,23 @@ export class Boston {
           ring.push(
             b.vert(
               cx + Math.cos(th) * rr * wob,
-              y - 3 + (rng() - 0.5) * 1.2,
+              y + (rng() - 0.5) * 1.2,
               cz + Math.sin(th) * rr * wob * 0.72,
-              mixRGB(rock, grass, Math.min(1, y / Math.max(1, h * 0.5))),
+              mixRGB(rock, grass, Math.min(1, Math.max(0, y) / Math.max(1, h * 0.5))),
               aux,
             ),
           );
         }
         rings.push(ring);
       }
-      b.tube(rings, true);
+      // Summit-first, for the same reason the peninsula is stitched inland-first:
+      // wound base-first these drumlins carried inward, downward normals and so
+      // rendered unlit, which is why the harbour islands were dark lumps.
+      // Measured before the change: 0 of 426 vertices had an upward normal.
+      b.tube([...rings].reverse(), true);
       const cap = b.vert(cx, h, cz, grass, aux);
       const top = rings[rings.length - 1];
-      for (let j = 0; j < ringN; j++) b.tri(cap, top[j], top[(j + 1) % ringN]);
+      for (let j = 0; j < ringN; j++) b.tri(cap, top[(j + 1) % ringN], top[j]);
     }
   }
 
@@ -315,8 +505,11 @@ export class Boston {
       const u = rng();
       // Densest on the waterfront and up the near slope of Beacon Hill.
       const x = -halfL * 0.86 + u * TOWN_LEN * 0.86;
-      const z = 10 + Math.pow(rng(), 1.5) * 640;
-      const ground = this.landHeight(x, z, rng);
+      // Measured INLAND OF THE SHORELINE, not from a fixed z. The shore wanders
+      // 130 m now, so a constant-z band would have put the waterfront houses in
+      // the water on the points and 130 m up the hill in the coves.
+      const z = shoreZ(x) + 12 + Math.pow(rng(), 1.5) * 640;
+      const ground = this.landHeight(x, z);
       if (ground < 0.6) continue;
       const w = 7 + rng() * 13;
       const d = 7 + rng() * 12;
@@ -352,7 +545,7 @@ export class Boston {
      */
     const shX = -halfL * 0.04;
     const shZ = CREST_Z;
-    const shY = this.landHeight(shX, shZ, rng);
+    const shY = this.landHeight(shX, shZ);
     const DOME_R = 12;
     // Shingled in 1798, so pale, not gold — and the brightest thing in the town,
     // because at five kilometres the haze eats anything that is not.
@@ -404,7 +597,7 @@ export class Boston {
      * is left of it past resolution fades instead of blinking.
      */
     for (const [sx, sz, sh] of spires) {
-      const g = this.landHeight(sx, sz, rng);
+      const g = this.landHeight(sx, sz);
       b.box(sx, g + sh * 0.32, sz, 6.5, sh * 0.32, 6.5, white, aux);
       b.rope(sx, g + sh * 0.6, sz, sx, g + sh, sz, 3.0, 0.9, 3, 0.8, white);
     }
@@ -470,14 +663,44 @@ export class Boston {
     const stone = srgb(0x8b8474);
 
     if (part === 0) {
-      // Long Wharf, half a kilometre out into the harbour, and the quays that
-      // ran the length of the waterfront either side of it.
-      b.box(60, 2.4, -230, 17, 2.4, 250, stone, aux);
-      b.box(60, 5.5, -60, 12, 4.5, 40, timber, aux);
-      for (const [qx, qz, qw] of [[-1010, -85, 130], [-700, -105, 150], [-390, -125, 150],
-        [-120, -95, 110], [350, -135, 170], [700, -110, 150], [1010, -80, 120]] as const) {
-        b.box(qx, 2.0, qz, qw, 2.0, 24, stone, aux);
+      /*
+       * land -> seawall -> pier -> open water, in that order.
+       *
+       * All three used to be one thing: a slab. Long Wharf was
+       * `box(60, 2.4, -230, 17, 2.4, 250)`, i.e. y in [0, 4.8] over 500 m of
+       * z — half a kilometre of deck lying flat ON the water plane with nothing
+       * under it and nothing at either end. The quays were the same at y in
+       * [0, 4.0], and they sat at constant z along the whole 2600 m frontage, so
+       * together they read as one continuous plate covering the harbour edge.
+       */
+
+      // The seawall. Straddles the waterline: footed at -6, coping at +3.6, and
+      // set 8 m inland of the contour so the wall IS the shore rather than a
+      // separate object standing in front of it. Seven runs, 980 m of the 2600 m
+      // frontage, so the shore between them is still beach and there is no
+      // full-width plate anywhere.
+      for (const [qx, qw] of [[-1010, 130], [-700, 150], [-390, 150],
+        [-120, 110], [350, 170], [700, 150], [1010, 120]] as const) {
+        b.box(qx, -1.2, shoreZ(qx) + 8, qw, 4.8, 16, stone, aux);
       }
+
+      // Long Wharf. Deck ABOVE the water at y in [3.2, 5.2] rather than through
+      // it, carried on two rows of piles that run down past the trough, and
+      // abutted into the shore at its landward end instead of stopping in mid-air.
+      const wharfX = 60;
+      const root = shoreZ(wharfX) + 20;
+      const head = -480;
+      const midZ = (root + head) * 0.5;
+      const halfZ = (root - head) * 0.5;
+      b.box(wharfX, 4.2, midZ, 17, 1.0, halfZ, timber, aux);
+      b.box(wharfX, 1.6, shoreZ(wharfX) + 12, 15, 1.9, 26, stone, aux);
+      for (let pz = head + 14; pz < root - 10; pz += 27) {
+        for (const side of [-1, 1]) {
+          b.box(wharfX + side * 13, -3.4, pz, 1.2, 6.7, 1.2, spar, aux);
+        }
+      }
+      // The warehouse at the root of the wharf, standing ON the deck.
+      b.box(wharfX, 9.8, shoreZ(wharfX) - 44, 12, 4.6, 34, timber, aux);
       return;
     }
 
@@ -514,6 +737,17 @@ export class Boston {
     }
     ships.sort((p, q) => q.z - p.z);
     for (const s of ships) {
+      // Afloat, not aground: the shoreline wanders 130 m, so a mooring drawn at a
+      // fixed z could land 100 m up the beach on a point.
+      s.z = Math.min(s.z, shoreZ(s.x) - 26);
+      // Out in the roads, keep the fairway clear. Alongside the quays and down
+      // Long Wharf they stay where they are — that IS the head of the channel and
+      // an empty waterfront would be the wrong fix.
+      if (s.z < -520) {
+        const need = channelHalfWidth(s.z) + 40 + rng() * 180;
+        const off = s.x - CHANNEL_X;
+        if (Math.abs(off) < need) s.x = CHANNEL_X + (off < 0 ? -need : need);
+      }
       b.rope(s.x, 0.5, s.z, s.x + (rng() - 0.5) * 1.4, s.h, s.z, s.r, s.r * 0.34, 3, 0.85, spar);
       // One or two yards: without them a mast is a stick, not a ship.
       for (let k = 0; k < s.yards; k++) {

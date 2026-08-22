@@ -8046,3 +8046,101 @@ trough so they read as structures in water; drop the islands' bases below the wa
 and close the shell's sides, back and bottom so entering it is not a black void. All of
 that wants the missing piece first — an explicit navigable-water region for the harbour
 that the geometry is required to respect.
+
+## 110. Boston: a shoreline, a channel, a closed volume — and the normals were inside out
+
+Fixes §109. The topology work is below; the normals are the part I did not expect and
+they turn out to be most of what read as "giant dark terrain" in the reports.
+
+### What was wrong, precisely
+
+| | old | new |
+|---|---|---|
+| waterfront | `shore = clamp((z+60)/150, 0, 1)` pinned height to **exactly 0** for all z ≤ −60 while the grid started at z = −135: a 2600 × 75 m plate coplanar with the sea | height is a signed function of distance from a shoreline curve; the surface crosses y = 0 on a **one-row contour** |
+| footprint | rectangle, straight front, sides at x = ±1300, straight back | shoreline with a **220.9 m throw**, ends and back taken down to the shelf by a mask |
+| land solid | open height surface + one front skirt: no sides, no back, no bottom | boundary ring walled to y = −52 and capped: **watertight** |
+| Long Wharf | `box(60, 2.4, -230, 17, 2.4, 250)` — 500 m of deck at y ∈ [0, 4.8] lying on the water | deck at y ∈ [3.2, 5.2] on two rows of piles reaching y = −10, abutted into the shore |
+| quays | y ∈ [0, 4.0] at constant z along the whole frontage — one continuous plate | seawall straddling the contour, y ∈ [−6, 3.6], **980 m of 2600** so the shore between is still beach |
+| islands | base rings at y = −3, two of six sitting **in** the fairway | base at y = −18, held clear of the corridor by radius + 60 m |
+| navigable water | **did not exist as a concept** | `channelHalfWidth(z)`: a funnel from the roads to the wharf head |
+| land normals | pointed **down** | point up |
+
+### The measured absence, and what filled it
+
+§109's root cause was that nothing declared where the water was. `CHANNEL_X`,
+`CHANNEL_HEAD_Z` and `channelHalfWidth(z)` are that declaration — deliberately
+Boston-specific, not a navigation framework. Islands and the moored fleet are now held
+off it, and the fairway is checked against it.
+
+### Verification, on the committed mesh
+
+| check | result |
+|---|---|
+| height on the shoreline contour, 400 samples | **exactly 0** at every one |
+| shoreline z range | −134.4 to +86.6, a 220.9 m throw |
+| max terrain height anywhere in the corridor | **−34.00 m** |
+| solid intruders in the fairway | **0** |
+| floating fleet in the fairway | **0** |
+| land surface within ±0.5 m of sea level | 2.07 % of sampled area — a 29 m sloping beach band, and nothing coplanar but the contour row |
+| verts at the floor (ring + hub) | 207 — sealed |
+| floating origin, forced 4 km rebase | rendered x moved exactly −4000.00, absolute position identical |
+
+Vertex counts near sea level are **not** the acceptance and should not be quoted as it:
+26 % of the mesh sits within ±5 m of the surface either way, because 168 moored hulls
+legitimately float there and a beach and a shoal are supposed to be shallow. The first
+run of this instrument reported "still 26 %" and it was measuring the fleet.
+
+### The normals were inverted, and that was most of the darkness
+
+`finish()` derives face normals as `(b − a) × (c − a)`. Under that order:
+
+- `tube(rows, false)` over rows running seaward→inland winds +x by +z, whose cross
+  product points **down**. Measured on the land grid: **0 of 1764** vertices had an
+  upward normal, mean normal y **−0.9909**. Reversed to inland→seaward: **1764 of 1764**
+  up, mean **+0.9911**.
+- The harbour islands, wound base→summit, were the same: **0 of 426** up, mean −0.8856.
+  Summit-first: 420 of 426 up, mean +0.8856.
+- `BOX_FACES`' +Y face reads `(2,0,0) × (2,0,2) = (0,−4,0)`. Measured on a seawall whose
+  top face is at a known y = 3.6, **all four vertices carried normal.y = −1**. Reversed:
+  all four **+1**.
+
+The town's fragment shader is a bare `normalize(vNormal)` and only flips for cloth, so
+every one of these surfaces was lit as though it faced away from the sun. That is why
+Boston rendered as a near-black slab against a bright harbour in every capture, before
+and after the topology work — and it is a large part of what the player was reporting as
+dark terrain slabs.
+
+**Scope held.** `box()` is reached only by Boston: the ship has its own `MeshBuilder`.
+`tube`, `cyl` and `rope` in `wgeom.ts` share the same inverted convention and are also
+reached by `vesselGeom`, `Buoys` and `creatureGeom` — those are **left alone**, and
+Boston's two `tube` uses were corrected at the call site instead. Re-lighting the
+vessels, buoys and creatures is a separate pass with its own verification, and it is now
+the strongest remaining lead on world-wide shading.
+
+### Player-route acceptance
+
+Boston placed 900 m on the bow, normal chase camera, engine ticked at real dt, sailed
+straight in from 898 m to 57 m of the town centre and out again.
+
+1. approach reads as water between land masses — **yes**, at golden and at midday
+2. channel passable without entering terrain — **yes**; she crosses the shoreline only
+   where she is aground, and collision is out of scope
+3. no terrain surface across the water at mean sea level — **yes**, max height in the
+   corridor is −34 m
+4. no hard diagonal land slab through ship or camera — **yes**; the straight side and
+   back walls are gone with the footprint mask
+5. no hollow black interior — **yes**; the volume is closed, and a camera forced inside a
+   hill now sees lit interior surface rather than a void
+6. Long Wharf and quays read as waterfront structures — **yes**; deck above water on
+   visible piles, water passing beneath
+7. islands attached to the water — **yes**, they emerge from −18 m
+8. floating origin — **exact**
+
+Cost: 13,298 → 16,942 triangles (+27 %) for the wider grid, the closed volume and the
+piles. One mesh, one draw call, unchanged.
+
+### Left open, deliberately
+
+The buildings still read dark, but that is albedo — brick 0x7a4a3a and slate 0x4a4c52 seen
+mostly side-on — not the normals, and façade work is out of scope. The camera still
+enters rigging and terrain at close quarters; that is camera collision, not topology.
