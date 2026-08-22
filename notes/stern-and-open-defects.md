@@ -483,3 +483,34 @@ low-cloud control reads blotch 83.2 there with no shadows present, so that is wa
 inside the metric, not a defect. I am not claiming an improvement in cells I cannot measure.
 
 Cost measured, not assumed: +0.07 ms typical, +0.16 ms worst, 3→5 cloud passes, +1.0 MB.
+
+### Boston: diagnosed, not fixed. The root cause is a missing definition.
+
+DIAGNOSIS §109. Reproduced at `?showcase=boston` and measured, not eyeballed.
+
+The headline is that **there is no navigable-water definition anywhere in the project** —
+no harbour carve, no shoreline contour, no water polygon. So the brief's "agreement between
+visual terrain and navigable-water coordinates" has nothing to compare against, and every
+other defect follows from it: nothing keeps the town out of the water because nothing says
+where the water is.
+
+Measured on the committed mesh: 152 vertices at *exactly* y = 0, 13.6 % within ±2 m of it,
+**26.5 % inside y ∈ [−5, +5]**. The town is placed with no y offset, so local y is world y.
+
+Four concrete defects:
+1. `landHeight`'s `shore = clamp((z+60)/150, 0, 1)` makes height exactly 0 for all z ≤ −60,
+   and the grid starts at z = −135 — a 2600 × 75 m dead-flat plate at mean sea level in pale
+   beach colour. The pale plane the player is sailing *on* is this, not glare.
+2. Long Wharf is a 500 m slab at y ∈ [0, 4.8]; the quays are y ∈ [0, 4.0] on that plate.
+3. Island base rings are only 3 m down, against metres of wave.
+4. `b.tube(rows, false)` leaves the terrain a **hollow shell** — no side walls, no back, no
+   bottom — and with `DoubleSide` the interior renders as a black void with buildings
+   floating in it. That is the player's "camera inside terrain" frame, captured.
+
+Floating origin is the one item that checks out: forced 4 km rebase moved rendered x by
+exactly −4000.00 with absolute position stable to < 0.01 m. Not a defect.
+
+Fix direction (not started): let landHeight go negative seaward of a declared shoreline so
+the surface crosses y = 0 on a line; stand wharves on footings below the trough; drop island
+bases below the wave band; close the shell. All of it wants the missing navigable-water
+region defined first.

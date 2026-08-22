@@ -7971,3 +7971,78 @@ untouched.
 passes 3 → 5, so +2 fullscreen triangles per frame. Two extra 512² R16F targets, so
 **+1.0 MB** of texture memory. 60 fps held in every arm. I am not calling this free; it
 is measured, small, and the numbers are above.
+
+## 109. Boston has no shoreline and no navigable-water definition — diagnosis only, nothing fixed
+
+Player-confirmed: the ship enters Boston's geometry, terrain slabs cut through hull and
+camera, hard diagonal boundaries appear through the vessel. Reproduced at
+`?showcase=boston` and measured on the committed mesh. **No fix in this section.**
+
+### The root cause is an absence, not a bug
+
+There is no navigable-water definition anywhere in the project. No harbour carve, no
+shoreline contour, no water polygon; `world.ext` publishes `ocean` but nothing that says
+where water is *supposed* to be. So the brief's "agreement between visual terrain
+coordinates and navigable-water coordinates" cannot be checked — the second term does not
+exist. Every defect below follows from that: nothing constrains the town's geometry away
+from water because nothing declares the water.
+
+### Measured on the committed mesh (23,244 verts)
+
+| | |
+|---|---|
+| local y | −26 to +141.24 |
+| local z | −3346 (seaward islands) to +765 (inland) |
+| local x | −2101.6 to +2002.1 |
+| **verts at exactly y = 0** | **152** |
+| verts within ±2 m of y = 0 | 3166 (**13.6 %**) |
+| verts in y ∈ [−5, +5] | 6156 (**26.5 %**) |
+
+The town is placed with `aXf = (rx, 0, rz, bearing)` — **no y offset** — so town-local y
+is world y directly, and mean sea level is y = 0.
+
+### The specific defects
+
+**1. There is no shoreline.** `landHeight` ends with
+`shore = clamp((z + 60) / 150, 0, 1)`, so height is *exactly* 0 for every z ≤ −60, and
+the land grid's front row is at `z = -depth * 0.15 = -135`. That is a **2600 × 75 m
+dead-flat plate at exactly mean sea level**, coloured `beach` (0xb9ac8b, pale sand). The
+ocean surface oscillates about y = 0, so the plate and the sea are coplanar: the plate
+surfaces in every wave trough and its straight seaward edge reads as a knife cut. The
+pale plane the player is sailing *on* in their screenshots is this plate, not sun glare.
+
+**2. Wharves and quays are plates lying on the water plane.** Long Wharf is
+`box(60, 2.4, -230, 17, 2.4, 250)` → y ∈ [0, 4.8], z ∈ [−480, +20]: a 500 m slab on the
+sea. The seven quays are `box(qx, 2.0, qz, qw, 2.0, 24)` → y ∈ [0, 4.0] at z ∈ [−80, −135],
+which is inside the flat plate band. Nothing goes below the trough, nothing stands on piles.
+
+**3. The harbour islands sit 3 m below mean level.** Base rings are built at `y - 3`
+against a wave height of metres, so they flood and re-emerge rather than having a shore.
+
+**4. The terrain is a hollow shell.** `b.tube(rings, closed)` "welds the last column back
+onto the first" only when `closed` is true; the peninsula uses `b.tube(rows, false)`, and
+the only skirt is the front band `b.tube([skirt, front], false)`. So there is **no side
+wall at x = ±1300, no back wall at z = 765, and no bottom**. The material is
+`side: THREE.DoubleSide`, so a camera inside the footprint renders the unlit interior as a
+solid black void with the buildings floating detached inside it. Captured from local
+(0, 18, 120) — inside a hill whose surface there is ~33 m — and the upper two thirds of the
+frame is black with pale building wedges hanging in it. That is the player's "camera inside
+terrain" frame.
+
+### Not a defect: floating origin
+
+The one item on the list that checks out. The town holds absolute voyage coordinates and
+subtracts `world.origin` each frame. Forcing a 4 km rebase mid-flight: rendered x moved
+by exactly −4000.00, reconstructed absolute position stable to < 0.01 m, `absStable: true`.
+Nothing to fix here.
+
+### What the fix has to do
+
+Not collision, and not pushing the ship away — both were ruled out. The topology itself:
+give the land a real waterline by letting `landHeight` go *negative* seaward of a declared
+shoreline contour instead of clamping at 0, so the surface crosses y = 0 on a line and
+continues down to the skirt; stand the wharves and quays on footings that reach below the
+trough so they read as structures in water; drop the islands' bases below the wave band;
+and close the shell's sides, back and bottom so entering it is not a black void. All of
+that wants the missing piece first — an explicit navigable-water region for the harbour
+that the geometry is required to respect.
