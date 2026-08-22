@@ -5881,6 +5881,20 @@ brass −136) and **no new draw calls** — geometry only moved between bins tha
 out against ten rival renderers); any frame cost (every run came back `LOADED` or `CONTENDED`);
 and the knee from a waterline or below-water camera.
 
+### Verified per-station, not as a package
+`rail-close` closes the stow/cap band specifically: continuous timber where sea and sky showed
+through a 0.40 m slot. **That view does not accept the bow work**, so `bow-head` was shot
+separately and read at 3×: the green-teal patch is gone, the three floating posts are gone, and
+the head reads attached with continuous copper sheathing below the boot top. **Bow structural
+and material defects accepted at this station.**
+
+One thing in that frame is *not* bow geometry and must not be credited or blamed here: a pale
+band beneath the hull with a **hard, ruled lower edge**. It follows the waterline curve and
+joins the surrounding whitewater, so it is water rather than timber — it is the near-hull wake
+partition the player reported, still open and owned elsewhere. The agent's own "knee from a
+waterline or below-water camera" remains unverified; this station looks slightly *up* at the
+knee and is not that case.
+
 ## 87. The sail "film" is the sail, not a hole — and a probe with no sea in it is the leading suspect
 
 Integrated from `notes/sail-see-through.md`, whose agent has reported completion. **No source
