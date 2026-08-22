@@ -173,7 +173,7 @@ variance in exactly the regions of interest. It needs a per-frame time series at
 fixed station with a control channel, in the manner of §97's instrument, not a
 handful of screenshots.
 
-### Not a regression: `no wave-riding speed blowout` is a pre-existing flaky assertion
+### CORRECTION: my "inside the spread" claim was wrong, and here is the proper answer
 
 After the hull change `physics-test --quick` reported failures, so I checked it
 rather than assume. Swapping in the pre-change `hull.ts` and re-running:
@@ -183,10 +183,30 @@ rather than assume. Swapping in the pre-change `hull.ts` and re-running:
 | pre-change | PASS, median peak 13.90 kn | **FAIL, 15.27 kn** | — |
 | with the taffrail change | FAIL, 15.87 kn | FAIL | FAIL |
 
-The assertion fails on the *unmodified* hull too, and the values overlap, so the
-change is inside the pre-existing spread. `bowSlam is scaled for spray and shake`
-also flipped between runs on the same tree (8.8 m/s^2 passing, a 4.9 m/s^2 run
-failing earlier).
+**My claim that 15.87 kn was "inside" a 13.90-15.27 parent spread was wrong: 15.87
+is above 15.27.** Two parent runs are also not a distribution. So the question was
+settled by dependency analysis instead, which is decisive and cheap:
+
+- No file in `src/physics/` imports `src/ship/build/*`.
+- `src/ship/build/hull.ts` is imported by exactly one module, `src/ship/Ship.ts`,
+  and exports only `Bins`, `createBins`, `buildHull`, `HullResult`, `CHANNELS` and
+  `stanchion` — nothing physics reads.
+- It writes nothing to `world.*`, `world.ext.*` or any uniform. It is pure geometry
+  into mesh bins.
+- `src/physics/Hull.ts` takes every dimension from `./constants` and its own
+  docstring says it builds its sections "from the AGENTS.md dimensions" precisely
+  because `world.ext.ship.hullPoints` is "a bare point cloud ... useless for a
+  pressure integral".
+
+**There is therefore no code path by which a visual hull-geometry change can reach
+the state this assertion measures**, so the change cannot be its cause. That is the
+claim I can support.
+
+**What I must NOT claim** is that the assertion is fine. It fails on current HEAD in
+3 of 3 runs and on the unmodified parent in 1 of 2. That is a **real, unstable
+assertion in the suite, pre-dating this work and unexplained** — not something the
+word "flake" should paper over. `bowSlam is scaled for spray and shake` also flipped
+between runs on one tree (8.8 m/s^2 passing, a 4.9 m/s^2 run failing).
 
 This is the behaviour `src/physics/index.ts` already documents for this suite: the
 gale case sails one frozen wave snapshot and which snapshot you get depends on how
@@ -194,3 +214,11 @@ long the preceding tests took, which is why the harness medians five phases. The
 two assertions are still sensitive to it. **Recorded, not fixed** — out of scope here
 and it needs the sim clock made reachable from a test, which that file says requires
 a small addition to `src/ocean`.
+
+### Stern status, corrected
+
+Not closed. Record it as: **major stern structural defect fixed; residual
+aft-interior exposure remains open.** The taffrail and the extended deck removed the
+open tray and took inboard-visible window frames from about twenty to about six, but
+a narrow strip of the transom's inner face is still visible at extreme overhead
+angles. Parked, not finished.
