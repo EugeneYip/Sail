@@ -74,3 +74,36 @@ Recorded because the pattern matters more than the findings.
 An ID-colour pass was also discarded outright: its CONTROL box (mid-transom
 planking, known to be `ship-black`) classified as `ship-glass`, because the palette
 put hues too close together for AgX to preserve. Control failed, result binned.
+
+### Issue 1, actual root cause: the after deck has no taffrail. The stern is OPEN.
+
+The pale-wedge chase above was a dead end created by my own instrumentation. Going
+back to the owner's viewing condition — chase camera, live, shipped post, no
+instrumentation — the defect is obvious and structural.
+
+Confirmed from two independent angles:
+
+- **chase at 34 m**: the after deck reads as an open tray. The quarterdeck's port
+  side shows deck plane, then a thin dark strip, then sea; there is a dark void at
+  the port quarter where hull side should be.
+- **directly above the poop**: the quarterdeck planking runs aft and **ends at a
+  bare squared edge**. Beyond it you look down onto the *inside face of the transom*
+  — the stern window openings are visible from within the hull. Nothing caps the
+  after end.
+
+Source agrees. `hull.ts` builds the bulwark for `iStart..iEnd` where
+`iEnd = stations.length - 1`, i.e. it stops at the last station — but the transom is
+**aft of** the last station, bridged only by the counter band. So the deck's after
+edge is unclosed. And `taffrail` appears in `hull.ts` only inside comments (the
+section header at line 183, a moulding comment at 906, and a stanchion docstring at
+1338): **no taffrail geometry is ever built.**
+
+So the stern is not transparent, not culled, not a shading artefact. It is
+*missing structure*: the one rail that would close the after end of the deck does
+not exist.
+
+**Refuted along the way, each with a control:** a hole or reversed winding
+(FrontSide and DoubleSide identical); the ocean or vfx drawing over the hull (veil
+survived hiding both, and was my own emissive bloom); wrong normals on the counter
+(normal visualisation is smooth and continuous); and bloom (1-3 codes at the
+station, `base2` return 0.50).
