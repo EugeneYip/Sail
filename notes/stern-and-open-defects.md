@@ -251,3 +251,37 @@ cover and cloud quality are settings.
 The far sea in these captures additionally shows the **regular dotted lattice** the
 owner's screenshots show — aliasing of the ocean at distance. Same station, likely a
 separate defect, recorded here so it is not lost.
+
+### Issue 3: supersampling REMOVES the blotch. Ground truth established.
+
+The median-relative dark-block metric is retired as primary (it manufactured dark
+blocks after a global brightening). Replaced by comparison against a supersampled
+reference with only a global luma offset removed.
+
+**Method.** One page load per arm — a first attempt resized the viewport mid-run and
+that perturbed the renderer by RMS 11.4 with 340/1210 blocks past -6, against a
+same-resolution floor of 1.67, so the resize swamped the effect and was abandoned.
+Instead each arm is its own load with a **fixed-tick settle** (600 ticks at 16.67 ms)
+rather than a wall-clock wait. Two identical arms (dA, dB) measure the cross-load
+floor. The reference is a 4800x2700 render box-downsampled 3x to 1600x900. Far-sea
+region declared before measuring: upper half of frame, ship box excluded, 52.6% of
+pixels.
+
+| comparison | pixel RMS | block RMS | blocks < -6 | min block |
+|---|---|---|---|---|
+| dA vs dB (identical arms = floor) | 4.612 | **0.297** | **0 / 1210** | -2.15 |
+| dA vs supersampled reference | 6.842 | **2.800** | **13 / 1210** | -7.12 |
+| dB vs supersampled reference | 7.081 | 2.833 | 14 / 1210 | -7.21 |
+
+At block scale — which is the scale of the artefact — the reference differs from the
+normal render by **9x the cross-load floor**, and the sign is negative: **the normal
+render is darker in those blocks and supersampling removes them.**
+
+Pixel-scale high-frequency energy in the far sea: dA 1.514, dB 1.504, **reference
+1.207**. Supersampling integrates away about 20% of the pixel-scale noise.
+
+**So the answer to the reference question is YES**, and the mechanism is spatial
+under-sampling. Keeping the wording precise: this establishes that *integrating the
+footprint* removes the artefact, but it does not by itself separate wave-normal
+footprint filtering from reflection-lobe roughness from the probe's own angular
+resolution. Those are the next arms, each measured against this reference.
