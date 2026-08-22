@@ -691,6 +691,26 @@ void main(){
   // about 0.5 and the whole far sea goes white. At w = 0.5 the linstep IS the
   // coverage, which is the correct answer for a whitecap that is sub-pixel.
   float wThr = mix(0.05, 0.5, smoothstep(1.2, 3.5, pxWorld));
+  // WIDEN THE RAMP WHERE THE WAKE IS THE ONLY THING SUPPLYING COVERAGE.
+  //
+  // Measured in the near field: 'cover' before the wake is injected is 0.003 to
+  // 0.014 out to 400 px, so alongside the hull the wake is the SOLE source of
+  // coverage and the mask is shaped by nothing but the wake's own metre-scale
+  // gradient. With the ramp at its 0.05 floor the margin (decide - thr)/wThr
+  // reads 2.4 to 2.6 across the froth band, so the linstep CLAMPS: every spatial
+  // structure in 'decide' is discarded and the band renders as a featureless
+  // plate, ruled where the margin sweeps the narrow window. The same narrow ramp
+  // is why the froth beyond it crazes into hard islands instead of grading.
+  //
+  // Widening is the one knob that is free here: E[linstep(t - w, t + w, d)] is
+  // 1 - t at ANY width for zero-mean d, and 'thr' tracks 1 - cover to within 0.05
+  // in every band, so the construction above is intact and the MEAN coverage does
+  // not move. What changes is that the decision stops clamping, so the froth
+  // grades instead of switching.
+  //
+  // Keyed to the WAKE's coverage, not the total, so natural whitecaps keep the
+  // shipped ramp: a gale's own 'cover' is around 0.15 and must still tear.
+  wThr = max(wThr, 0.05 + 0.42 * smoothstep(0.20, 0.62, wakeFoam * 0.88));
   float foam = linstep(thr - wThr, thr + wThr, decide);
   foam *= 1.0 - smoothstep(4000.0, 14000.0, dist) * 0.6;
   // Bubble relief, at the two or three scales the pixel can carry, and only
