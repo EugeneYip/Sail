@@ -5815,3 +5815,122 @@ That has *not* been verified and must not be treated as the cause until it is.
 the pipeline — which is exactly the case §85 argued could not exist.
 
 **Instrument:** `.tmp/jitterrel.mjs`.
+
+## 86. The "detached railing" was the hammock stow, and that is the fifth misattribution
+
+Integrated from `notes/hull-bulwark-and-head.md`, whose agent has reported completion.
+
+**Both hypotheses I put in the brief were wrong, and the agent recorded them as negative so
+nobody re-tests them.** A bulwark *is* emitted — two `grid(109, 7)` calls into `bins.buff`,
+2392 triangles, correctly wound with `flip: side < 0` for the port half. And the cap and the
+bulwark *do* share the outline: `HULL_ROWS[30].y(t) === sheerY(t)` to three decimals at five
+stations, with rows 26 and 28 landing exactly on `buildBulwarks`' own levels. The
+gunport-stripe class of mismatch is not happening here.
+
+**Root cause: the buff plank I called "the rail cap" is the hammock stow.** The cap is in
+`bins.black` — the bin is the tell. The stow's underside sat at `sheerY + 0.46` while the cap
+is at `+0.06`, leaving a **0.40 m open band down the whole ship**, crossed only by 19 mm iron
+cranes. Verified by raycast with materials forced `DoubleSide`, so it is provably not culling:
+at column 900, scanlines 480 and 490, the first front-facing hit was `ship-deck`/`ship-oak` at
+17–19 m on the centreline, between the stow bottom at local y 7.20 and the cap at 6.70.
+
+**That is the fifth object this project has misattributed from a crop**, after the bow object,
+the "square waterfall", the wheel, and the hammock cranes that were reported as belaying pins.
+I named this one "the rail cap floating" in the brief. **The rule stands and I keep breaking
+it: a crop tells you where a defect is on screen, never which object it is.** The bin, the
+count, or the coordinate is the tell — not the colour.
+
+**And a second, independent bug found on the way:** the rail cap had **no `flip`**, so
+`cross(d/di, d/dj) = (0, −0.4·side, 0)` pointed its single face **downward on starboard**, and
+every view of that rail from above culled it. Now asserted numerically rather than by eye —
+214 cap vertices per side, all normals +y.
+
+The stow's own inboard face was also a single-sided sheet facing outboard: a latent hole from
+the helm. It is now a closed arch (0.43 m chord × 0.52 m rise) resting on the cap, opaque from
+both sides, with the cranes raised to stand above it. Re-scanned: continuous `buff` at 10.3 m
+across the whole band, each hit with a matching back face, both rails.
+
+"Gunport lids with nothing behind them" was a consequence of the band, not a second hole — six
+raypicked apertures all return planking → a `buff` liner 0.3 m inboard → deck.
+
+### The bow: three posts, and the count resolved them
+**Not the martingale and not the dolphin striker** — my guess in the brief. They are the **stem
+timber and the cutwater/knee of the head** from `buildStem`. The striker is `bins.oak` in
+`masts.ts` at z = −36.1 and the martingale stays are in the instanced rigging mesh, so neither
+can produce a `ship-black` hit. Raypick returns `ship-black` at three ship-local points, and
+ablating the cutwater block removed **two of the three** posts, leaving the stem tube. **The
+count is 3 and it resolves exactly:** stem tube, cutwater leading web, cutwater port flank.
+
+They floated because the lofted sections stop at `Z_STEM = −27.0` while the drawn members sit
+1.6 m (stem, at the waterline) to 4.6 m (cutwater, at head height) *forward* of the hull's
+leading edge, with the fin's flanks only 0.5 m deep. Replaced by a solid knee of the head
+between the raking profile and `hullLeadZ(y)`, coppered below the boot top. The stem tube is
+deleted: its radius exceeded the knee's half-thickness so it poked through, and its top 2 m
+stood proud.
+
+**The green-teal patch is `bins.brass`** — the trailboard and billethead. `makeBrass` is sane,
+but it sets `p.metal` to 1.0 at full polish and the trailboard's grid normal is purely
+horizontal, so **from below it mirrors blue sky through a gold F0**. A wrong material bin,
+confirmed. Trailboard → `stripe`, billethead → `buff`, and the billethead is now a chain of
+`spar`s rather than nine axis-aligned boxes.
+
+**Cost: +108 triangles net** on a ~21.5 k ship (copper +30, black −94, stripe +28, buff +280,
+brass −136) and **no new draw calls** — geometry only moved between bins that already existed.
+
+**Not verified:** the pre-fix starboard cap normal (derived, not measured — four attempts timed
+out against ten rival renderers); any frame cost (every run came back `LOADED` or `CONTENDED`);
+and the knee from a waterline or below-water camera.
+
+## 87. The sail "film" is the sail, and the cause is a probe with no sea in it
+
+Integrated from `notes/sail-see-through.md`, whose agent has reported completion. **No source
+change** — it isolated the cause and stopped, which was the right call.
+
+### The pixels are the sail
+Test D settled it in one shot. A flat unlit magenta material in the sail fragment turns the
+entire "sea/sky through the canvas" region magenta (R 199, G 94, B 203 inside the mask), and a
+flat0-vs-flat4 coverage mask is **solid over the whole silhouette with no holes**. Null against
+null: mean 2.29 codes. **Geometry, culling and depth are all excluded**, and post is not
+importing neighbouring sea inward.
+
+### Nothing is translucent — the sail matches its background
+The sail is opaque and its outgoing radiance has been driven to **0.585 of the radiance of what
+is behind it** (0.2656 against 0.4542 linear, measured against a calibration ramp rendered in
+the same frame), in a similar hue. **A surface that matches its background reads as film.**
+
+Single-term ablation: environment probe **67%**, sheen 20%, cloth translucency 22%, direct sun
+only 8%. Diffuse IBL alone would be 0.107 — a 4.2:1 ratio that reads as cloth.
+
+**And the environment probe has no sea in it.** `EnvProbe` renders the *sky* shader over the
+full sphere, so the lower hemisphere is sky-bright: mean radiance 0.306, **straight down 0.259
+— brighter than the zenith's 0.165** — against the engine's own `uGroundColor` of 0.146.
+Independently reconfirmed on the main tree: **36.0% of a vertical surface's cosine-weighted
+irradiance arrives from below the horizon**, from a hemisphere that should be dim sea.
+
+That is `src/sky`, not the sail, and it is the actual root cause. Correcting it inside the sail
+alone moves the ratio only 0.601 → 0.519.
+
+**The "clouds" painted on the canvas are `sheenSpecularDirect`** — rendering that accumulator
+alone gives a black frame containing exactly those patches.
+
+Also ruled out with numbers: the probe's diffuse convolution is correctly calibrated (0.357
+against a real sky of 0.40), and three's Lambert-from-probe on this cloth is exact to 1%.
+
+### Why it committed no fix, and it was right not to
+Both in-scope levers are dials. `sheen` 1→0.22 plus `uClothTrans` 0.34→0.15 plus a probe
+re-weight reaches ratio 0.370 and does stop reading as film — but the 1:1 crop is then **a dark
+blue tarpaulin**, the sheen patches survive, and **the hue does not move at all** (B−R +18.65 →
++20.56). Dimming is the wrong axis. Two of those constants were chosen by eye and two were
+measured at a single sun elevation.
+
+### Two instrument traps worth propagating
+- **`material.envMapIntensity = 0` is a silent no-op here.** `WebGLMaterials.js` only uploads it
+  when `material.envMap` is set, and this material's env map is `scene.environment`. Same class
+  as the `uClothTrans` no-op that wasted an earlier attempt.
+- **`shader.fragmentShader` inside `onBeforeCompile` is pre-include-resolution and pre-`#define`**,
+  so grepping it for `USE_ENVMAP` or `getIBLRadiance` returns false on a material that has both.
+
+### Flagged across the boundary
+The hull reads 0.184 linear with a **neutral** B−R, and the white gunport stripe is only
+**1.49× brighter** than the "black" topsides. That is a hull *albedo* problem, separate from
+this one.
