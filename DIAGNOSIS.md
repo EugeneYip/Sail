@@ -6427,3 +6427,29 @@ the test clean. **This is the fix axis, not blur:** the owner's P2 explicitly
 forbids resolving the seam by globally blurring foam, and smoothing the underlying
 water fit is the opposite of that — it removes the straight edge rather than
 hiding it.
+
+### Correction to the above: run the cheap exclusion FIRST
+
+§35 recorded a decisive constraint I should have cited before offering `waterYAt`
+at all: **with all three vfx meshes hidden, the sea beside the hull was still a
+flat pale plate with a straight upper boundary.** It attributed that to `WakeField`
+plus the ocean's consumption of `wakeTexture.R`, with the field spanning **1024 m
+over its texture** — so it physically cannot carry near-hull detail, and the
+breakup has to come from the ocean side.
+
+`waterYAt` lives in `src/vfx/shaders/hullwater.ts`, which draws one of those vfx
+meshes. **If the seam survives hiding them on the current build, §92's lead is
+excluded outright** and the target is `WakeField` and the ocean's consumption of
+`wakeTexture.R`, not the water fit.
+
+So the ordering for the wake pass is: (1) re-run §35's hide-all-vfx test on today's
+build, because §79 has since changed the skirt and the result may no longer hold;
+(2) only if the seam *disappears* with vfx hidden is `waterYAt`'s midships kink
+worth testing; (3) if it survives, work the 1024 m field and the ocean's
+consumption. This ordering costs one capture and can eliminate a whole subsystem,
+which is cheaper than either investigation.
+
+Note also that §35's plate and §79's waterline plate are **two different
+artefacts** found at different times — §79's was the hull skirt's submerged rows
+and was fixed. Do not assume the owner's current P2 report is either one of them
+without re-establishing which.
