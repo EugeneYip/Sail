@@ -6964,3 +6964,120 @@ cannot guess: which **view mode**, what **time of day**, the **direction relativ
 the sun**, roughly **how far** ("far" could mean 200 m or 20 km — the bands behave
 very differently), and whether it **recurs on a period** or happened once. Any one
 of those would cut the space enormously. Asked rather than guessed.
+
+## 98. The sail film: `sheenSpecularDirect` refuted, root cause characterised, fix is art direction
+
+Folded in from `notes/sail-film-sheen.md`. **No source change.** The mechanism is
+closed; what remains is a look decision with several materially different answers
+and no measurement that can choose between them, which is a stop rather than a
+guess.
+
+### Instrument, and two traps worth keeping
+
+Term-by-term ablation of the sail's radiance at the affected close station, using
+three's own accumulators inserted after `#include <lights_fragment_end>`.
+
+1. **The existing `onBeforeCompile` must be WRAPPED, not replaced.** The sails are
+   GPU-expanded from a unit patch by a 16 kB hook; replacing it breaks the vertex
+   expansion outright.
+2. **`customProgramCacheKey()` on this material returns a constant, `'ship-sail'`.**
+   With a constant key three reuses the cached program and **never calls
+   `onBeforeCompile`**, so the first run reported "needle seen: false" for all seven
+   arms — every ablation silently did nothing. The key must vary per arm. Same class
+   as §95's non-binding clamp, one level further out: there the constraint did not
+   bite, here the correct patch never ran at all.
+
+Inert arms establish a recompile noise floor of 2 to 2.6 codes whole-frame, since
+each arm rebuilds the program and resets TAA history.
+
+### The lead is refuted
+
+| term rendered ALONE | sail linear L | share of base | B−R |
+|---|---|---|---|
+| base, all terms | 0.0774 | 100% | +39 |
+| **`sheenSpecularDirect` only** | **0.0035** | **4.5%** | +3 |
+| `sheenSpecularIndirect` only | 0.0271 | 35% | +27 |
+| `indirectDiffuse` only | 0.0331 | 43% | +27 |
+| `indirectSpecular` only | 0.0118 | 15% | +21 |
+| direct only (diffuse + specular) | 0.0035 | 4.5% | +3 |
+
+And zeroing it in place moves the sail's ratio to its background from 0.311 to
+**0.309**, with the hue unchanged at B−R +40.
+
+**`sheenSpecularDirect` is not the cause.** §87 nominated it because rendering it
+alone showed the streaky patches — but that was a contribution observation on a
+near-black frame, and it is 4.5% of the sail's radiance, the same floor as the
+entire direct path. Negative preserved.
+
+### What the sail's radiance actually is
+
+**93% image-based lighting**: 43% indirect diffuse, 35% indirect sheen, 15%
+indirect specular. And `indirectDiffuse` alone measures B−R **+27** — the *diffuse*
+term is itself blue, so the buff flax albedo is being swamped by blue environment
+irradiance rather than tinting it.
+
+### The direct path is absent because the sail is SHADOWED
+
+The sun sits at (−0.189, 0.952, 0.239), elevation about 72 degrees, and a sail is
+near-vertical, which alone would give a small cosine. But disabling the sun's shadow
+casting moves the sail box by **16.3 codes** — median RGB (56, 77, 97) to
+(84, 94, 104) — and **warms** it from B−R +41 to +20. So direct light is available
+at this geometry and the shadow term is removing it. That is why the
+`directDiffuse = 0` arm was inert: the light had already been shadowed away.
+
+### And the streaky structure is the shadow pattern, not a radiance term
+
+The direct-light-only render is the informative one: the sails carry large, soft,
+amoeba-shaped dark regions while the deck in the same frame shows crisp, plausible
+mast and rigging shadows. **The pale streaky patches that read as "sea through the
+canvas" coincide exactly with the BRIGHT, unshadowed regions of that render.**
+
+Those blobs are most likely legitimate: a square-rigger's sails are bellied
+surfaces and a curved caster on a curved receiver gives a curved, soft-edged
+shadow. The shadow map is 2048 over a 74 to 200 m radius, i.e. 0.07 to 0.20 m per
+texel with `normalBias` 0.055 and `shadow.radius` 2.2, and `makeSailDepth` already
+pushes the caster clear specifically to kill sail self-shadow acne. Nothing here
+looks like a resolution or bias failure. **Not proven either way** — a geometric
+consistency check against the sails' shapes and the sun vector was not run.
+
+### Root cause, as far as measurement takes it
+
+The film is compound, and no single term produces it:
+
+1. the sail is **shadowed**, so it has no directional light to give it form;
+2. its remaining radiance is **93% IBL from a sky-and-sea environment**, so both its
+   luminance *and* its hue track the background it is seen against;
+3. the visible streaky structure is the **shadow pattern** on the canvas, whose lit
+   patches read as background showing through.
+
+A surface matching its background reads as film — §87's original framing — and here
+every contributing term is drawn from that background by construction.
+
+### Why this stops here
+
+The fix space contains materially different options and no measurement discriminates
+between them. Each is a look decision:
+
+1. **Reduce the sheen's environment coupling.** 35% of the radiance is a broad
+   specular mirror of the environment, and specular reflects the environment's
+   colour *un-modulated by albedo*, which is precisely "looks like its
+   surroundings". But `sheen: 1` with `sheenRoughness: 0.62` is deliberate — the
+   material comment says the fabric lobe "does the work that a tight GGX highlight
+   would do wrong" — and reducing it darkens the sail, which the owner has ruled
+   out as an axis.
+2. **Give shaded canvas a local bounce term.** Physically the strongest: real shaded
+   canvas receives warm bounce from the deck and from other sails, and this engine's
+   ambient is sky-and-sea only, which is exactly why the shaded sail is blue. But
+   that is a new lighting feature, i.e. architectural expansion beyond the reported
+   defect.
+3. **Raise the canvas albedo's value or saturation** so the diffuse term carries
+   cloth colour instead of being swamped. Pure art direction.
+4. **Accept it**: the render is defensible, and a shaded sail under a blue sky is
+   blue.
+
+§87's constraint still binds and rules out the obvious cheap move: dimming is the
+wrong axis — a dial combination reached ratio 0.370 and stopped reading as film, but
+the crop became a dark blue tarpaulin and the hue did not move at all (B−R +18.65 to
++20.56). Options 1 and 3 both risk exactly that.
+
+**Handing the choice to the owner rather than picking one.**
