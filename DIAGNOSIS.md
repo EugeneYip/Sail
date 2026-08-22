@@ -7532,3 +7532,92 @@ the candidate directions (widen the lobe with footprint, prefilter the probe har
 reduce the probe's cloud contrast, clamp outliers) all trade against far-field detail,
 which §67 and §17C fought to win. No discriminator yet says which preserves it. That
 is a genuine stop, not an invitation to tune.
+
+## 105. Issue 3's flicker is the EnvProbe's 6 Hz staircase, reflected by the sea
+
+Completes §104 and **corrects its mechanism wording**. §104 named
+"unresolved-normal / insufficient angular filtering" as the leading candidate. That
+is now refuted as the driver of the *flicker*: the churn is environment-side.
+
+### The metric had to be replaced first
+
+§104's dark test was relative to each frame's median, so a global brightening
+reclassified blocks — it was retired as primary. Replacement:
+
+    residual = luma - boxblur(luma, 101 px)
+    blotch   = 25 px blocks whose mean residual < -6
+
+A blotch is now dark relative to **the sea immediately around it**, which is what the
+eye reports and what no global luma change can manufacture. Validated before use:
+
+| condition | blotch blocks | churn |
+|---|---|---|
+| clean, cloudCover 0.0 | 3.31 | 3.53 |
+| clean, cloudCover 0.4 | 3.00 | 3.20 |
+| repro, cloudCover 0.8 | 22.69 | 36.20 |
+| §104's clouds-off ablation | 4.38 | 4.67 |
+| §104's probe-tap-off ablation | 2.69 | 2.87 |
+
+Clean conditions sit at the floor and both §104 ablations return to it, so the metric
+tracks the artefact rather than the exposure.
+
+### Temporal ownership, in ONE load
+
+Two attempts. The first is discarded: its return-to-baseline control drifted
+monotonically from 20.4 to 48.0 blotch blocks across arms in run order, and its
+"both static" arm still churned at 65 because only the probe and ocean were frozen
+while the **Sky** module stayed live and feeds the ocean's non-probe reflection path.
+
+The second fixed all three faults — palindrome arm order (live A B C C B A live) so a
+linear drift cancels on averaging, the Sky module frozen alongside the probe, and
+`autoExposure` off. Levers asserted by readback: probe texels byte-identical across
+frozen arms, `ocean.sample()` height identical across ocean-frozen arms.
+
+| arm | blotch blocks | **churn** | min residual |
+|---|---|---|---|
+| live, both live | 49.79 | **76.77** | -14.39 |
+| **A: static environment, live ocean** | 60.96 | **1.82** | -13.16 |
+| **B: static ocean, live environment** | 46.00 | **74.00** | -13.67 |
+| C: both static (null) | 54.79 | 1.86 | -15.27 |
+
+**Freezing the environment removes the churn. Freezing the ocean does not.** C's 1.86
+is a genuine null, which also clears TAA as a churn source of consequence.
+
+Blotch *area* is roughly constant across every arm (46-61 blocks): the spatial dark
+pattern is the sea reflecting a genuinely cloudy sky and is largely correct. The
+player-visible defect is the **flicker**, and it is environment-side.
+
+### The mechanism, measured exactly
+
+Reading the 256x128 probe target back every frame for 40 frames at cloudCover 0.8:
+
+    mean |delta| : 0 0.0065 0 0 0 0 0 0 0 0 0 0.0117 0 0 0 0 0 0 0 0 0 0.0118 0 ...
+    max  |delta| : 0 2.638  0 0 0 0 0 0 0 0 0 2.649  0 0 0 0 0 0 0 0 0 2.652  0 ...
+
+The probe changes on **4 frames in 39** — every ten or eleven frames, i.e. the
+documented 6 Hz cooldown — and is **exactly unchanged between**. On a refresh frame
+individual texels jump by up to **2.65 in radiance**.
+
+So the reflected environment is a **staircase in time**: perfectly still for ten
+frames, then a large step. The ocean reflects it directly, so the sea's reflected
+radiance steps with it, and at high cloud cover those steps are violent enough to read
+as flickering dark blotches. This is also why §104's "refresh every frame" arm helped
+only slightly — it trades step size for step frequency, and with the old metric that
+read as almost nothing.
+
+`EnvProbe`'s docstring justifies 6 Hz on the grounds that "even at a 60x time warp the
+sun moves 0.25 deg a second". That reasoning is sound for the **sun** and does not
+hold for **clouds**, which are the fast-moving content the probe also carries.
+
+### Fix direction, not yet implemented
+
+The defect is a missing **temporal** filter, so the fix belongs on the probe, not on
+the ocean's spatial filtering. The precedent is in this repository already:
+`CpuWaves` keeps "two snapshots of its spatial field bracketing the present and the
+frames in between read a linear interpolation of the pair". The probe wants the same
+treatment — two states and a phase blend, or an accumulation pass that eases the new
+render into the old — so consumers see a continuous environment instead of a step.
+
+Explicitly NOT the fix, per the owner's instruction and this evidence: a dark floor,
+a reflection clamp, brightening the sea, removing clouds from the probe, or a global
+reflection blur. None of those addresses a temporal staircase.
