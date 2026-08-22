@@ -141,3 +141,34 @@ not something to guess at.
 Issue 2 therefore stays OPEN. §79's standing warning is the best lead: anything that
 clamps or cuts on `vD` with a constant draws a dead-level line the length of the
 ship, and `uSkirtFloor` is exactly such a constant.
+
+### Issue 4 (rope ends): architectural cause found, and a separate real artefact found
+
+**Why a rope end is a flat cut, structurally.** `makeRibbonGeometry` builds `seg`
+spans along the rope and **two vertices across**; the vertex shader orients that
+strip to face the camera and sets its half-width from `iParam.y * grow`, which is
+constant along `s`. So every rope necessarily terminates square at full radius at
+both `s = 0` and `s = 1`. There is no cap and no taper anywhere in the path.
+
+**But a global taper would be wrong.** Most of these lines end at a fitting — a
+yard, a block, a belaying pin — and real rigging ends are seized or spliced, not
+pointed. Tapering every end to nothing would make attached lines look detached. A
+correct fix needs to distinguish free ends from terminated ones, and that
+information is not in `iParam`. **Not attempted.**
+
+**And the artefact actually visible at the stern is not a rope.** At 5x, both
+quarters carry four or five **flat tapering blades** protruding outboard, each with a
+hard straight-cut end, arranged in a fan. A camera-facing ribbon cannot look like
+that — it would keep constant width — so these are something else: most likely a
+`spar` at low radial segment count, or a chainplate/channel plate. Owner not yet
+identified; the single-mesh-hide instrument that settled the hull question would
+settle this too, and was not run for lack of time rather than any obstacle.
+
+### Issue 3 (zoomed-out black flicker): not started
+
+No work done. Flagging one thing for whoever picks it up: this is a **temporal**
+defect, so the frozen-frame instrument is invalid for it by construction (issue 2
+proved the wake evolves at dt = 0), and the fresh-load instrument has 16-68 codes of
+variance in exactly the regions of interest. It needs a per-frame time series at a
+fixed station with a control channel, in the manner of §97's instrument, not a
+handful of screenshots.
