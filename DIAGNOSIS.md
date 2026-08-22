@@ -7621,3 +7621,89 @@ render into the old — so consumers see a continuous environment instead of a s
 Explicitly NOT the fix, per the owner's instruction and this evidence: a dark floor,
 a reflection clamp, brightening the sea, removing clouds from the probe, or a global
 reflection blur. None of those addresses a temporal staircase.
+
+## 106. The probe crossfade works and does not fix the blotches — §105's attribution was too strong
+
+Implemented, measured, failed its own acceptance, **reverted**. §105 stands on its
+measurements but its attribution sentence does not: it said the flicker *is* the
+probe's 6 Hz staircase. It is not, and this section says why.
+
+### What was built
+
+Minimum temporal filter, no increase in probe render frequency:
+
+- a second render target `prev`, same format and size, holding the outgoing state;
+- one passthrough blit at each 6 Hz refresh, copying current into `prev` **before**
+  the fresh render overwrites it, so `target` keeps its identity and neither
+  `scene.environment` nor `ext.sky.envMap` nor three's PMREM cadence changes;
+- `uEnvBlend`, a shared scalar ramping 0 to 1 over **0.12 s** — comfortably inside the
+  1/6 s refresh interval so a fade always completes before the next render and no
+  overlap needs handling;
+- the ocean's reflection reads `mix(prev, current, uEnvBlend)`.
+
+### It does what it was built to do
+
+Reconstructing exactly what the ocean samples, per frame, at the repro condition:
+
+| | frames changing (of 39) | largest single-frame step |
+|---|---|---|
+| before | 4 | **2.65** |
+| after | 31 | **0.413** |
+
+A **6.4x reduction** in the largest step, and the staircase is replaced by a ramp.
+
+**One real bug was found and fixed on the way.** The blend scalar was first written
+inside `publish()`, which runs *before* `probe.update()` in the same frame, so on a
+refresh frame the target already held the fresh render while the uniform still held
+the previous frame's 1.0 — the new probe arrived at full weight for one frame and the
+crossfade contained a step exactly where it was meant to remove one. Measured as a
+1.37 to 2.82 spike per refresh; gone once the write moved after `probe.update`. Worth
+knowing for any future consumer of a ping-ponged probe.
+
+### But it does not move the player-visible metric
+
+Same build, same load, palindrome order, `blendAt` stubbed to 1 to reproduce the old
+instantaneous switch:
+
+| arm | blotch blocks | churn |
+|---|---|---|
+| HARD, old 6 Hz switch | 44.17 | **65.86** |
+| FADE, 0.12 s crossfade | 43.17 | **69.95** |
+
+No improvement. So the probe's staircase was not what the sea's churn was made of.
+
+### Where §105 over-reached, and the isolation that shows it
+
+§105's Phase A froze the probe **and the whole Sky module** together and got churn
+1.82 against 76.77. That is a true measurement, but Sky's per-frame work is much more
+than the probe: it publishes `uSkyColor`, `uFogColor`, `uSunColor`, `uSunIntensity`,
+`uGroundColor`, `uSeaRadiance` and the haze terms, updates the sun light, rebuilds the
+sky LUTs, and drives the cloud field and its shadow map. Freezing all of it proves the
+churn is environment-side; it does **not** single out the probe.
+
+Separating them, one load, palindrome, same metric:
+
+| arm | blotch blocks | churn |
+|---|---|---|
+| all live | 41.20 | 62.56 |
+| **probe frozen ONLY** | 37.40 | **62.33** |
+| **cloud shadow forced to 1** | 41.35 | **62.83** |
+
+**Neither the probe alone nor the cloud shadow alone accounts for any of it.** The
+owner is elsewhere in Sky's per-frame output — the candidates are the published sky
+and sun radiance scalars, the sun direction, and the sky LUTs, any of which would
+modulate the whole sea.
+
+### Why it was reverted rather than kept
+
+The acceptance bar required churn materially reduced toward the floor. It is not, so
+the change fails the standard it was built against, and a source change is not kept
+merely because it works at its own mechanism level. The 0.12 s figure and the
+ordering trap above are recorded so that reimplementing this is cheap if a future
+defect actually needs it.
+
+**Standing mechanism wording for issue 3, corrected:** high cloud cover is necessary
+(cover 0.0 and 0.4 sit at the metric floor), the churn is environment-side, and both
+the probe's temporal staircase and the cloud-shadow term are now **excluded** as its
+cause. The next arm is Sky's published radiance scalars and sun state, frozen
+individually.
