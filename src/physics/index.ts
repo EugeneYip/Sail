@@ -179,17 +179,23 @@ import { ShipDynamics } from './ShipDynamics';
  *
  *      READ THAT CLAIM NARROWLY. Both arms of it hold dt CONSTANT, so it says
  *      nothing about an irregular clock, which is the only kind a browser
- *      delivers. `DIAGNOSIS.md` §89 measures the hull's HEAVE under a fractional
- *      clock and finds it is not frame-rate independent at all: the reversal rate
- *      of the per-frame change in vertical velocity is 64-69% on fractional
- *      intervals against 0.8-1.1% on whole multiples of the refresh period, at
- *      equal mean interval, with a 20x rise in amplitude. Surge is unaffected
- *      (4.8-6.7% either way), so it is the vertical channel specifically. §89
- *      eliminates two candidate mechanisms and does NOT establish that the defect
- *      is in this directory — it may be an interaction with the wave field's
- *      piecewise-linear time advance in `src/ocean`. Unfixed. If you are about to
- *      test frame-rate independence here, vary dt irregularly or you will
- *      reproduce this same blind spot.
+ *      delivers. `DIAGNOSIS.md` §89 measured the hull's HEAVE under a fractional
+ *      clock and found the reversal rate of the per-frame change in vertical
+ *      velocity at 64-69%, against 0.8-1.1% on whole multiples of the refresh
+ *      period at equal mean interval. Surge is unaffected (4.8-6.7% either way),
+ *      so it is the vertical channel specifically.
+ *
+ *      §101 then revalidated that under fresh-load controls and settled what it
+ *      means, so read §101 rather than §89 alone. The effect is real and this
+ *      solver does NOT generate it: the wave field it samples is rough on BOTH
+ *      clocks, so the solver inherits the roughness and attenuates it. §89's "20x
+ *      amplitude" was a velocity-change statistic, not an amplitude — the
+ *      positional excess is about 4 mm on whole multiples and 8 mm on fractional,
+ *      and screen-space motion is about 0.1 px, at or below the measurement
+ *      control. **Technical debt, not a player-visible defect**, and deliberately
+ *      unfixed. If you are about to test frame-rate independence here, still vary
+ *      dt irregularly — the blind spot in the claim above is real even though its
+ *      consequence turned out to be invisible.
  *
  *   2. THE GALE CASE MEASURED THE SEA, NOT THE SHIP. `run()` steps the solver but
  *      never ticks the ocean, so a 600 s gale sails one frozen wave snapshot, and
