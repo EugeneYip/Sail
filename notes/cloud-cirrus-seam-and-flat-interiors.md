@@ -7,6 +7,12 @@ what is known about them is at the end.
 
 Scope: `src/sky` only. No file outside it was touched.
 
+Frames on this box: `shots/S82-base-{orbit,noon,golden}.png` before,
+`shots/S82-after-{orbit,noon,golden,storm,dawn}.png` after. The clearest 1:1 look
+at item (c) is the crop `(880,90) 660x250` of the two `noon` frames — the base
+has three thin straight lines crossing the right half of it and the after has
+none.
+
 ---
 
 ## Item (c): the "three ruler-straight streaks crossing the whole sky"
