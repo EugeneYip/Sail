@@ -5671,3 +5671,74 @@ exactly why a parallel session's tuning cannot be cherry-picked one line at a ti
 - **`tick(lastTime)` does not freeze the frame while TAA is on.** Two renders of the identical
   variant differed by mean 1.12 and max 12.5 codes with SMAA — and mean **2.00**, max **98.55**
   with TAA, which swamped an effect of this size entirely. Always render the null twice.
+
+## 85. Close-camera jitter: not reproduced, and two plausible mechanisms killed
+
+A player reports visible repeated vibration in the HELM, BOW/BOWSPRIT and MAST views. I was
+asked to reproduce it before any camera agent was dispatched. **I could not**, and the way it
+failed is worth recording because two attractive hypotheses died.
+
+### Attempt 1 — sampled inside rAF, and it manufactured a finding
+Per-frame camera delta taken in the ship's frame, with the discriminator being the
+**sign-reversal rate** of the vertical component: smooth motion keeps its sign, vibration
+reverses about half the time.
+
+| mode | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| chase (control) | 6% | 3% | 3% |
+| helm | **22%** | 2% | 3% |
+| bowsprit | **23%** | 14% | 5% |
+| masthead | 8% | — | — |
+
+Run 1 looks exactly like the reported defect — helm and bowsprit at ~3.7× the control. **The
+repeats destroy it.** Bowsprit's own two samples differ by 9 points, which is larger than the
+between-mode difference being claimed. Load was 40, and a sign-reversal statistic on a
+variable frame interval invents structure, because a late frame makes any spring overshoot and
+the overshoot reads as vibration.
+
+### Attempt 2 — a fixed clock, which is the right instrument
+Driving `tick(t + 1000/60)` by hand removes the timing noise entirely: load can change how long
+the run takes but not what the simulation sees.
+
+| mode | dY sign-reversals |
+|---|---|
+| chase, chase | 0.5%, 0.5% |
+| helm, helm | 0.8%, 0.5% |
+| bowsprit, bowsprit | 0.8%, 0.5% |
+| masthead | 0.5% |
+
+**Every mode is indistinguishable from the control.** The camera's motion law is stable when
+fed a uniform interval.
+
+### The dt-overshoot hypothesis is dead at the code level too
+That result pointed at springs driven by an irregular dt, which is the classic cause. But both
+smoothing primitives are **frame-rate independent by construction**: `damp` is an exact
+exponential, `current + (target − current) · (1 − exp(−rate·dt))`, and `springDamp` is a
+critically damped spring with a Padé approximant for the exponential plus a `maxSpeed` clamp.
+Neither can overshoot on a long frame.
+
+### And the adaptive-resolution hypothesis is weakened by the existing record
+The next candidate was that every scale change reallocates the post stack and **discards the
+TAA history**, which at close range would read as a hitch — and which my test could not see
+because I pinned `adaptiveResolution = false`. But §59's anti-flap work already measured the
+steady-state rate at **0.40 scale changes per minute**, one every two and a half minutes. That
+is far too rare to be "frequently stutters".
+
+### Status, and why the report is still credible
+**Not reproduced. No camera agent dispatched.** Three mechanisms — a mode-specific bug,
+dt-driven spring overshoot, and adaptive-resolution history discards — are each contradicted
+by evidence.
+
+The player's report is **not** thereby refuted, and the honest reason is that my instrument is
+missing three things their machine has: **vsync** (headless is a rate limiter, not a display —
+§57a), **real input** (a look-drag exercises paths a still camera never touches), and **their
+pixel count** (4× mine — §57). The one documented, unquantified candidate that specifically
+affects near geometry is **TAA's near-field share**: §49 fixed motion blur's velocity
+attribution and explicitly left TAA on the world frame, noting that giving it the ship-frame
+velocity is "the obvious next move and the risky one", with `clipAabb` pulling history to the
+3×3 mean against a `uFeedbackMin` of 0.7. That is the next thing to test for this defect, with
+input driven and at `--dpr 2 --adaptive`.
+
+**Instrument left behind:** `.tmp/jitterfixed.mjs` — fixed-clock camera stability with the
+sign-reversal statistic and a repeated control. `.tmp/inspect.mjs` — eight deterministic
+ship-relative inspection stations, which is what made the geometry defects reproducible at all.
