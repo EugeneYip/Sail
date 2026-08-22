@@ -222,3 +222,32 @@ aft-interior exposure remains open.** The taffrail and the extended deck removed
 open tray and took inboard-visible window frames from about twenty to about six, but
 a narrow strip of the transom's inner face is still visible at extreme overhead
 angles. Parked, not finished.
+
+### Issue 3 REPRODUCED — high cloud cover, far zoomed-out station
+
+Station: free camera at ship-relative [-140, 330, -90] looking at the ship, i.e.
+high and far astern with no horizon in frame, which is what the player's zoomed-out
+screenshots show. Sea state 3, noon, renderScale 1, adaptive off. Fresh load per
+cell, 16 frames per cell, live ticking.
+
+Instrument: per frame the image is reduced to 25 px blocks (64x36) and a block is
+flagged dark if it is below 0.55x that frame's OWN median block luma, so exposure
+drift cannot create or hide a blotch. Reported: dark-block count, max area, the
+2nd/5th percentile block luma, and churn (blocks flipping dark between frames).
+
+| cloudCover | dark blk/frame | max area % | p5/median | churn/frame |
+|---|---|---|---|---|
+| 0.0 | 0.00 | 0.00 | 0.889 | 0.00 |
+| 0.4 | 0.00 | 0.00 | 0.861 | 0.00 |
+| **0.8** | **8.50** | **1.30** | **0.729** | **15.20** |
+
+So the blotches appear only at high cloud cover, and they **flicker**: 15.2 blocks
+change state per frame, against 0.00 at lower cover. Sixteen frames is 0.27 s, over
+which a cloud shadow moves almost not at all, so this is not cloud motion.
+
+This also explains the owner's "size changes with graphics/settings state": cloud
+cover and cloud quality are settings.
+
+The far sea in these captures additionally shows the **regular dotted lattice** the
+owner's screenshots show — aliasing of the ocean at distance. Same station, likely a
+separate defect, recorded here so it is not lost.
