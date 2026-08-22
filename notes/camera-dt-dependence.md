@@ -277,3 +277,15 @@ is perfectly rigid: `|dpos|/s` is **0.00000** and the reversal rate reads 60-68%
 which is what a sign statistic does to pure rounding noise. **A reversal rate is
 meaningless without its magnitude.** Helm reads 0.8% in the same cell only
 because its bob and sway still supply real motion.
+
+### Commit hygiene: I made the mistake AGENTS.md warns about
+
+`12991da`, labelled `docs(camera):`, also carries the first 150 lines of the
+`ShipFrame` sub-stepping implementation. Cause: `git add src/camera/ShipFrame.ts`
+earlier in the session left the path staged, and a later bare `git commit` for
+the note swept it in. The remainder landed properly in `c370272`
+`fix(camera): ...`, so **anyone bisecting this fix has to include `12991da`.**
+Not rewritten: `main` has several sessions committing to it concurrently
+(`fc15f7b`, `206218a` land between my own), and rewriting a shared tip to tidy a
+label is a worse trade than the label. Every commit here now passes an explicit
+`--` pathspec.
