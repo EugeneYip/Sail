@@ -361,3 +361,45 @@ determines severity — cloud field maturity and probe contents are the obvious
 candidates. Finding and pinning that variable is the next piece of work, and it must
 come before another reference or another fix attempt. Guessing past it is how the
 last two attempts were wasted.
+
+### Issue 3 PHASE A: the churn is ENVIRONMENT-side, not the ocean's normals
+
+A new brightness-invariant metric replaces the median-relative one: residual =
+luma - boxblur(luma, 101 px), then blocks below -6 of that residual, so a blotch is
+dark relative to *the sea around it* and no global brightness shift can manufacture
+one. Validated before use: clean cloudCover 0.0 and 0.4 give 3.3 and 3.0 blocks with
+churn 3.5 and 3.2, the cloudCover 0.8 repro gives 22.7 blocks with churn 36.2, and
+both §104 ablations return to floor (clouds off 4.4, probe tap off 2.7).
+
+**Attempt one failed and is discarded**: the return-to-baseline control went 20.4 to
+48.0 blocks monotonically across arms in order, and "both static" still churned at 65
+because only the probe and ocean were frozen while the Sky module stayed live and
+feeds the ocean's non-probe path.
+
+**Attempt two** fixed both: palindrome order (live A B C C B A live) so linear drift
+cancels on averaging, the Sky module frozen alongside the probe, autoExposure off.
+Every lever asserted by readback — probe texels identical across frozen arms, wave
+height identical across ocean-frozen arms.
+
+| arm | blotch blocks | **churn** | min residual |
+|---|---|---|---|
+| live, both live | 49.79 | **76.77** | -14.39 |
+| **A static ENV / live ocean** | 60.96 | **1.82** | -13.16 |
+| **B static ocean / live ENV** | 46.00 | **74.00** | -13.67 |
+| C both static (null) | 54.79 | 1.86 | -15.27 |
+
+**Freezing the environment removes the churn; freezing the ocean does not.** 76.8 to
+1.82 against 76.8 to 74.0. And C's 1.86 is a genuine null, so the frozen scene is
+stable and **TAA is not a churn source of consequence**.
+
+**This reverses my earlier hypothesis.** The temporal defect is NOT unresolved wave
+normals sampling a static environment — it is the environment itself changing. The
+ocean's spatial filtering is not the churn owner and should not be touched for it.
+
+Note also that blotch *area* is roughly constant across every arm (46-61 blocks). The
+spatial dark pattern is the sea reflecting a genuinely cloudy sky, which is largely
+correct; the player-visible defect is the **flicker**, and that is environment-side.
+
+Per the owner's decision tree this sends the work to EnvProbe / cloud temporal
+filtering, and explicitly away from dark floors, reflection clamps, sea brightening,
+removing clouds from the probe, and global reflection blur.
