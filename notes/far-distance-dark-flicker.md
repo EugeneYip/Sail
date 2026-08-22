@@ -140,3 +140,30 @@ undetectable at a fixed station.
 Next: sail normally and log the far-field's *spatially averaged* luma per frame
 over several hundred frames, then look for step discontinuities against the smooth
 trend, and correlate any with origin/cascade wrap events.
+
+### Finding 3: not reproduced with a MOVING camera either
+
+`.tmp/farmoving.mjs` — same station but re-placed ship-relative every frame so the
+camera sails with her, 1200 frames at a fixed 16.67 ms, band means read in-page
+with `gl.readPixels` right after `tick()` (cheap enough for four-figure frame
+counts). Ship covered 146.7 m, which crosses several fine-cascade tiles.
+
+| band | median frame-to-frame step | max | outliers >8x median |
+|---|---|---|---|
+| far | 0.058 codes | 0.484 | **0** |
+| mid-far | 0.103 | 1.141 | 2 |
+| mid | 0.082 | 0.919 | 3 |
+| near | 0.063 | 0.278 | 0 |
+| sky | 0.022 | 0.218 | 0 |
+
+The far band has **no** discontinuities at all over 147 m of sailing, and the
+handful of mid/mid-far outliers are about one code — below visibility. So clipmap
+ring shifts, cascade tile wraps and origin wraps are not producing a visible
+far-field step at these conditions.
+
+**Three negatives now, all at noon/clear.** The remaining variable I have not
+swept is the CONDITION: a dark far patch is much more plausible where the
+atmosphere is doing work — low sun, heavy turbidity, short visibility — and §74
+records auto-exposure pinned at its ceiling at dusk and night, which changes what a
+fixed radiance looks like. §35 also noted the horizon once "read as a seam: the sea
+was hazed and the sky was not". Sweeping conditions next.
