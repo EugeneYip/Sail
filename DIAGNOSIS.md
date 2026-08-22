@@ -7247,3 +7247,133 @@ not rediscovered. Visible defect: **not demonstrated.** Implementing a
 reference-resolution decoupling now would be a speculative fix for an unmeasured
 symptom, and would risk the legitimate filtering in every Category-1 consumer above
 for no measured gain.
+
+## 101. §89 revalidated: the chatter is real, invisible, and inherited from the wave field
+
+Phase 1 and 2 of the §89 revalidation, under the corrected discipline: fresh page
+load per arm, repeats, deterministic environment, explicit lever assertions, and a
+control the tested subsystem cannot influence. **No source change** — see the stop
+reasoning at the end.
+
+### The estimator was validated before anything was believed
+
+An analytic smooth signal, `sin(2*pi*t/8)`, was sampled on the *same* irregular dt
+sequence and pushed through the identical statistic. On a smooth trajectory the
+statistic must read near zero, and it does — 0.5% reversal on both clocks, `rmsDv`
+1.20e-2 against 1.14e-2. So the statistic is sound and the hull's numbers are not an
+artefact of it. Repeats agreed closely (0.8/0.8/0.8% whole, 62.5/63.5/64.2% fract).
+
+### It reproduces, and it is in the hull's pose, not the camera
+
+| channel | whole rev% | whole rmsDv | fract rev% | fract rmsDv |
+|---|---|---|---|---|
+| shipY | 0.8 | 1.82e-2 | **63.4** | **2.04e-1** |
+| pitch | 1.4 | 2.68e-4 | 63.4 | 2.65e-3 |
+| roll | 1.3 | 5.20e-4 | 65.3 | 5.21e-3 |
+| bow point through the pose | 0.8 | 2.14e-2 | 64.9 | 2.25e-1 |
+| camY | 6.5 | 8.80e-3 | 6.4 | 9.11e-3 |
+| camRelY | 57.9 | 1.44 | 58.0 | 1.48 |
+| **analytic control** | **0.5** | **1.20e-2** | **0.5** | **1.14e-2** |
+
+`camY` is flat across clocks and `camRelY` identical, so the camera neither causes
+nor amplifies it. The bow was measured by pushing the same ship-local point through
+the pose every frame, not by a fixed world offset — an offset moves under rotation
+and would read hull rotation as translation.
+
+### But it is not visible, and §89's amplitude claim was the wrong statistic
+
+The *positional* second difference is **unchanged** between clocks: shipY 1.32e-2
+against 1.40e-2 m, bow 1.54e-2 against 1.55e-2. It is also the same order as the
+analytic control's own (1.15-1.25e-2), because on unevenly spaced samples the second
+difference is dominated by dt variation times velocity rather than by curvature.
+Subtracting the control in quadrature leaves a positional excess of about **4 mm on
+whole multiples and 8 mm on fractional**.
+
+Measured where a player would actually see it — the same ship-local point projected
+through the live camera each frame, detrended with a centred 5-point average, in
+pixels:
+
+| arm | bow HF, px x | bow HF, px y | analytic control, px y |
+|---|---|---|---|
+| chase / whole | 0.063 | 0.129 | 0.128 |
+| chase / fract | 0.067 | 0.126 | 0.126 |
+| helm / whole | 0.037 | 0.071 | 0.276 |
+| helm / fract | 0.034 | 0.079 | 0.317 |
+
+**Identical between clocks, in both a tethered and a mounted camera mode, and about
+0.1 px in absolute terms — at or below the control.** §89 quoted "20x amplitude"
+from `rmsDv` (0.0213 to 0.43 m/s); that is a velocity-change statistic and does not
+license the claim that the defect is player-visible. **Retracted.**
+
+### Gameplay consequence: a determinism cost, not a bias
+
+Means agree across clocks — speed 13.85 against 13.73 kn, heel 8.17 against 8.04
+deg, pitch −0.68 against −0.70 deg. What differs is **reproducibility**: two
+identical whole-clock runs agree on mean speed to **0.028 kn**, two fractional runs
+to **0.342 kn**. A 12x loss of run-to-run determinism, about 2.5% of speed. The
+between-clock mean difference (0.115 kn) sits inside the fractional arm's own spread,
+so no systematic bias is claimed.
+
+### Localised: inherited from the wave field, and the integrator is exonerated
+
+The forcing input — ocean surface height sampled **at the ship's own position** every
+frame, which is the signal that actually drives the hull — was measured with the same
+statistic:
+
+| channel | whole rev% | whole rms | fract rev% | fract rms |
+|---|---|---|---|---|
+| hull shipY | 1.0 | 1.65e-2 | 66.6 | 1.79e-1 |
+| sea height at the ship | **67.3** | 5.23e-1 | 76.4 | 3.22e-1 |
+| sea height, fixed point | **70.4** | 5.12e-1 | 75.3 | 3.32e-1 |
+
+**The input is rough on BOTH clocks and the hull is smooth on only one.** So the
+solver does not generate the chatter — it inherits it, and attenuates it (hull rms
+1.79e-1 against an input 3.22e-1) but less completely on a fractional clock. §89's
+"the ship's solver is frame-rate dependent" is therefore too strong: the solver's
+*rejection* of a deliberately rough input is clock-dependent.
+
+That input roughness is by construction and is documented in `CpuWaves.ts`: one
+cascade re-solves per frame in round robin and the frames between read a linear
+interpolation of two snapshots, so `dh/dt` is piecewise constant and its difference
+is impulsive at every snapshot boundary — with a stated error bound under 2 mm at
+60 fps. On a whole-multiple clock those boundaries hold a fixed phase relationship
+with the sampling and the hull's response cancels them; on a fractional clock the
+phase walks and it does not.
+
+### Why this stops here
+
+- **No visible defect.** Screen-space motion is ~0.1 px and does not differ between
+  clocks. The user's own standard — reject results at or below control variance —
+  applies to the visibility claim directly.
+- **The remaining consequence is determinism**, at 2.5% of speed, with means agreeing.
+- **A fix would mean re-engineering `CpuWaves`' snapshot interpolation**, a
+  deliberately optimised subsystem whose cost/benefit is documented (one CPU FFT per
+  frame, 4x cheaper), to remove an invisible symptom. That is architectural expansion
+  unrelated to a demonstrated defect.
+
+What survives from §89: the effect is real, it is inherited rather than generated,
+the camera is exonerated, and §85a's statistic still cannot be used as a camera
+acceptance test on a fractional clock — that part stands unchanged.
+
+## 102. The VSM caster trap: ensign only, and deliberately left alone
+
+Phase 4, closing the finding recorded in §99.
+
+Under `VSMShadowMap` three writes any object with `receiveShadow` into the shadow map
+even when `castShadow === false` (`three.module.js:9564`), so `castShadow = false` is
+silently ineffective for receivers.
+
+**Scope, enumerated rather than assumed.** Of every mesh in the scene with either
+flag set, exactly **one** has `castShadow: false` with `receiveShadow: true`:
+`ship-ensign`, 378 vertices. Every other caster is intentional. So the trap changes
+intended rendering in exactly one place.
+
+**Consequence: negligible, and arguably correct.** 378 vertices added to a 2048²
+shadow map is nothing, and a real ensign does cast a shadow — the flag's stated
+intent is the questionable half, not the behaviour. **Left alone**, per the brief:
+document, do not fix without a demonstrated effect.
+
+**Worth knowing for future work:** on this renderer the only way to stop a receiver
+casting is to give it a `customDepthMaterial` whose fragment shader `discard`s. That
+is the lever §99 had to build to isolate the sail, and it is the lever anyone
+attempting selective shadow casting here will need.
