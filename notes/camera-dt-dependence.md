@@ -254,3 +254,26 @@ refresh intervals *including fractional ones*:
 `ShipFrame.substep` is a writable field rather than a constant so a probe can set
 it huge, collapse the loop to one step of the whole frame, and measure before and
 after in the same page load.
+
+### The decisive ablation: both terms raw, and the mounted mode is clean
+
+| ablation | mode | dY | dX | dZ | \|dpos\|/s |
+|---|---|---|---|---|---|
+| none | helm | 3.0, 5.3, 3.0 | 5.3-8.4 | 25-27 | 0.36-0.46 |
+| `mountPos` AND `smoothQuat` raw | helm | **0.8, 0.8, 0.8** | **0.8** | **1.1-1.5** | 0.064-0.087 |
+| `mountPos` AND `smoothQuat` raw | chase | 0.8, 0.8, 1.1 | 0.8-1.1 | 1.5-6.1 | 0.79-2.97 |
+| `mountPos` AND `smoothQuat` raw | bowsprit | 60.2 | 67.8 | 64.0 | **0.00000** |
+
+Helm falls to **0.8% on all three axes** — the controls' floor — with the same
+irregular clock, the same environment and the same empty input trace. So the
+whole of §85a's defect is carried by those two terms and nothing else in the
+pipeline: not collision (off in these modes), not the water clamp
+(`waterClearance = -50`), not update ordering, not the anatomy, not the rig's
+output filter (zero here), not `heaveResidual`.
+
+`bowsprit` in the same cell is the instrument's own warning label. Its eye is
+*exactly* `smoothQuat * L + mountPos` and nothing else, so with both terms raw it
+is perfectly rigid: `|dpos|/s` is **0.00000** and the reversal rate reads 60-68%,
+which is what a sign statistic does to pure rounding noise. **A reversal rate is
+meaningless without its magnitude.** Helm reads 0.8% in the same cell only
+because its bob and sway still supply real motion.
