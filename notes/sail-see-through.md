@@ -146,3 +146,103 @@ the cloud-shaped structure either.
 
 Next: the component breakdown — write each light accumulator straight to
 `gl_FragColor` at the end of main, one at a time, same frozen frame.
+### The component breakdown, and a calibration ramp so the numbers mean something
+
+`envtest` — a variant whose only job is to write green if
+`USE_ENVMAP && ENVMAP_TYPE_CUBE_UV` is defined and red if not — comes back
+**green** (mean G 170, R 34, B 24 inside the mask). So the sail program does have
+three's image-based lighting compiled in, off `scene.environment`, and trap 1
+above was the only reason the first sweep said otherwise.
+
+Every accumulator written straight to `gl_FragColor` at the end of main, same
+frozen frame, same camera, statistics inside the coverage mask:
+
+| written out | mean luma | std | B-R |
+|---|---|---|---|
+| `diffuseColor.rgb` (cloth albedo) | 104.6 | 24.6 | -12.1 |
+| `iblIrradiance` | **166.4** | 42.7 | +30.2 |
+| `radiance` (IBL specular) | **114.5** | 26.5 | +49.1 |
+| `irradiance` (ambient + hemi + probe) | 11.5 | 26.1 | +0.6 |
+| `reflectedLight.indirectDiffuse` | 63.2 | 18.5 | +11.8 |
+| `reflectedLight.indirectSpecular` | 30.4 | 19.8 | +20.5 |
+| `sheenSpecularIndirect` | 46.7 | 15.9 | +20.1 |
+| `sheenSpecularDirect` | 22.3 | **38.7** | -2.8 |
+| `reflectedLight.directDiffuse` | 16.7 | 29.2 | -1.3 |
+| `reflectedLight.directSpecular` | 14.0 | 26.1 | +0.2 |
+| null, for reference | 94.3 | 26.7 | +17.9 |
+
+`irradiance` at 11.5 is the same as a flat 0.0 write, so there are **no ambient
+or hemisphere lights** on this scene: every bit of indirect light on the canvas
+arrives through the environment probe.
+
+To turn display codes back into scene-linear radiance I rendered a **calibration
+ramp** — flat values 0.0 to 4.8 written at the end of main, through the identical
+exposure/AgX/composite stack in the identical frame. That is the only honest way
+to read these numbers; AgX means a code difference is not a radiance ratio.
+
+| flat linear in | mean code out |
+|---|---|
+| 0.0 | 11.8 |
+| 0.05 | 40.5 |
+| 0.1 | 59.8 |
+| 0.2 | 85.7 |
+| 0.3 | 103.7 |
+| 0.4 | 117.4 |
+| 0.6 | 137.2 |
+| 0.8 | 151.4 |
+| 1.2 | 171.8 |
+| 1.6 | 185.7 |
+| 3.2 | 212.2 |
+
+### The probe is NOT over-bright, and three's diffuse IBL on the canvas is exact
+
+`iblIrradiance` reads 166 codes, i.e. about 1.12 linear. `getIBLIrradiance`
+returns `PI * envMapColor * envMapIntensity`, so the probe's diffuse-convolved
+sky value is 1.12 / PI = **0.357** — against a measured 0.40 for the actual sky
+and sea *behind* the sail in the same frame. The probe is calibrated correctly.
+This rules out an over-bright environment probe, which was my first guess.
+
+And the diffuse IBL arithmetic closes: `indirectDiffuse = iblIrradiance *
+diffuseColor / PI` = 1.12 * 0.30 / PI = **0.107**, and `c_iDiff` measures 63.2
+codes, which the ramp puts at 0.108. So three's Lambert-from-probe on this cloth
+is right to one per cent, and it is **not** the thing to change.
+
+### Two separate artefacts, and they have different causes
+
+**A. THE FILM is the environment probe, and its size is 72 per cent.**
+Replacing `#include <lights_fragment_maps>` with nothing — which removes
+`iblIrradiance` and `radiance`, and with `iblIrradiance` also removes the IBL
+sheen, since `RE_IndirectSpecular_Physical` takes it as its `irradiance`
+argument — takes the canvas from 94.3 codes to **47.8**. Inverted through the
+ramp that is 0.247 -> 0.069 linear: **image-based lighting is 72 per cent of the
+sail's outgoing radiance at this station.**
+
+The same frame with the sail meshes hidden gives 117.7 codes inside the mask,
+i.e. **0.40 linear is what is behind the canvas**. So the shipped sail sits at
+0.62 times the radiance of the sky and sea behind it, in the same blue hue
+(sail B-R +17.9, background B-R +64.2). Mean |null - hide| inside the mask is
+57 codes with 85 per cent of pixels over 24 — the sail is not invisible, but a
+1.6:1 luminance ratio at matching hue is exactly the arithmetic of a translucent
+film, and it is why the eye reads sky *through* the cloth rather than cloth.
+
+Pure diffuse IBL alone would put the canvas at 0.107 against 0.40, a 3.7:1
+ratio, which reads as opaque cloth. Everything between 0.107 and 0.247 is the
+problem.
+
+**B. THE "CLOUDS" ON THE CANVAS ARE `sheenSpecularDirect`.** This is the finding
+I did not expect. The soft white streaky patches that read as cloud seen through
+the sail are still there with the whole environment probe removed, and still
+there with the cloth sun-transmission term removed — so they are neither. Writing
+`sheenSpecularDirect` on its own gives a black frame with *exactly those patches*
+in it, blown out to white, scalloped along the head of each sail and running down
+in flutes that follow the cockle relief. Its mean is only 22.3 codes but its
+standard deviation is **38.7, the highest of any component**, which is the
+signature of a term concentrated in a few very hot places.
+
+That is three's Charlie/Ashikhmin sheen lobe at `sheen: 1`,
+`sheenRoughness: 0.62`, `sheenColor: 0xa8a294`, under a grazing sun, on a
+`DoubleSide` surface whose normal is flipped toward the camera. A grazing sheen
+lobe peaks hard, and three adds `sheenSpecularDirect + sheenSpecularIndirect` on
+top of the FULL Lambert diffuse with no `(1 - sheenAlbedo)` compensation — see
+`meshphysical.glsl.js` line 202. So the cloth reflects more energy than reaches
+it, in the places where sheen peaks.
