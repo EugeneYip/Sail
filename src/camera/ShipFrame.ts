@@ -128,7 +128,18 @@ export class ShipFrame {
   /** Filtered speed over ground, m/s, and 0..1 against 13 kn. */
   speed = 0;
   speedNorm = 0;
-  /** Heave the filter rejected this frame, metres. Diagnostic only. */
+  /**
+   * Heave the low-pass rejected, metres — the high-frequency part of the hull's
+   * vertical position. Not a per-frame difference and not a rate, so it does not
+   * spike on a long frame; `modes/Helm.ts` drives its knee-flex bob from it.
+   *
+   * It was the leading suspect for §85a's vibration and it is not the cause. It
+   * is the opposite: zeroing it takes helm's positional reversal rate UP from
+   * 3.8% to 11.6%, level with the two modes that never read it, because the bob
+   * adds genuine smooth travel to an otherwise very quiet channel and a
+   * sign-reversal statistic is a signal-to-noise measure. See
+   * `notes/camera-dt-dependence.md`.
+   */
   heaveResidual = 0;
   /** 0..1 normalised bow slam. */
   bowSlamNorm = 0;
