@@ -448,3 +448,22 @@ records `cinematic / the yaw pan reaches the axis (differential)` already failin
 plus two failures that now pass (`chase / a 3 s stall AFTER release` and
 `bowsprit / can look forward over the bow`). Nothing in `helm`, `bowsprit` or
 `masthead` fails.
+
+### The hull is not the culprit: it is smooth on all three clocks
+
+`.tmp/jitter2.mjs` now also reports the SHIP's own per-frame vertical velocity and
+its sign-reversal rate, as the control for "a camera filter cannot fix a target
+that jitters":
+
+| arm | ship vy reversals | masthead dZ residual | \|dpos\|/s |
+|---|---|---|---|
+| uniform | 0.5, 0.5, 0.5% | 0.8, 1.0, 1.5% | 0.14-0.26 |
+| whole multiples | 1.1, 1.1, 0.8% | 0.8, 1.1, 1.1% | 0.14-0.35 |
+| fractional | 0.8, 0.8, 0.8% | **62.1, 62.1, 62.1%** | **0.84-1.02** |
+
+The hull's own motion is equally smooth under all three clocks — 0.5 to 1.1%. So
+the fractional arm's residual is **not** the ship being frame-rate dependent; it
+is in the camera, and it is four to six times larger in magnitude than the same
+camera's residual under a whole-multiple clock of the same mean interval. `chase`
+shows the same shape (dZ 45-56%, magnitude 2.26-3.37 m/s against 0.87-1.16 under
+a uniform clock), so it is not confined to the mounted modes either.
