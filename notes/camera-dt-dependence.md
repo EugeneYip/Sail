@@ -467,3 +467,49 @@ is in the camera, and it is four to six times larger in magnitude than the same
 camera's residual under a whole-multiple clock of the same mean interval. `chase`
 shows the same shape (dZ 45-56%, magnitude 2.26-3.37 m/s against 0.87-1.16 under
 a uniform clock), so it is not confined to the mounted modes either.
+
+### The fractional arm is the HULL, not the camera — and §85a's statistic conflates the two
+
+A finer control settles it. `svy` (the reversal rate of the hull's vertical
+velocity itself) was too coarse: the swell dominates that sign, so it reads 0.8%
+whatever happens underneath. The right statistic is the reversal rate of the
+per-frame **change** in the hull's own velocity. Same window, same sim, masthead:
+
+| arm | ship d\|vy\| rev | ship d\|speed\| rev | masthead dZ | \|dpos\|/s |
+|---|---|---|---|---|
+| whole multiples | **0.8, 0.8, 1.1%** | **2.7, 3.8, 6.5%** | 1.1, 1.1, 1.1% | 0.08-0.28 |
+| fractional | **60.0, 60.4, 61.2%** | **64.3, 67.5, 72.2%** | 62.1, 62.1, 62.1% | 0.84-1.02 |
+
+For a smooth trajectory this statistic cannot be large: `v_i = dy_i/dt_i` is
+`y'` at the interval midpoint by the mean value theorem, the midpoints advance
+monotonically however unevenly they are spaced, so `sign(dv_i) = sign(y'')` and
+`y''` only turns over at the swell period. **60% means the hull's own position is
+not smooth.** The ship's solver is frame-rate dependent under fractional
+intervals and is fine under whole multiples.
+
+The ablation on the fractional arm agrees, and reads the other way round from a
+defect:
+
+| ablation | dZ | \|dpos\|/s |
+|---|---|---|
+| none | 62.1, 62.1, 62.1 | 0.90-0.93 |
+| `mountPos` raw | 22.7, 18.8, 20.3 | 0.15-0.34 |
+| `smoothQuat` raw | 62.1, 62.1, 62.1 | 0.81-0.82 |
+| both raw | 64.1, 68.4, 70.3 | **0.00000** |
+
+Feeding the eye the RAW hull position cuts the residual by 73%. That is not an
+improvement — it means the camera then *follows* the hull's chatter instead of
+rejecting it, which is precisely what `ShipFrame` exists to prevent and would be
+visible shake on screen.
+
+**So §85a's statistic conflates two different things**: camera-side dt-dependence,
+which is a defect, and hull-side chatter that the camera is correctly rejecting,
+which is not — because the residual of a low-pass IS the high-frequency content of
+its input. §85a's whole-multiple clock happens to keep the hull smooth, so on that
+arm the statistic is clean and the fix is provable. On a fractional clock the
+statistic is dominated by the hull and **cannot be used as a camera acceptance test
+at all** until `src/ship` is fixed.
+
+And that hull chatter is a real player-visible defect, in every view including
+`chase`, on exactly the clock a real machine delivers. It is not in `src/camera`.
+Reported, not touched.
