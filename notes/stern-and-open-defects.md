@@ -27,3 +27,50 @@ sheenSpecularDirect both refuted).
 ## Log
 
 (append-only, newest last)
+
+### Issue 1: the stern is NOT see-through. It is `ship-black` faces shaded wrong.
+
+Owner: `ship-black`, established by single-mesh hiding on a frozen frame.
+
+| hidden mesh | CONTROL mid-transom | crescent L | crescent R | under-counter wedge |
+|---|---|---|---|---|
+| ship-copper | 0.54 | 0.67 | 0.55 | 1.22 |
+| **ship-black** | **48.24** | **135.57** | **73.83** | **135.80** |
+| ship-stripe | 0.53 | 0.53 | 0.56 | 0.91 |
+| ship-buff | 0.46 | 0.47 | 0.46 | 0.84 |
+| ship-deck | 0.54 | 0.52 | 0.55 | 0.91 |
+| ship-oak | 0.47 | 0.51 | 0.89 | 0.86 |
+| ship-iron | 0.53 | 0.54 | 0.55 | 0.92 |
+| ship-brass | 22.92 | 3.49 | 16.23 | 8.21 |
+| ship-glass | 4.80 | 0.54 | 3.03 | 0.91 |
+| **base2 (return control)** | **0.46** | **0.47** | **0.45** | **0.85** |
+
+`base2` re-renders the base arm last and returns to the 0.46 floor, so the frame is
+genuinely frozen and 0.5 is the TAA dither floor. Every mesh except black, brass and
+glass sits at that floor.
+
+**So there is no hole and nothing translucent.** The pale hard-edged wedges at the
+quarters, the two crescents on the lower transom and the under-counter wedge are all
+hull planking geometry whose *shading* is flat and pale against its neighbours. The
+eye reads a flat pale panel abutting dark planking as a gap. Same family as §86,
+where a bow patch turned out to be `bins.brass` with a purely horizontal normal
+mirroring blue sky.
+
+### Three instrument failures of mine, in one sitting, all caught by controls
+
+Recorded because the pattern matters more than the findings.
+
+1. **Emissive magenta + bloom + AgX reads as a translucent veil.** I set the flat
+   test material's *emissive*, so the blowout desaturated to cream and I spent two
+   arms chasing a "veil" that was my own instrument.
+2. **Hiding scene groups moves auto-exposure**, so a "% magenta" metric swung
+   48.8% to 1.1% between arms that differed only in what was hidden. Nothing was
+   occluding anything.
+3. **Sequential arms drifted again.** Ticking 8 frames per arm let the ship sail
+   between arms; the ownership deltas then rose monotonically down the mesh list,
+   which is drift, not ownership. Fixed by holding dt = 0 so visibility is the only
+   variable, and proven by the `base2` return arm.
+
+An ID-colour pass was also discarded outright: its CONTROL box (mid-transom
+planking, known to be `ship-black`) classified as `ship-glass`, because the palette
+put hues too close together for AgX to preserve. Control failed, result binned.
