@@ -172,3 +172,25 @@ proved the wake evolves at dt = 0), and the fresh-load instrument has 16-68 code
 variance in exactly the regions of interest. It needs a per-frame time series at a
 fixed station with a control channel, in the manner of §97's instrument, not a
 handful of screenshots.
+
+### Not a regression: `no wave-riding speed blowout` is a pre-existing flaky assertion
+
+After the hull change `physics-test --quick` reported failures, so I checked it
+rather than assume. Swapping in the pre-change `hull.ts` and re-running:
+
+| hull | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| pre-change | PASS, median peak 13.90 kn | **FAIL, 15.27 kn** | — |
+| with the taffrail change | FAIL, 15.87 kn | FAIL | FAIL |
+
+The assertion fails on the *unmodified* hull too, and the values overlap, so the
+change is inside the pre-existing spread. `bowSlam is scaled for spray and shake`
+also flipped between runs on the same tree (8.8 m/s^2 passing, a 4.9 m/s^2 run
+failing earlier).
+
+This is the behaviour `src/physics/index.ts` already documents for this suite: the
+gale case sails one frozen wave snapshot and which snapshot you get depends on how
+long the preceding tests took, which is why the harness medians five phases. These
+two assertions are still sensitive to it. **Recorded, not fixed** — out of scope here
+and it needs the sim clock made reachable from a test, which that file says requires
+a small addition to `src/ocean`.
