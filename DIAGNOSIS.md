@@ -6453,3 +6453,107 @@ Note also that §35's plate and §79's waterline plate are **two different
 artefacts** found at different times — §79's was the hull skirt's submerged rows
 and was fixed. Do not assume the owner's current P2 report is either one of them
 without re-establishing which.
+
+## 93. The probe had no sea below its horizon — fixed, and the settling test says it is NOT the sail film
+
+Done by the integrating session after two dispatched agents died on this task (one
+on a shared session limit, one stalled), so it was taken in-house rather than
+re-dispatched a third time. Folded in from `notes/env-probe-lower-hemisphere.md`.
+Source: `b54c222`.
+
+### The defect, verified independently before any change
+
+`EnvProbe` compiles `SKY_FRAG` with `SKY_ENV`, and **`SKY_ENV` has no other
+consumer**, so the probe was the only thing affected — and it had no sea in it at
+all. For a below-horizon ray the shader takes `hitsGround` and then reads the same
+sky-view LUT; `skyViewToUv` maps ground-hitting rays onto the LUT's in-scattering
+half, and at sea level `zenithHorizon` is 90 deg so *every* downward direction
+lands there. `Radiometry.groundColor` — documented in `src/sky/index.ts` as
+"radiance bounced back up off the sea" — was never consulted.
+
+Measured by reading the 256x128 equirect off the GPU. The lever assertion is that
+the render target located must **be** `scene.environment`, matched by texture
+identity, so the thing measured is provably the map the scene lights from.
+
+### A measurement bug of mine, and how it announced itself
+
+My first probe assumed `v = 0` was the zenith. The shader builds the equirect as
+three does — `v = asin(y)/PI + 0.5` — so **`v = 0` is the NADIR** and every
+hemisphere label was inverted. The tell was that the "upper" hemisphere moved when
+I changed a branch that can only execute below the horizon. **A change appearing
+where it is impossible is a measurement bug, not a discovery.** Corrected, the
+pre-change nadir reads 0.260 against §87's independently measured 0.259.
+
+### The fix and its same-load A/B
+
+Below the horizon the probe now Fresnel-mirrors the sky in a flat sea and lets
+`uSeaRadiance` through the rest:
+`L = mix(uSeaRadiance, mirrorL, 0.02 + 0.98 * pow(1 - cosN, 5))`. Flat because the
+probe is prefiltered into SH and a roughness chain, so per-wave structure would be
+averaged away regardless. No glitter — the ocean draws its own statistical lobe.
+
+Both arms in one page load, branch neutralised by patching the material and forcing
+`probe.update(world, true)`, so the sim never advances:
+
+| | as shipped | with sea | |
+|---|---|---|---|
+| nadir | **0.2649** | **0.1661** | −37% |
+| zenith | 0.2039 | 0.2067 | — |
+| lower hemisphere mean | 0.3210 | 0.2835 | −12% |
+| upper hemisphere mean | 0.4939 | 0.4775 | −3%, the DRIFT FLOOR |
+| lower-hemisphere B−R | 0.1463 | 0.2191 | hue moves |
+| share of a vertical surface's irradiance from below | 44.7% | 43.1% | −1.6 pts |
+
+The inversion is corrected: the nadir was brighter than the zenith and is now
+darker. The upper hemisphere cannot be touched by a below-horizon branch, so its 3%
+movement is the inter-arm drift floor — the nadir's 37% is an order above it, the
+`fracBelow` change of 1.6 points is not clearly above it.
+
+### The settling test: NEGATIVE
+
+Predicted **before** running it, and recorded first so the result could not be read
+as confirming a hypothesis chosen afterwards: `fracBelow` barely moves, and that is
+physics rather than a shortcoming — a *vertical* surface's cosine lobe peaks at the
+horizon, and at grazing angles Fresnel goes to 1, so a correct sea still mirrors the
+sky exactly where a near-vertical sail is most sensitive.
+
+Same station, same frozen frame, same clock, same exposure; only the
+lower-hemisphere contribution changed. Medians, because every sail box on this
+square-rigger is crossed by shrouds and both arms share identical geometry:
+
+| | as shipped | with sea |
+|---|---|---|
+| sea reference, linear | 0.2284 | 0.2284 (bit-identical — control) |
+| sail A, ratio to sea | 0.350 | 0.341 |
+| sail C, ratio to sea | 0.458 | 0.456 |
+| sail A, B−R codes | 31 | **41** |
+| sail C, B−R codes | 25 | **32** |
+
+Whole-frame mean |dRGB| 2.18 codes with 44.6% of pixels moved, so the lever is
+emphatically not a no-op. **The film ratio moves by 2.6% at most, and the hue moves
+the WRONG WAY** — the sail becomes *bluer*, i.e. closer to the sea's own cast,
+which is the opposite of what §87 asked for. At 3x, both arms still read as blue
+film with the same pale streaky patches.
+
+**So §87's leading candidate is disconfirmed as the cause of the sail film.** It was
+a real environment-lighting defect and it is now fixed, but correcting it does not
+remove the artefact. §87's standing statement should be updated: the probe is no
+longer the strongest causal candidate.
+
+### What the fix costs, stated plainly
+
+The sail picks up ~10 codes of B−R and gets 2.6% darker relative to the sea. It is
+near-imperceptible in a 3x side-by-side and it very slightly worsens the *hue*
+component of the film it does not fix. Kept because the probe defect is real and
+independently justified — §87: a probe whose nadir outshines its zenith is wrong
+whatever else is true — but this is a **judgement call the owner may reverse in one
+line**, and it is flagged rather than buried.
+
+### The strongest remaining candidate, as a lead
+
+The pale streaky patches that read as "sea through the canvas" are unchanged by
+this fix, which is consistent with §87's separate finding that those patches are
+`sheenSpecularDirect` — rendering that accumulator alone gives a black frame
+containing exactly them. **That is now the strongest remaining candidate and it has
+NOT been causally tested.** No sheen A/B was run here. Do not promote it without
+one.
