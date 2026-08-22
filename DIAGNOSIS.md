@@ -6565,6 +6565,29 @@ containing exactly them. **That is now the strongest remaining candidate and it 
 NOT been causally tested.** No sheen A/B was run here. Do not promote it without
 one.
 
+### Pre-push IBL regression sweep, added after the fact
+
+The settling test showed a measurable colour cost on a *close* sail, so the probe
+change was swept across three lighting conditions at a representative broadside
+station (hull, metal, cloth, deck and sea all in frame), sea term on vs off, same
+frozen frame per condition. A first run was invalid — `orig` was re-captured per
+condition after the previous condition's ablation had already stripped the needle,
+so golden and night compared two identical arms. Fixed by capturing the pristine
+shader once.
+
+Largest movements, shipped vs with-sea:
+
+| condition | largest luma change | largest hue change (B−R) |
+|---|---|---|
+| noon | copper −1.5 codes (−3.7%) | sail +2.3 |
+| golden | sail +0.8 codes (+0.7%) | gunport +0.7 |
+| night | sail +0.4 codes (+1.5%) | sail +0.4 |
+
+Everything else is at or under half a code. **The +10 codes of B−R recorded above is
+specific to the close sail station, not a global cost** — at representative
+distances the change is 1 to 2 codes and no material regresses meaningfully at any
+of the three times of day.
+
 ## 94. P2 exclusion: the near-hull plate is not vfx, and §92's lead is dead
 
 §92 said to run §35's exclusion first because one capture could eliminate a
