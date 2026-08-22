@@ -107,3 +107,37 @@ not exist.
 survived hiding both, and was my own emissive bloom); wrong normals on the counter
 (normal visualisation is smooth and continuous); and bloom (1-3 codes at the
 station, `base2` return 0.50).
+
+### Issue 2 (stern/wake partition): visible, NOT isolated. Three instruments failed.
+
+Two magnified crops at the stern do show what reads as a hard dead-level boundary
+between a smooth cream foam mass and the flecked sea, in both `astern-low` and
+`astern-level`. But every attempt to attribute or even measure it failed its own
+control, so nothing is claimed:
+
+1. **Frozen-frame ownership (dt = 0), one vfx/ocean mesh hidden per arm.** Invalid:
+   the `base2` return arm came back at 10.5 / 3.5 / 15.6 codes instead of ~0, so the
+   wake and foam evolve even at dt = 0. Only `vfx-particles` (46.9 on the smooth mass
+   against a 3.5 floor) and `ocean` (29.0 on the flecked sea against 15.6) cleared
+   their floors, which is suggestive and no more.
+2. **Fresh load per arm, 3 repeats, hide `vfx-particles`.** Load-to-load spread in
+   the wake region is 16-19 codes for base and 52-68 for the hidden arm, and the
+   deltas (-19.0, +8.9, -3.4) sit inside it. The sky control also moved 13.7 in the
+   hidden arm, which it should not. Not attributable.
+3. **Boundary-straightness detector** (per-column row of maximum vertical gradient;
+   a ruled line gives a near-constant row). The stern band reads row std 18.8-23.0
+   across three loads against open-sea controls at 15.6-22.2 — no straighter than
+   open sea. The detector locks onto bright foam flecks, not the partition.
+
+**Blocker, stated precisely:** box-mean statistics cannot see this because the wake
+region's own load-to-load variance (16-68 codes) exceeds the effect, and a
+max-gradient edge detector cannot see it because foam speckle dominates the
+gradient. The next correct instrument is a *directional* one: project the suspected
+boundary into ship space and test whether a boundary exists at a constant ship-local
+Y or a constant screen row across many frames — i.e. measure the line's
+*orientation and constancy*, not its contrast. That is a real piece of work and is
+not something to guess at.
+
+Issue 2 therefore stays OPEN. §79's standing warning is the best lead: anything that
+clamps or cuts on `vD` with a constant draws a dead-level line the length of the
+ship, and `uSkirtFloor` is exactly such a constant.
