@@ -443,5 +443,19 @@ export const CLOUD_AIR_SHADOW = 0.75;
  * extra fifth of a second of latency on a field that evolves over minutes.
  */
 export const CLOUD_TEMPORAL_ALPHA = 0.05;
+
+/**
+ * Time constant of the shadow slice's temporal filter, in seconds.
+ *
+ * The slice is a 14-step point estimate of a moving field, and the field crosses
+ * one 50.8 m texel in about 11 s at a working breeze. Measured on the raw slice:
+ * 25 % of texels changed every frame, 7.2 % of them by more than 0.02, and the
+ * worst moved the full 0.965 from the floor to fully lit -- magnified ~80x onto
+ * the sea, that is the player's "black flickering blotches".
+ *
+ * 0.3 s is ~20 frames of integration, matching CLOUD_TEMPORAL_ALPHA, and 3 % of
+ * the texel crossing time, so real shadow motion is not smeared.
+ */
+export const CLOUD_SHADOW_TEMPORAL_TAU_S = 0.3;
 /** Divisor on each screen axis for the cloud raymarch target. */
 export const CLOUD_RESOLUTION_DIVISOR = 2;

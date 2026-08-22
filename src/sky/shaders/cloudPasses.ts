@@ -199,6 +199,7 @@ ${HEAD}
 uniform vec3  uSunDirection;
 uniform vec2  uShadowCentre;
 uniform float uShadowExtent;
+uniform float uFrameIndex;
 
 const int SHADOW_STEPS = ${CLOUD_SHADOW_STEPS};
 
@@ -215,10 +216,17 @@ void main(){
     if (layerSegment(pos, dir, rB, rT, t0, t1)) {
       float seg = min(t1 - t0, 40.0);
       float dt = seg / float(SHADOW_STEPS);
-      // Start offset inside the first step, hashed on WORLD position so it is
-      // stable as the map re-centres. Without it the coarse march quantises the
-      // shadow into visible terraces that crawl as the deck drifts across.
-      float t = t0 + dt * (0.15 + 0.7 * hash12(floor(world * 0.04)));
+      // Start offset inside the first step. The base hash is on WORLD position so
+      // the pattern is stable as the map re-centres; the golden-ratio advance per
+      // frame is what turns this march's quantisation from a terrace that flips
+      // whole texels between lit and floor into high-frequency noise the temporal
+      // resolve integrates away -- the same trick, and the same reason, as the
+      // main march's animated jitter.
+      //
+      // The two halves only work together. Animating the dither with no resolve
+      // downstream trades a stable terrace for per-frame noise, which is worse.
+      float t = t0 + dt * (0.15 + 0.7 * fract(hash12(floor(world * 0.04))
+                                              + uFrameIndex * 0.6180339887498949));
       float h;
       for (int i = 0; i < SHADOW_STEPS; i++) {
         tau += cloudDensityAt(pos + dir * t, false, h) * dt;
@@ -236,4 +244,49 @@ void main(){
   // keeps an overcast sea leaden rather than black.
   fragColor = vec4(max(exp(-tau), 0.035), 0.0, 0.0, 1.0);
 }
+`;
+
+/**
+ * Temporal resolve for the shadow slice.
+ *
+ * Much simpler than the march's resolve because there is no disocclusion to
+ * handle: the slice's centre snaps to its own texel grid, so between any two
+ * frames the history is offset by a whole number of texels and `uHistShift`
+ * realigns it exactly. Only the map's outer edge has no history, and that is
+ * the one place the raw sample is used directly.
+ *
+ * No neighbourhood clamp either. The clamp in the march's resolve exists to stop
+ * a moving silhouette smearing; this buffer holds a top-down transmittance field
+ * that evolves over tens of seconds per texel, so there is nothing to smear.
+ */
+export const CLOUD_SHADOW_RESOLVE_FRAG = /* glsl */ `
+precision highp float;
+in vec2 vUv;
+layout(location = 0) out vec4 fragColor;
+
+uniform sampler2D tRaw;
+uniform sampler2D tHistory;
+uniform vec2  uHistShift;
+uniform float uAlpha;
+uniform float uReset;
+
+void main(){
+  float raw = texture(tRaw, vUv).r;
+  vec2 huv = vUv + uHistShift;
+  bool inside = huv.x >= 0.0 && huv.x <= 1.0 && huv.y >= 0.0 && huv.y <= 1.0;
+  float hist = texture(tHistory, clamp(huv, vec2(0.0), vec2(1.0))).r;
+  fragColor = vec4((uReset > 0.5 || !inside) ? raw : mix(hist, raw, uAlpha),
+                   0.0, 0.0, 1.0);
+}
+`;
+
+/** Carry the resolved slice into the history target for the next frame. */
+export const CLOUD_SHADOW_COPY_FRAG = /* glsl */ `
+precision highp float;
+in vec2 vUv;
+layout(location = 0) out vec4 fragColor;
+
+uniform sampler2D tSrc;
+
+void main(){ fragColor = vec4(texture(tSrc, vUv).r, 0.0, 0.0, 1.0); }
 `;

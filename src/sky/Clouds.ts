@@ -6,18 +6,43 @@ import {
   CLOUD_RESOLUTION_DIVISOR,
   CLOUD_SHADOW_EXTENT_M,
   CLOUD_SHADOW_SIZE,
+  CLOUD_SHADOW_TEMPORAL_TAU_S,
   CLOUD_TEMPORAL_ALPHA,
   GROUND_RADIUS_KM,
   M_TO_KM,
 } from './constants';
 import { CloudField } from './CloudField';
 import { SkyPass } from './Pass';
-import { CLOUD_MARCH_FRAG, CLOUD_RESOLVE_FRAG, CLOUD_SHADOW_FRAG } from './shaders/cloudPasses';
+import {
+  CLOUD_MARCH_FRAG,
+  CLOUD_RESOLVE_FRAG,
+  CLOUD_SHADOW_COPY_FRAG,
+  CLOUD_SHADOW_FRAG,
+  CLOUD_SHADOW_RESOLVE_FRAG,
+} from './shaders/cloudPasses';
 import type { SkyUniforms } from './SkyRender';
 import { makeWhitePixel } from './Textures';
 
 /** Texel size of the shadow map in metres — the snap grid for its centre. */
 const SHADOW_TEXEL_M = CLOUD_SHADOW_EXTENT_M / CLOUD_SHADOW_SIZE;
+
+/** One R16F slice-sized target. Three of these: raw, resolved, history. */
+function makeShadowTarget(name: string): THREE.WebGLRenderTarget {
+  const t = new THREE.WebGLRenderTarget(CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SIZE, {
+    type: THREE.HalfFloatType,
+    format: THREE.RedFormat,
+    colorSpace: THREE.NoColorSpace,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+    depthBuffer: false,
+    stencilBuffer: false,
+    generateMipmaps: false,
+  });
+  t.texture.name = name;
+  return t;
+}
 
 /**
  * Volumetric clouds: two layers, a quarter-resolution raymarch with temporal
@@ -63,12 +88,23 @@ export class Clouds {
     return this.enabled ? this.shadow.texture : this.fallback;
   }
 
+  /**
+   * `shadow` is the PUBLISHED slice and its texture identity never changes:
+   * EnvProbe.setClouds and the march's tCloudShadow bind it once, outside the
+   * frame loop, so a ping-pong here would silently leave them on a stale half.
+   * The filter therefore costs one extra copy rather than an identity swap.
+   */
   private shadow: THREE.WebGLRenderTarget;
+  private shadowRaw: THREE.WebGLRenderTarget;
+  private shadowPrev: THREE.WebGLRenderTarget;
+  private shadowCentre = new THREE.Vector2(NaN, NaN);
   private raw: THREE.WebGLRenderTarget;
   private history: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
   private current = 0;
 
   private shadowPass: SkyPass;
+  private shadowResolvePass: SkyPass;
+  private shadowCopyPass: SkyPass;
   private marchPass: SkyPass;
   private resolvePass: SkyPass;
   private fallback = makeWhitePixel();
@@ -95,19 +131,9 @@ export class Clouds {
   constructor(uniforms: SkyUniforms) {
     this.field = new CloudField(uniforms);
 
-    this.shadow = new THREE.WebGLRenderTarget(CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SIZE, {
-      type: THREE.HalfFloatType,
-      format: THREE.RedFormat,
-      colorSpace: THREE.NoColorSpace,
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      wrapS: THREE.ClampToEdgeWrapping,
-      wrapT: THREE.ClampToEdgeWrapping,
-      depthBuffer: false,
-      stencilBuffer: false,
-      generateMipmaps: false,
-    });
-    this.shadow.texture.name = 'sky.cloudShadow';
+    this.shadow = makeShadowTarget('sky.cloudShadow');
+    this.shadowRaw = makeShadowTarget('sky.cloudShadowRaw');
+    this.shadowPrev = makeShadowTarget('sky.cloudShadowPrev');
 
     this.raw = makeCloudTarget(1, 1, 'sky.cloudRaw');
     this.history = [makeCloudTarget(1, 1, 'sky.cloudA'), makeCloudTarget(1, 1, 'sky.cloudB')];
@@ -116,6 +142,17 @@ export class Clouds {
       ...uniforms,
       uShadowCentre: { value: new THREE.Vector2() },
       uShadowExtent: { value: CLOUD_SHADOW_EXTENT_M },
+      uFrameIndex: { value: 0 },
+    });
+    this.shadowResolvePass = new SkyPass(CLOUD_SHADOW_RESOLVE_FRAG, {
+      tRaw: { value: this.shadowRaw.texture },
+      tHistory: { value: this.shadowPrev.texture },
+      uHistShift: { value: new THREE.Vector2() },
+      uAlpha: { value: 1 },
+      uReset: { value: 1 },
+    });
+    this.shadowCopyPass = new SkyPass(CLOUD_SHADOW_COPY_FRAG, {
+      tSrc: { value: this.shadow.texture },
     });
     this.marchPass = new SkyPass(CLOUD_MARCH_FRAG, {
       ...uniforms,
@@ -170,6 +207,18 @@ export class Clouds {
     const cz = Math.round(p.z / SHADOW_TEXEL_M) * SHADOW_TEXEL_M;
     (this.shadowPass.uniforms.uShadowCentre.value as THREE.Vector2).set(cx, cz);
     const e = CLOUD_SHADOW_EXTENT_M;
+
+    // Realign the filter's history with the re-snapped centre. A world point at
+    // current uv sat at uv + (centreNow - centrePrev)/extent in the previous
+    // frame, and because the centre only ever moves in whole texels that offset
+    // lands exactly on a texel — no resampling error accumulates. First frame
+    // has no previous centre, so the shift is zero and `reset` covers it.
+    const prev = this.shadowCentre;
+    (this.shadowResolvePass.uniforms.uHistShift.value as THREE.Vector2).set(
+      Number.isNaN(prev.x) ? 0 : (cx - prev.x) / e,
+      Number.isNaN(prev.y) ? 0 : (cz - prev.y) / e,
+    );
+    this.shadowCentre.set(cx, cz);
     // World position -> shadow uv in .xy. Row 1 reads Z, not Y: the map is a
     // horizontal slice, so a receiver's altitude is not part of the lookup.
     this.shadowMatrix.set(
@@ -233,7 +282,16 @@ export class Clouds {
     if (this.prevCamPos.distanceToSquared(this.camPos) > 1600) this.reset = true;
 
     this.begin();
-    this.shadowPass.render(renderer, this.shadow);
+    this.shadowPass.uniforms.uFrameIndex.value = world.time.frame % 64;
+    this.shadowPass.render(renderer, this.shadowRaw);
+    const su = this.shadowResolvePass.uniforms;
+    su.uReset.value = this.reset ? 1 : 0;
+    // Frame-rate independent: a fixed per-frame alpha would tie the filter's time
+    // constant to the frame rate, and this is a buffer the player can hold still
+    // and stare at. At 60 fps this lands on 0.055, next to CLOUD_TEMPORAL_ALPHA.
+    su.uAlpha.value = 1 - Math.exp(-Math.max(world.time.dt, 1e-4) / CLOUD_SHADOW_TEMPORAL_TAU_S);
+    this.shadowResolvePass.render(renderer, this.shadow);
+    this.shadowCopyPass.render(renderer, this.shadowPrev);
     this.end(world, 'sky:cloudShadowMs');
 
     this.begin();
@@ -253,7 +311,7 @@ export class Clouds {
     this.prevViewProj.copy(this.viewProj);
     this.prevCamPos.copy(this.camPos);
     this.reset = false;
-    world.stats['sky:cloudPasses'] = 3;
+    world.stats['sky:cloudPasses'] = 5;
   }
 
   private begin(): void {
@@ -272,10 +330,14 @@ export class Clouds {
   dispose(): void {
     this.field.dispose();
     this.shadow.dispose();
+    this.shadowRaw.dispose();
+    this.shadowPrev.dispose();
     this.raw.dispose();
     this.history[0].dispose();
     this.history[1].dispose();
     this.shadowPass.dispose();
+    this.shadowResolvePass.dispose();
+    this.shadowCopyPass.dispose();
     this.marchPass.dispose();
     this.resolvePass.dispose();
     this.fallback.dispose();

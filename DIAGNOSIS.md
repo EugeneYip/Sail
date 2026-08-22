@@ -7715,6 +7715,10 @@ individually.
 
 ## 107. Issue 3 is the cloud shadow map, not the env probe — and arm D's "held" assertion was vacuous
 
+> **MECHANISM SENTENCE CORRECTED BY §108.** The ownership finding below stands and is
+> the load-bearing part. The "receiver-side footprint filtering" diagnosis does not:
+> the map is magnified 60–120x, never minified, so the fix it implied is inert.
+
 §104 and §105 attributed the blotches to the ocean reflecting the cloud-bearing env
 probe. **That attribution is withdrawn.** The owner is `uCloudShadowMap`, sampled by
 `lwCloudShadow` in `src/core/SharedUniforms.ts`. §106 already retracted the temporal
@@ -7817,3 +7821,153 @@ Not reconciled: §104's ablation forcing the ocean reflection off the probe drov
 metric to exactly 0.00. That is not explained by shadow ownership and is left open —
 plausibly the two terms are multiplicative in the sun's contribution, but that was not
 measured.
+
+## 108. Issue 3 fixed: the shadow slice was the one cloud pass without a temporal filter
+
+§107 named the owner correctly and the mechanism wrongly. Corrected here, with the
+fix that follows from the corrected mechanism.
+
+### §107's mechanism sentence is withdrawn
+
+§107 said the deficient stage was "receiver-side footprint filtering" — minification
+aliasing of a high-frequency map. Measured, that is false. Per-pixel footprint at the
+repro camera, by unprojecting screen pixels onto the sea plane:
+
+| screen row | sea distance | m per pixel | **shadow texels per pixel** | implied LOD |
+|---|---|---|---|---|
+| 60 | 527 m | 0.60 | 0.0164 | −5.93 |
+| 350 | 395 m | 0.50 | 0.0114 | −6.46 |
+| 800 | 341 m | 0.40 | 0.0079 | −6.99 |
+
+The map is **magnified 60–120x**, not minified. Every pixel would select LOD 0, so a
+mip chain plus derivative-based LOD — the fix as specified — is provably inert here.
+It was not implemented. This is also why raising the map to 1024 made things worse in
+§107 rather than better: at fixed magnification, more source detail is more visible
+detail, and it was never being minified in the first place.
+
+### What actually changes, read out of the map
+
+Passive readback of the 512² slice, 12 frames at the repro state:
+
+- **24 % of texels change every frame**, 4.2 % of them by more than 0.02
+- **max per-frame delta 0.96503, the same number every frame** — that is `1.0 − 0.035`,
+  texels flipping *fully* between lit and the shadow floor
+- mean 0.853 and min 0.035 rock stable, so it is individual texels toggling
+
+Clouds advect 0.077 m in 16.7 ms against a 50.8 m texel, so this is not advection.
+Partitioning tau isolates which term does it:
+
+| arm | %changed | %Δ>0.02 | maxΔ | min |
+|---|---|---|---|---|
+| base | 25.42 | 7.17 | **0.96503** | 0.035 |
+| cirrus term removed | **4.47** | 4.22 | 0.96503 | 0.035 |
+| deck march removed | 24.48 | 2.74 | **0.19727** | **0.614** |
+
+The **deck march owns the full-range flips and the blackness**; **cirrus owns the broad
+low-amplitude churn**. So the defect is temporal, at the source: a 14-sample point
+estimate of a moving field, magnified ~80x onto the sea.
+
+### The fix, and why it is the one the codebase already uses
+
+The main cloud march documents its own version of this problem: its start offset is
+"interleaved-gradient noise advanced by the golden ratio per frame, which is what turns
+the visible slab banding of a 40-step march into high-frequency noise the temporal
+filter can eat." The shadow slice took half that recipe — a dither hashed on world
+position, deliberately **static** so it would not crawl — and had no temporal filter
+behind it. Static dither with no filter is exactly what produces a terrace that flips
+whole texels.
+
+So the slice now gets both halves:
+
+- the march's start offset advances per frame by the golden ratio, as the main march's does;
+- a resolve pass blends `mix(history, raw, alpha)` with `alpha = 1 − exp(−dt / 0.3 s)`,
+  frame-rate independent because this is a buffer a player can hold still and stare at;
+- the history is realigned by `uHistShift`, the centre re-snap delta over the extent.
+  Because the centre only ever moves in whole texels that offset is exact and no
+  resampling error accumulates. Only the outer edge has no history, and there the raw
+  sample is used.
+
+No neighbourhood clamp, unlike the march's resolve: there is no silhouette to smear,
+just a transmittance field that evolves over tens of seconds per texel.
+
+`this.shadow` keeps its texture identity. `EnvProbe.setClouds` and the march's
+`tCloudShadow` bind it **once**, outside the frame loop, so a ping-pong would have left
+them reading a stale half — the filter costs one extra copy instead.
+
+### Proof it binds, read out of the running renderer
+
+| check | result |
+|---|---|
+| three distinct 512² targets | PASS |
+| published texture identity stable across 11 frames | PASS (`sky.cloudShadow`) |
+| `uReset` 1 on first frame, 0 in steady state | PASS |
+| `uAlpha` dt-correct | PASS — 0.05405, against 1−exp(−1/60/0.3) = 0.05480 |
+| `uHistShift` zero with a locked camera | PASS |
+| history carry exact | PASS — `prev` vs resolved, same frame, max delta **0** |
+| resolve is not a passthrough | PASS — resolved vs raw, same frame, mean 0.039 / max 0.912 over 68.5 % of texels |
+
+Published slice, paired before/after (palindrome, one stash flip per arm):
+
+| | meanAbsΔ per frame | maxΔ | min |
+|---|---|---|---|
+| before | 0.0370 / 0.0342 | **0.96503** | 0.035 |
+| after | 0.0021 / 0.0021 | **0.05225** | 0.035 |
+
+**17.5x** on the mean and **18.5x** on the worst flip, landing exactly on the predicted
+`alpha × range` = 0.054 × 0.965 = 0.052. The floor is untouched at 0.035.
+
+### Acceptance
+
+Repro condition, palindrome before/after:
+
+| | before | after | delta |
+|---|---|---|---|
+| blotch | 42.29 | **1.00** | −41.29 (−9.3x control) |
+| churn | 70.50 | **0.36** | −70.14 (−12.6x control) |
+| raw dLuma | 6.46 | 1.78 | −4.68 (−19.4x control) |
+| residual depth | −14.43 | **−5.97** | +8.46 (+10.1x control) |
+
+Across the matrix, churn collapses in every cloud-bearing condition — repro 59.0→1.3,
+farther zoom 59.1→1.1, renderScale 0.75 45.0→1.7, close camera 19.3→8.7 — and the
+**low-cloud null control is flat** (1.67→1.89, 0.89→1.00, 2.22→2.00), which is the
+result that matters most: with no shadows present the fix does nothing.
+
+Blotch *area* improves at the zoomed-out conditions where the defect was reported
+(47.9→13.2, 52.6→16.4, 38.9→0.8, 41.6→11.9) and does **not** improve at the close camera
+or in the wake region. That is not a partial fix — the low-cloud control reads blotch
+83.2 in the wake with essentially no cloud shadows at all, so those cells are the wake
+foam and hull inside the residual metric, not sea shading. Confirmed visually. **The
+metric is not valid in the wake region and should not be quoted there.**
+
+Regression control against §107's 1024 arm: the source resolution is untouched at 512.
+That arm added detail and cost churn +115.78; this changes sampling and gains −70.14.
+
+### Visual
+
+Before: hard, high-contrast black ragged patches that read as smudges on the water.
+After: broad soft shading — the upper-left mass and the diagonal band are still clearly
+readable as cloud shadow, and the hard patches are gone. Cloud shadows are not erased.
+
+Honest caveat: **contrast is visibly gentler.** Part of that is spurious noise removed,
+and part is that averaging 20 dithered marches converges on the true optical depth
+instead of the noisy extremes — the average is the more correct value, but it is less
+dramatic. If the owner wants the depth back, the lever is the floor-over-strength
+question §107 raised, which was explicitly out of scope for this pass and remains
+untouched.
+
+### Cost
+
+`sky:cloudShadowMs`, gl.finish-instrumented, mean of 40 frames per condition:
+
+| condition | before | after |
+|---|---|---|
+| repro | 0.132 | 0.124 |
+| far | 0.072 | 0.130 |
+| near | 0.053 | 0.110 |
+| low cloud | 0.060 | 0.146 |
+| renderScale 0.75 | 0.062 | 0.222 |
+
+**+0.07 ms typical, +0.16 ms worst case** — 0.4 % to 1.0 % of a 16.7 ms frame. Cloud
+passes 3 → 5, so +2 fullscreen triangles per frame. Two extra 512² R16F targets, so
+**+1.0 MB** of texture memory. 60 fps held in every arm. I am not calling this free; it
+is measured, small, and the numbers are above.

@@ -443,3 +443,43 @@ sampling geometry and ignores which cloud content is sampled.
 
 No fix landed. Standing instruction after a failed acceptance is to stop rather than tune,
 so the resolution-vs-cost trade-off goes to the owner.
+
+### Issue 3 CLOSED: the shadow slice had a static dither and no temporal filter
+
+DIAGNOSIS §108. §107's *owner* was right; §107's *mechanism* was wrong, and I caught it
+only because the brief demanded runtime proof that the fix binds before implementing it.
+
+I measured the per-pixel shadow-map footprint before writing any code: **0.008–0.016
+texels per pixel, implied LOD −6 to −7.** The map is magnified 60–120x. A mip chain with
+derivative LOD — the specified fix — would have selected level 0 at every pixel and done
+nothing. Implementing it would have been busywork that measured as a null and taught me
+nothing. That is also the real reason §107's 1024 arm backfired: at fixed magnification,
+more source detail is just more visible detail.
+
+So I read the map back instead of theorising. 24 % of texels change every frame, and the
+worst change is 0.96503 — exactly `1.0 − 0.035` — the same number every single frame,
+i.e. texels flipping *fully* between lit and the floor. Clouds move 0.077 m in a frame
+against a 50.8 m texel, so it is not advection. Partitioning tau: the **deck march** owns
+the full-range flips and the blackness (maxΔ 0.965→0.197, floor 0.035→0.614 without it);
+**cirrus** owns the broad low-amplitude churn (25.4 %→4.5 % of texels).
+
+The fix was already in the codebase, applied to a different pass. The main cloud march
+advances its dither per frame *and* has a temporal resolve, and its comment explains why
+the two go together. The shadow slice had the dither hashed on world position — static on
+purpose, so it would not crawl — and no filter behind it. Static dither with no filter is
+precisely a terrace that flips whole texels. It now gets both halves, with the history
+realigned by the centre re-snap delta (exact, since the centre only moves in whole texels).
+
+Result: published slice per-frame meanAbsΔ 0.0370 → 0.0021, worst flip 0.96503 → 0.05225,
+landing on the predicted alpha×range. On screen at the repro state: blotch 42.29 → 1.00,
+churn 70.50 → 0.36, depth −14.43 → −5.97. Churn collapses at every zoom and render scale,
+and the low-cloud null control is flat — with no shadows, the fix does nothing.
+
+Two honest notes. **Contrast is gentler**, partly noise removed and partly because 20
+averaged dithered marches converge on the true optical depth rather than the noisy
+extremes; the floor-over-strength question is the lever if the owner wants depth back, and
+it stayed out of scope. And **the residual metric is invalid in the wake region** — the
+low-cloud control reads blotch 83.2 there with no shadows present, so that is wake foam
+inside the metric, not a defect. I am not claiming an improvement in cells I cannot measure.
+
+Cost measured, not assumed: +0.07 ms typical, +0.16 ms worst, 3→5 cloud passes, +1.0 MB.
