@@ -6195,3 +6195,189 @@ and shoot the frame.
 for, with `avoidHull` and `avoidRig` both off — independently the same
 `ShipFrame` `mountPos` lag that §88 identifies as the root cause of mounted-mode
 jitter, found by a different session through a different measurement.
+
+
+## 91. The sail speckle is the film grain, at a fixed absolute amplitude — and the brief's instrument was ablating nothing
+
+Reconciled from `claude/dazzling-nightingale-d51005` (commit `0389c97b`), a session that
+stopped on 21 Aug without handing off. **Its source already landed on main** as `05c4c90`,
+`565f7f3` and `a832749`; only this record was orphaned, so main carried the fix with no
+diagnosis behind it. Renumbered from the branch's `§75` — written against a base 53 commits
+behind, where 75 was free — to 91 by the integrating session, per the rule that only main
+allocates authoritative numbers. Its `§73` and `§74` citations resolve correctly against
+main's numbering and are left as written.
+
+The owner reported heavy per-pixel colour speckle on the sails at `dusk` and `night`,
+clearly visible at 1:1. It is the composite's **film grain**. Not TAA, which was the
+standing hypothesis and is in fact *attenuating* it; not the sail's own shader.
+
+**The grain injects the same ~2 codes of red-blue noise at every light level.** The sail
+is 118 codes at `noon` and 17 at `dusk`, so the identical grain is 2.2% of a midday sail
+and **12.0%** of a dusk one. Same bug class as §73 — a **fixed absolute** quantity in a
+frame whose level moves 7 stops — one pass further downstream.
+
+### The instrument was broken before any of this, and it is worth checking yours
+
+The brief's ablation set `uLookAmount`, `uVignette`, `uGrain`, `uBloomStrength` and
+`uSplitAmount` to 0 from the page. **`Pipeline.render` rewrites four of those five from
+`world.settings` on every frame**, and `writeGrade` rewrites `uSplitAmount`, so only
+`uLookAmount` ablated anything. Set each to 0 and read it back two frames later:
+
+| uniform | before | two frames later | |
+|---|---|---|---|
+| `uLookAmount` | 1 | **0** | ablates |
+| `uVignette` | 0.045 | 0.045 | overwritten every frame |
+| `uGrain` | **0.018** | **0.018** | **overwritten every frame** |
+| `uBloomStrength` | 0.055 | 0.055 | overwritten every frame |
+| `uSplitAmount` | 0.1404 | 0.1404 | overwritten every frame |
+| `uCA` | 0.0011 | 0.0011 | overwritten every frame |
+
+So the brief's "AgX alone" and "look LUT off only" rows were **the same ablation**, which
+is why they agreed (mean 24.6/24.7, hf 2.06/1.94) — and its conclusion that "the film
+grain ablates to nothing" was read off a knob that ablated nothing. A no-op lever and an
+innocent suspect produce identical evidence. The working lever is `world.settings` plus
+`bus.emit('settings:changed')`; `.tmp/V1abl.mjs` asserts the lever before it measures.
+
+### The statistic, because the axis is the whole diagnosis
+
+High-pass residual (pixel minus the mean of its 8 neighbours) on the sail box, split onto
+colour axes: `luma` is `(R+G+B)/3`, `m-g` is `(R+B)/2 − G` — the axis §73's `dithering`
+bug lived on — and `r-b` is `R − B`. The defect is almost entirely **red-blue**, which is
+why §73's fix did not touch it and why chasing the magenta-green axis again would have
+found nothing.
+
+### Attribution: one frozen frame, one pass ablated at a time
+
+`.tmp/V1abl.mjs`, dusk sail box x678..722 y290..390, mean L 17. `r-b` residual in 8-bit
+codes; null spread `base` against `base2` is 0.008.
+
+| ablation | luma | r-b | verdict |
+|---|---|---|---|
+| shipping (`base`) | 1.390 | 2.147 | the defect |
+| **`filmGrain: false`** | **0.798** | **0.669** | **the whole of it** |
+| `antialias: 'off'` | 2.271 | 2.440 | TAA is *attenuating* the noise, not making it |
+| `antialias: 'fxaa'` / `'smaa'` | 1.974 / 2.239 | 2.329 / 2.463 | ditto, less well |
+| `velocityFrame: 'world'` | 1.406 | 2.180 | not it |
+| `velocityFrame: 'ship'` | 1.383 | 2.169 | not it |
+| `depthOfField: false` | 1.389 | 2.146 | not it |
+| `motionBlur: false` | 1.394 | 2.157 | not it |
+| `bloom: false` | 1.418 | 2.155 | not it |
+| `chromaticAberration: false` | 1.403 | 2.157 | not it |
+| `vignette: false` | 1.405 | 2.168 | not it |
+
+**The brief's leading candidate is refuted twice over.** Neither `velocityFrame` pin moves
+the statistic more than 0.06 codes against grain's 2.0, and turning anti-aliasing off makes
+the sail *worse* everywhere — dusk luma 1.39 → 2.27, night 2.01 → 3.91, `orbit` 4.86 →
+12.30. TAA has no velocity for the vertex-animated canvas and its clamp does reject the
+history, exactly as `Pipeline.ts` says; the consequence is the documented one, slightly
+worse anti-aliasing, and it is a net win of 1.6–7.4 codes.
+
+And the same run gives the mechanism outright — grain's absolute contribution barely
+changes with the light:
+
+| scene | mean L of the sail | grain-only `r-b` | as a share of the pixel |
+|---|---|---|---|
+| dusk | 17.2 | 2.07 | **12.0%** |
+| night | 16.8 | 2.04 | **12.2%** |
+| noon | 118.4 | 2.60 | 2.2% |
+
+### Three compounding faults, each measured on its own
+
+`FullscreenPass.material` is a plain `ShaderMaterial`, so `.tmp/V1both.mjs` substitutes the
+**old grain block back in from the page** and recompiles: both states then share one wave
+phase, one cloud field, one sun, one heading and one TAA history. Dusk, `r-b` attributable
+to grain (the `filmGrain: false` reference removed in quadrature); `acf` is the
+autocorrelation of the luma residual at dx=1, which names the lattice.
+
+| grain block | r-b | share of mean L | acf(dx=1) |
+|---|---|---|---|
+| **before** | 2.073 | 12.0% | −0.342 |
+| amplitude proportional to signal, alone | 0.526 | 3.1% | 0.008 |
+| chroma reweighted, alone | 0.617 | 3.6% | −0.354 |
+| white noise instead of IGN, alone | 2.044 | 11.9% | −0.061 |
+| **after (all three)** | **0.175** | **1.0%** | **0.053** |
+| `filmGrain: false` | 0 | 0 | 0.063 |
+
+1. **The amplitude was absolute.** `shape` rolled grain back through the shadows with
+   `smoothstep(0.0, 0.10, gLum)`, which reaches **full strength by code 25**. Auto-exposure
+   is pinned at its 4.5-stop ceiling at dusk and night (§74), so the sails sit at code
+   16–17 — *below* the knee, at 70% of full grain, on a signal 7x smaller than daylight's.
+   Granularity is a density fluctuation, so proportional is the physical answer as well as
+   the working one: grain is now `min(1.0, gLum / 0.35)` below the midtone knee, a flat
+   1.5% of the pixel through the whole toe, and **the knee is the same 0.35 the highlight
+   rolloff already started at**, so the curve is one ramp up and one rolloff down.
+2. **The draw was `animatedNoise`, which is interleaved gradient noise.** IGN is a
+   low-discrepancy lattice, not white noise: `ign` advances by 52.9829189 × 0.06711056 =
+   3.55571 per pixel across and 0.30927 per pixel down, so it repeats every **1.80 px in x
+   and 3.23 px in y**. A period just *under* 2 is why the pattern beats against the pixel
+   grid instead of locking to it — the four (x%2, y%2) parity classes come out flat, which
+   is what rules out an ordered dither and would have sent you looking in the wrong place
+   if the autocorrelation had not been measured too. Reproduced on the CPU in
+   `.tmp/V1ign.mjs`, its
+   autocorrelation matches the measured image residual in sign at every lag out to 4 —
+   that woven chequer in the crop *is* the noise function. IGN is the right choice where it
+   is also used, jittering the cloud raymarch's ray starts for TAA to average away; as the
+   still grain of a single frame it is a visible weave.
+3. **Two independent full-amplitude draws for R and B.** The comment asked for "some
+   chroma, like real film" and got chroma as the *dominant* axis: the grain field's own
+   `r-b` rms is **1.8x its luma rms**. Now one achromatic draw with 30% per-layer chroma
+   mixed on top, which puts `r-b` at 0.57x luma.
+
+**The three are not independent, and white noise alone would have been a regression:** it
+changes no amplitude, and three independent draws move the magenta-green residual from
+0.438 to **1.816**. It is only safe together with the chroma reweight.
+
+### What it costs elsewhere, measured
+
+| | dusk | night | noon |
+|---|---|---|---|
+| grain `r-b`, before → after | 2.07 → **0.18** | 2.04 → **0.39** | 2.60 → 0.96 |
+| grain `luma`, before → after | 1.19 → 0.30 | 1.19 → 0.49 | 1.60 → **1.34** |
+
+At `noon` the shape change does nothing at all (2.52 against 2.60 — the curve is identical
+above the knee) and the achromatic grain is preserved at **84%**, so the film character
+survives where it was already working; what goes is 2.2% of chroma noise on a daylight
+sail. The 1:1 crops are indistinguishable.
+
+**No banding regression.** Grain was masking quantisation in the dark, and the claim in
+`COMPOSITE_FRAG` is that the 1-LSB triangular dither is what actually prevents it. Mean
+constant-code run length down a gradient, dusk sky, same frozen frame: **1.17 → 1.44 px**,
+with per-column noise still 0.78 codes — well above the ~0.41 one LSB of triangular dither
+gives on its own. Across `fog`, `storm`, `dawn`, `sunset` and `night` the run length is
+1.2–1.4 px. A band is tens of pixels. The dither's comment is correct.
+
+### The residual, honestly
+
+The sail box is not clean afterwards, it is *grain-free*. What is left is the sail's own
+aliasing, and at night it is three times dusk's:
+
+| | dusk | night |
+|---|---|---|
+| `r-b` with grain off | 0.67 | **1.02** |
+| `luma` with grain off | 0.79 | **1.20** |
+| `luma` with grain off *and* AA off | — | 3.91 |
+
+TAA is masking most of that, which is why it never surfaced. §73 left the same thread —
+"p99 chroma at night is 29 against dusk's 19, and this fix does not explain why" — and
+this is the same residual seen on a cleaner axis. It is the sail material's business, it
+is roughly 5x smaller than the grain was, and it was not chased.
+
+### Two things found in passing, neither of them mine
+
+- **A probe that writes PNGs under the Vite root reloads the page it is measuring.**
+  `capture.mjs` stages screenshots outside the project for exactly this reason and says so;
+  a probe in `.tmp/` that does not will die with "Execution context was destroyed", which
+  is what killed the first `night` run — *after* two other scenes had completed and looked
+  fine. Stage outside the root.
+- **The night wake reads as a field of grey spheres** in the foreground of
+  `shots/V1-all-night.png`. That is `vfx`, not post.
+
+### The rule this is the second instance of
+
+§73: a fixed absolute quantity injected upstream of auto-exposure, whose multiplier spans
+7.2 stops. §75: a fixed absolute quantity injected downstream of the tonemap, into a frame
+whose own level spans 7 stops because that same auto-exposure is clamped. **Any constant
+expressed in output codes is a claim that every frame has the same brightness.** This engine
+has `MAX_GAIN_STOPS = 4.5` and scenes that sit hard against it, so that claim is false here
+by construction. Grep the post stack for absolute constants and ask each one what it means
+on a frame whose sails are code 16.
