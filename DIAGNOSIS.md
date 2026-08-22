@@ -6869,3 +6869,98 @@ graded density. That is the defect being removed rather than hidden — coverage
 preserved and open sea is untouched — but how crisp the froth should read is a look
 decision, and the single constant `0.42` is where to tune it. Lower it toward 0.05
 to move back toward the shipped crispness.
+
+## 97. P4 far-distance dark patch / flicker: NOT REPRODUCED, and one adjacent defect found
+
+Folded in from `notes/far-distance-dark-flicker.md`. **No source change.** This is a
+documented negative, not a closed defect: the owner's live-run report stands as
+valid evidence that headless instrumentation does not reproduce it — the same
+position §85 held for P3 before §85a found the right clock.
+
+### Instruments
+
+A deterministic far station (eye 28 m up, 40 m to port, aimed 3 km ahead at sea
+level, horizon at row ~457, lower half of frame far-field ocean at grazing
+incidence), and an astern variant that puts the wake and a low sun in frame. Band
+means read in-page with `gl.readPixels` right after `tick()`, which makes
+four-figure frame counts affordable. `free` mode owns pos/yaw/pitch and damps to
+zero without input, so at fixed dt the station is deterministic.
+
+### The five negatives
+
+1. **Fixed camera, live and frozen arms** (32 frames each, dt = 16.67 ms and
+   dt = 0). Temporal sd falls monotonically with distance — sky 4.64, horizon 3.89,
+   far 4.66, mid-far 6.59, mid 9.62, near 11.39 — i.e. variance is near-field wave
+   motion and there is **no far-field variance peak**. The frozen arm's residual
+   1.6-2.3 codes is TAA jitter continuing at dt = 0 (Halton advances regardless of
+   dt). The temporal-mean row profile is smooth through the far field, so **no
+   static dark patch** either.
+2. **Resolution stepping does not move the far field.** `uPixelAngle` is
+   `2 tan(fov/2) / world.size.height`, the BACKING-STORE height, so a ladder step
+   scales `pxWorld` about 9%. Per adjacent step the far band moves ~0 while the
+   near band moves up to **+5.5 codes**. Structural: at kilometre distances
+   `pxWorld` is far above every footprint threshold so those terms are saturated,
+   while near the camera it sits on the steep part of the fine-octave ramps.
+   **So the `wThr` footprint lead is refuted for the far field too** — for the
+   opposite reason to §95/§96's near-field refutation, where it was pinned at its
+   floor. Recorded and not carried forward.
+3. **Moving camera, 1200 frames, 146.7 m sailed.** Far band: median
+   frame-to-frame step 0.058 codes, max 0.484, **zero** outliers above 8x median.
+   So clipmap ring shifts, cascade tile wraps and origin wraps produce no visible
+   far-field step. The 2-3 mid-band outliers are about one code.
+4. **Nine conditions** (dawn, noon, golden, sunset, bluehour, dusk, night, storm,
+   fog). Every temporal sd under 0.7 codes; largest single step anywhere 1.3 codes
+   in storm. Dark tails (`p50 - p1`) scale with each condition's contrast rather
+   than standing out anywhere.
+5. **Wake astern.** §79 predicted the wake's sub-visible foam tail could read as a
+   broad dark lane at the Kelvin half-angle. Ablating `wakeFoam` moves the far band
+   0.03-0.07 codes — the wake's footprint does not reach the far field. Its net
+   effect nearer in is *brightening* (near band drops 7.5 codes at golden, 12.0 at
+   noon when removed), with localised patches where removal brightened the sea 4-9
+   codes per block: the specular-suppression signature is real but small and near.
+
+### A hypothesis of mine, refuted, and a physics error behind it
+
+The astern station shows the sea just below the horizon far under the sky above it
+— golden 105-109 against a sky of 171, a 37% deficit. I proposed the reflection
+collapsing onto `oceanSky`'s two-colour ramp, since `alpha` is widened at distance
+and `mix(probe, wide, alpha * 0.95)` would then be mostly `wide`.
+
+**Refuted with the lever verified binding.** `uHasEnv` is 1 and the env map is set,
+so the patched line does execute, and forcing `return probe` moves the far bands by
+at most 0.8 codes. The premise was wrong regardless: at golden hour `uFogColor` is
+(0.769, 0.514, 0.325) — a *bright* warm orange — against `uSkyColor`
+(0.039, 0.042, 0.056), so `wide` at the horizon is bright, not dark.
+
+**And my physics was wrong.** I argued the sea should approach the sky's radiance at
+grazing incidence because Fresnel goes to 1. Fresnel reaches 1 only at exactly 90
+degrees, and at `uSlopeRms` 0.199 (about 11 degrees) a rough sea at grazing
+incidence scatters reflected rays into sky **twenty times darker** than the horizon
+band at golden hour. A sea well below the horizon-sky radiance is the correct
+answer. It is also what a sunset photograph looks like. Kept in the record because
+the temptation here was to "fix" a correct render.
+
+### The adjacent defect this did find, which is NOT P4
+
+`uPixelAngle` keys off the backing-store height, so **every footprint-gated ocean
+term moves when adaptive resolution steps**: `wThr`, the `r1/r2/r3` octave fades,
+`ripRes`, the cascade LOD, the far-field whitecap block. Measured, one adjacent
+ladder step changes near-field sea brightness by up to **5.5 codes**, and a live run
+with `adaptiveResolution: true` stepped the backing store 540 -> 396 (ladder 0.6 to
+0.44) inside 26 s, so the ladder does move during play.
+
+One step down is a **pop, not sustained flicker** — the hysteresis
+(`ADAPT_DROP_BELOW` 0.94, `ADAPT_RAISE_ABOVE` 0.985, `ADAPT_DROP_CONFIRM` 0.85)
+appears to do its job, and only one transition occurred in 26 s. No timing claim is
+attached: this box was contended. But a sea whose brightness is a function of render
+scale is wrong on its own terms, and the fix direction is to derive the footprint
+decisions from a reference resolution rather than the live backing store. **Filed as
+its own defect rather than conflated with P4.**
+
+### What would make P4 reproducible
+
+The search space that remains is the report's own context, which instrumentation
+cannot guess: which **view mode**, what **time of day**, the **direction relative to
+the sun**, roughly **how far** ("far" could mean 200 m or 20 km — the bands behave
+very differently), and whether it **recurs on a period** or happened once. Any one
+of those would cut the space enormously. Asked rather than guessed.
