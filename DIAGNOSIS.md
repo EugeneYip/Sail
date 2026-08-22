@@ -6942,6 +6942,13 @@ the temptation here was to "fix" a correct render.
 
 ### The adjacent defect this did find, which is NOT P4
 
+> **MAGNITUDE RETRACTED BY §100.** The mechanism below is real and confirmed by
+> reading the code, but the "up to 5.5 codes per ladder step" figure is not
+> reproducible: it came from a single-page-load sweep in which the K values were
+> stepped in order, so inter-arm sim drift ran in the same direction as K. Measured
+> with a fresh page load per scale, every ocean band moves less than the sky
+> control's own load-to-load variance. No visible pop has been demonstrated.
+
 `uPixelAngle` keys off the backing-store height, so **every footprint-gated ocean
 term moves when adaptive resolution steps**: `wThr`, the `r1/r2/r3` octave fades,
 `ripRes`, the cascade LOD, the far-field whitecap block. Measured, one adjacent
@@ -7170,3 +7177,73 @@ hue unmoved.
 Harmless at 378 verts, but the pattern is a trap: on this renderer the only way to
 stop a receiver casting is a discarding depth material. Worth a comment at the
 `castShadow` site rather than a code change.
+
+## 100. The render-scale brightness pop is not reproducible — mechanism real, magnitude retracted
+
+Phase B. Retracts §97's magnitude claim. **No source change**, because the
+discriminator does not support one.
+
+### The consumer audit, which stands on its own
+
+Every `pxWorld` / `pxAlong` consumer in `src/ocean/shaders/surface.ts`, classified
+as the brief asked — filtering tied to real rendered pixels, versus semantic
+appearance that should be stable across adaptive-resolution steps:
+
+| line | consumer | class |
+|---|---|---|
+| 71 | `lod = log2(pxWorld * uCascadeTexels[i])` — cascade texture LOD | **filtering**, must track real pixels |
+| 80, 82 | `smoothstep(uCascadePxFade[i], pxWorld / pxAlong)` — cascade resolvability fade | **filtering**, with the `lostVar` schedule adding the removed slope variance back statistically |
+| 484, 504 | `ripRes` — rain-ripple resolution fade | **filtering** |
+| 649, 650, 659 | `r1, r2, r3` — foam noise octave fades | **filtering** of unresolvable noise |
+| 693 | `wThr = mix(0.05, 0.5, smoothstep(1.2, 3.5, pxWorld))` — foam ramp width | **filtering, and provably mean-preserving**: the file's own note at line 625 gives `E[linstep(t - w, t + w, d)] = 1 - t` at ANY ramp width |
+| 791 | `shadowFootprint` | **filtering** |
+
+Only one path is semantic: **foam coverage reaches appearance through `fold`**, which
+is computed from cascades mipped by `pxWorld`. As they fade, `fold` tends to 1 and
+`instant` to 0 — which is why the far-field whitecap fallback exists at all. Coverage
+is a physical quantity (Monahan's law) and should not depend on render resolution.
+
+So the theoretical exposure is narrow, and `wThr` — the term that looked most
+suspect — is mean-preserving by construction, which predicts no brightness shift
+from it.
+
+### Why no fix was made
+
+`uPixelAngle = 2 tan(fov/2) / world.size.height` uses the backing-store height, so
+footprint-gated terms **do** move when the ladder steps. That much is certain from
+the code. But the visible magnitude does not survive a controlled measurement.
+
+Two arms, both at a fixed `renderScale` of 1 with `pxWorld` scaled in the shader, so
+there is no upscale-blur confound:
+
+1. **Pin-one-consumer arms** (`lod`, cascade fades, octaves, `wThr` each pinned back
+   to an unstepped reference). The **sky** band — which ocean `pxWorld` cannot reach
+   — drifted monotonically −1.12, −1.71, −1.93, −2.15, −2.34 codes across the arms
+   in order, i.e. the run was drift-dominated. The stepped arm itself moved the near
+   band −0.99 against that −1.12 of sky drift: no signal.
+2. **Fresh page load per scale**, identical settle. The sky control still varies
+   −1.3 to −2.8 codes load-to-load, and every ocean band moves at most −1.5:
+
+| scale | far | mid-far | mid | near | **sky (control)** |
+|---|---|---|---|---|---|
+| 0.92 | −2.15 | −0.89 | −0.04 | −0.41 | **−2.62** |
+| 0.84 | −2.24 | −1.04 | −0.34 | −0.63 | **−2.49** |
+| 0.68 | −0.64 | −1.15 | −1.03 | −0.79 | **−1.30** |
+| 0.52 | −0.84 | −1.49 | −0.37 | −1.42 | **−2.83** |
+
+**Nothing clears the control.** §97's figure came from a single-load sweep with the
+K values in ascending order, where drift and K moved together; its own sky column
+rose monotonically across that sweep, which should have been the tell.
+
+**Load-to-load variance is about 2.8 codes even with a fresh load and an identical
+settle** — the procedural cloud and sea state do not land in the same phase. Any
+future claim here must clear that floor. A same-frame instrument (two render targets
+in one frame at different footprints) would be the way to get below it.
+
+### Standing position
+
+Mechanism: real, and worth a comment at the `uPixelAngle` site so the coupling is
+not rediscovered. Visible defect: **not demonstrated.** Implementing a
+reference-resolution decoupling now would be a speculative fix for an unmeasured
+symptom, and would risk the legitimate filtering in every Category-1 consumer above
+for no measured gain.
