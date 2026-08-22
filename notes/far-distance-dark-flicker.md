@@ -167,3 +167,63 @@ atmosphere is doing work — low sun, heavy turbidity, short visibility — and 
 records auto-exposure pinned at its ceiling at dusk and night, which changes what a
 fixed radiance looks like. §35 also noted the horizon once "read as a seam: the sea
 was hazed and the sky was not". Sweeping conditions next.
+
+### Finding 4: no condition produces flicker, and no anomalous dark patch
+
+Nine conditions at the far station, ship sailing, 24 frames each, far-band mean
+read in-page per frame:
+
+| condition | mean | sd across frames | max step | p1 | p50 | p50-p1 |
+|---|---|---|---|---|---|---|
+| dawn | 134.15 | 0.689 | 0.196 | 68.7 | 106.7 | 38.0 |
+| noon | 120.33 | 0.092 | 0.139 | 94.3 | 120.3 | 26.0 |
+| golden | 105.15 | 0.417 | 0.299 | 90.3 | 103.3 | 13.0 |
+| sunset | 42.53 | 0.199 | 0.399 | 29.3 | 42.3 | 13.0 |
+| bluehour | 22.48 | 0.105 | 0.089 | 17.3 | 22.3 | 5.0 |
+| dusk | 22.24 | 0.042 | 0.100 | 17.3 | 22.3 | 5.0 |
+| night | 27.95 | 0.102 | 0.104 | 19.3 | 28.3 | 9.0 |
+| storm | 102.75 | 0.696 | 1.315 | 81.0 | 101.7 | 20.7 |
+| fog | 125.45 | 0.051 | 0.149 | 102.0 | 119.3 | 17.3 |
+
+**No flicker in any condition** — every temporal sd is under 0.7 codes and the
+largest single frame-to-frame step anywhere is 1.3 codes, in storm. The dark tails
+(`p50 - p1`) scale with each condition's overall contrast rather than standing out
+anywhere, so no anomalous dark patch either.
+
+### Finding 5: the horizon "dark band" is correct physics, and my hypothesis was wrong
+
+An astern station finally put the wake and a low sun in frame, and the sea
+immediately below the horizon measures well under the sky above it — golden 105 to
+109 against a sky of 171, a 37% deficit; noon 117 against 121, only 3%.
+
+I proposed that this was the reflection collapsing onto `oceanSky`'s two-colour
+ramp at far distance, since `alpha` is widened there and
+`mix(probe, wide, alpha * 0.95)` would then be mostly `wide`.
+
+**Refuted, with the lever verified as binding.** `uHasEnv` is 1 and the env map is
+set, so the patched `return mix(...)` line does execute — and forcing `return probe`
+moves the far bands by at most 0.8 codes. Reading the uniforms explains why the
+premise was wrong anyway: at golden hour `uFogColor` is (0.769, 0.514, 0.325), a
+*bright* warm orange, and `uSkyColor` is (0.039, 0.042, 0.056). `wide` at the
+horizon is therefore bright, not dark.
+
+**And the physics reasoning that motivated it was mine and it was wrong.** I argued
+the sea should approach the sky's radiance at grazing incidence because Fresnel goes
+to 1. But Fresnel only reaches 1 at exactly 90 degrees, and with `uSlopeRms` at
+0.199 (about 11 degrees) a rough sea at grazing incidence scatters reflected rays
+into sky that is **twenty times darker** than the horizon band at golden hour. A sea
+well below the horizon-sky radiance is the correct answer, not a defect. It also
+matches what a sunset photograph looks like: a bright band at the horizon, a bright
+glitter path, and darker sea elsewhere.
+
+Recorded because the temptation was to "fix" a correct render.
+
+### Wake ablation astern, for completeness
+
+§79 predicted the wake's sub-visible foam tail could read as a broad dark lane at
+the Kelvin half-angle. Ablating `wakeFoam` to 0 astern: the far band moves by 0.03
+to 0.07 codes, i.e. the wake's footprint does not reach the far field at all. Net
+effect nearer in is *brightening* by the foam (near band -7.5 codes at golden, -12.0
+at noon when removed), with localised patches where removing it brightened the sea
+by 4 to 9 codes per 32 px block — the specular-suppression signature is real but
+small and near, not a far-field dark lane.
