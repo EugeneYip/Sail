@@ -13,7 +13,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
 
 const fail = [];
@@ -119,6 +119,41 @@ try {
   fail.push(`the tree does not build — check-glsl:\n${out.split('\n').map((l) => `      ${l}`).join('\n')}`);
 }
 
+/**
+ * Every `notes/*.md` on disk except the README, tracked or not, minus anything
+ * git is deliberately ignoring.
+ *
+ * Flat glob on purpose: the convention is `notes/<topic>.md`, so a nested
+ * directory is somebody's scratch space and not a diagnosis awaiting integration.
+ */
+async function findNotes(trackedFiles) {
+  let entries;
+  try {
+    entries = await readdir('notes', { withFileTypes: true });
+  } catch {
+    return []; // no notes/ yet is the normal, clean state
+  }
+  const found = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.md') && e.name !== 'README.md')
+    .map((e) => `notes/${e.name}`)
+    .sort();
+  if (found.length === 0) return [];
+  const trackedSet = new Set(trackedFiles);
+  const untracked = found.filter((f) => !trackedSet.has(f));
+  if (untracked.length === 0) return found;
+  // `check-ignore` exits 1 when nothing matches, which execFileSync throws on.
+  let ignored = new Set();
+  try {
+    const out = execFileSync('git', ['check-ignore', '--stdin'], {
+      input: untracked.join('\n'), encoding: 'utf8',
+    });
+    ignored = new Set(out.split('\n').map((s) => s.trim()).filter(Boolean));
+  } catch {
+    ignored = new Set(); // exit 1 = nothing ignored
+  }
+  return found.filter((f) => trackedSet.has(f) || !ignored.has(f));
+}
+
 /* 8. Unintegrated diagnosis notes, and section-number collisions. ----------- */
 /*
  * `notes/<topic>.md` is where a concurrent session records a diagnosis, because
@@ -131,9 +166,21 @@ try {
  * once. And a `## <n>.` heading appearing in a note means an agent allocated a
  * number it had no business allocating, which is the one thing this convention
  * exists to prevent, so that is a failure rather than a warning.
+ *
+ * DISCOVERY IS FILESYSTEM-BASED, NOT GIT-BASED, and that is the whole point of
+ * this paragraph. It used to filter `tracked`, which misses precisely the failure
+ * this mechanism exists for: an agent creates `notes/<topic>.md`, hits its token
+ * limit before staging it, and the note sits on disk while a git-based check
+ * reports nothing. `readdir` sees it whether or not anyone got as far as
+ * `git add`.
+ *
+ * Git is still consulted for one thing — `check-ignore` — so a deliberately
+ * ignored scratch file dropped in here does not become everyone's problem. A
+ * tracked note is never treated as ignored, because `check-ignore` can match a
+ * path that is nonetheless tracked.
  */
 {
-  const notes = tracked.filter((f) => /^notes\/.+\.md$/.test(f) && f !== 'notes/README.md');
+  const notes = await findNotes(tracked);
   for (const n of notes) {
     const body = await readFile(n, 'utf8');
     const stolen = body.match(/^##\s*\d+\./m) || body.match(/§\s*\d+/);

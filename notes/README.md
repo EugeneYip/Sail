@@ -30,6 +30,12 @@ nothing else writes that path.
   once: an interrupted session's uncommitted `src/vfx` work survived only because
   a reconciliation pass went looking for it.
 
+**`preflight` finds notes on disk, not in git.** You do not have to `git add` a
+note for it to count — an agent that writes one and then hits its token limit
+before staging is exactly the case this exists to catch, and a git-based check
+would have reported nothing. A file git is deliberately *ignoring* is skipped, so
+scratch space in here stays your own business.
+
 ## Naming
 
 `notes/<short-kebab-topic>.md` — e.g. `notes/cloud-slab-streaks.md`. Name it after
