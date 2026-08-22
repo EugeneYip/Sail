@@ -14,9 +14,18 @@ import { Pipeline } from '../post/Pipeline';
  *   - `renderer.toneMapping` stays `NoToneMapping` and every post material sets
  *     `toneMapped: false`, so three never applies a curve behind our back
  *   - `renderer.outputColorSpace` is sRGB, but that only affects materials that
- *     include three's `colorspace_fragment` chunk — our passes do not, so the
- *     single sRGB encode happens by hand at the end of the composite
- *   - nothing between the scene target and that encode is ever sRGB
+ *     include three's `colorspace_fragment` chunk — our passes do not, so no
+ *     automatic encode ever touches what the composite writes
+ *   - the display encode *is* `agx()`: it ends on the AgX outset matrix and
+ *     deliberately omits the AgX EOTF, so its output is already display-encoded
+ *     (sRGB gamma, values in [0,1]). Nothing after it re-encodes — the look
+ *     LUT, the lift/gamma/gain trim, the split tone, the grain and the dither
+ *     are all display-referred on purpose — and the frame is written out as-is.
+ *     Adding a `linearToSrgb()` at the end is a *second* encode, and was the
+ *     whole of the old "pale, milky, no contrast" defect; the header of
+ *     `src/post/shaders/composite.ts` carries the measured numbers.
+ *   - everything upstream of `agx()` — scene target, bloom, CA, vignette — is
+ *     scene-linear radiance and never sRGB
  */
 export class PostProcessing implements RenderHook {
   private pipeline: Pipeline;
