@@ -246,3 +246,170 @@ lobe peaks hard, and three adds `sheenSpecularDirect + sheenSpecularIndirect` on
 top of the FULL Lambert diffuse with no `(1 - sheenAlbedo)` compensation — see
 `meshphysical.glsl.js` line 202. So the cloth reflects more energy than reaches
 it, in the places where sheen peaks.
+### The environment probe is a full sphere of sky, and a sail is a vertical surface
+
+`.tmp/envprobe.mjs` reads `scene.environment`'s render target directly and
+integrates it, with the equirect solid angle `cos(lat) dlat dlon` done properly.
+One trap on the way: the target is `HalfFloatType`, so
+`readRenderTargetPixels` must be handed a `Uint16Array` and the half-floats
+decoded by hand — a `Float32Array` reads back **all zeros silently**, and the
+first run of this probe reported an entirely black sky.
+
+256x128 equirect, `timeOfDay` 12.3, `cloudCover` 0.3. Mean luminance by
+latitude band, -90 straight down to +90 zenith:
+
+| latitude | mean radiance |
+|---|---|
+| -83 (straight down) | 0.2593 |
+| -68 | 0.2683 |
+| -53 | 0.3616 |
+| -38 | 0.3808 |
+| -23 | 0.2754 |
+| -8 | 0.2651 |
+| +7 (just above horizon) | 0.6033 |
+| +22 | 0.5176 |
+| +37 | 0.4269 |
+| +52 | 0.3494 |
+| +67 | 0.2503 |
+| +82 (zenith) | 0.1648 |
+
+- upper hemisphere mean radiance **0.454**
+- lower hemisphere mean radiance **0.306**
+- straight down **0.259**, which is *brighter than the zenith's 0.165*
+- the engine's own downward radiance, `uniforms.uGroundColor`, is **0.146**
+- a real sea at normal incidence at noon is roughly **0.05**
+
+`EnvProbe` renders `SKY_FRAG` over the whole sphere, so every direction below the
+horizon returns the atmosphere's airlight column. There is no sea in the IBL at
+all. Integrating cosine-weighted irradiance on a horizontal normal against the
+probe gives **35.4 per cent of a vertical surface's irradiance arriving from
+below the horizon** — and a sail is a vertical surface.
+
+I tested the correction without touching `src/sky`, by replacing
+`#include <lights_fragment_maps>` with a version that re-weights the probe's
+contribution using the same `clamp(n.y * 0.5 + 0.5)` sky/ground split
+`materials.ts` already uses for its analytic lobe, with the two radiances above
+as the endpoints. Result at `port-side`: sail 0.2701 -> **0.2335** linear,
+ratio to background 0.601 -> **0.519**, and hue B-R +18.65 -> +15.17. Real, and
+in the right direction, and **not committed**: the two constants are measured at
+one sun elevation and will be wrong at dawn, dusk and in fog, and patching one
+material around a defect that lives in the probe leaves the hull, deck and spars
+still wrong. This belongs in `EnvProbe`, which is not my directory.
+
+### Other surfaces in the same frame — and why the hull is a different bug
+
+Named rectangles, mean scene-linear radiance, inverted per pixel through the
+calibration ramp, `port-side` null:
+
+| region | linear | B-R |
+|---|---|---|
+| sail (mask) | 0.2975 | +14.3 |
+| what is behind the sail | 0.4503 | +61.5 |
+| hull, black topsides | **0.1841** | +1.2 |
+| gunport stripe (white/buff) | 0.2740 | -4.5 |
+| sea, near | 0.2373 | +66.0 |
+| sky, high | 0.4891 | +82.2 |
+| sky, at the horizon | 0.3277 | +8.6 |
+
+The hull looked like the same defect and it is not. Black paint at 0.184 linear
+against a 0.357-radiance sky is an effective albedo of about **0.5** — and its
+B-R is +1.2, i.e. neutral, so it is not skylight doing it. A white gunport
+stripe and black topsides differ by 1.49x where they should differ by 15-20x.
+That is a **hull albedo** problem, not an ambient one, and `hull.ts` belongs to
+another session (`notes/hull-bulwark-and-head.md`). I did not pursue it. Worth
+saying out loud because I spent a while assuming it was one scene-wide error.
+
+### What I did not commit, and why
+
+Two levers live in my files and both are magnitude dials, not corrections:
+
+| candidate | sail linear | ratio to background |
+|---|---|---|
+| as shipped | 0.2701 | 0.601 |
+| probe horizon re-weight only | 0.2335 | 0.519 |
+| `sheen` 1 -> 0.22, `uClothTrans` 0.34 -> 0.15 | 0.1974 | 0.439 |
+| both, i.e. all three at once | 0.1665 | **0.370** |
+
+0.370 does stop reading as a film. It reads as a **dark blue tarpaulin** instead:
+the 1:1 crop at `port-side` is a slab of slate, the pale sheen patches are still
+there, and — the part that decides it — **the hue does not move at all**, B-R
++18.65 to +20.56. Dimming is the wrong axis. Committing three simultaneous
+constants, two of them chosen by eye and two of them measured at a single sun
+elevation, to make a frame darker without making it read as cloth, is exactly
+the speculative fix I was told not to commit. **No source change in this
+session.**
+
+### What to do instead, in order
+
+1. **`src/sky/EnvProbe.ts`** — put the sea in the probe's lower hemisphere, or
+   scale the below-horizon rows to the sea's reflectance before flagging
+   `needsPMREMUpdate`. Measured: 35.4 per cent of a vertical surface's irradiance
+   currently comes from bright airlight below the horizon. This is one place and
+   it fixes every material on the ship at once.
+2. **`sheen` in `build/sails.ts`** — `sheen: 1` with `sheenColor: 0xa8a294` puts
+   29 per cent of the canvas's outgoing radiance into a grazing lobe and *is*
+   the blown-out cloud-shaped patches, proved by rendering
+   `sheenSpecularDirect` alone. Heavy flax duck is a tight plain weave with
+   almost no nap; sheen at maximum with a 0.40-linear colour is a velvet
+   parameterisation. Note three r0.185.1 **does** already apply
+   `1 - max3(sheenColor) * IBLSheenBRDF` energy compensation
+   (`lights_physical_pars_fragment` lines 547 and 567) — I was about to add it
+   and it is already there — but that compensation uses the view-direction
+   albedo, so at grazing angles the lobe still returns net more than arrives,
+   which is precisely where the patches are.
+3. **The thing that is actually missing: geometric occlusion between the sails
+   and the rig.** Every sail currently sees the entire hemisphere. On a real
+   ship the fore course is deeply shaded by the topsail above it, by the mast,
+   the tops and the yards, and that occlusion is what gives canvas its shape and
+   its separation from the sky. The measurable symptom is flatness: the standard
+   deviation inside the sail mask is 23-27 codes and most of it is *between*
+   sails rather than across any one of them. `aoMap` is the weave texture, not
+   geometry. No amount of scaling a uniform ambient substitutes for this.
+
+### What I could not verify
+
+- **The sunlit side.** `stbd-side` never produced a usable frame: the station
+  put the eye at y = -0.8, i.e. under water, and the frame was not static —
+  null against null again differed by mean 36 codes over 100 per cent of the
+  frame, which is the underwater pass animating. So I have **not** measured how
+  the lit face reads, and cannot say whether darkening the shaded side would
+  hurt it. Anyone continuing should fix that station first.
+- **One time of day only.** Every number here is `timeOfDay` 12.3,
+  `cloudCover` 0.3, `turbidity` 2.2, `seaState` 3, `visibility` 34 km. Nothing
+  is known about dawn, dusk, night, storm or fog.
+- **The cloth's baked albedo.** I measured the *effective* albedo the fragment
+  shader arrives at, 0.30 linear with B-R -12 — after grime, seams, panel tone
+  and the bundle shadow. I did not measure what `makeCanvas` bakes.
+- **Accuracy of the linear inversion.** The ramp is accurate to a few per cent
+  at mid values and coarse below 0.05, so per-component sums overshoot the null
+  by about 15 per cent. The trustworthy numbers are the **ablation
+  differences** (null minus one-term-removed), which are reproducible to about
+  1 per cent: the same station gave ratios 0.589, 0.593 and 0.601 in three
+  separate runs.
+- **Whether the artefact is worse or better at range.** I deliberately did not
+  repeat the "opaque at 92 m, translucent at 34 m" comparison, because it
+  confounds distance with facing, with what lies behind the canvas, and with
+  exposure, and nothing in this note needs it.
+
+### Reproducing all of it
+
+- `.tmp/sailmask.mjs <station>` — the partition test. Magenta, hide, and the
+  flat0/flat4 coverage mask.
+- `.tmp/sailabl.mjs <station> <comma-separated variants>` — one frozen frame,
+  one camera, one term at a time, with the calibration ramp, the coverage mask,
+  mask-restricted statistics and named rectangles. Every string edit is checked
+  against the shader source and a miss is printed, because a patch that silently
+  does nothing is how the previous attempt at this task produced four numbers
+  that meant nothing.
+- `.tmp/envprobe.mjs` — the probe, integrated hemisphere by hemisphere.
+- `.tmp/sailinfo.mjs` — what is compiled into and bound to the sail program.
+- Frames kept at `.tmp/sail-see-through/`.
+
+All four kill Vite's HMR socket and count navigations, because a concurrent
+agent editing `src/` reloads the page mid-run. That is not hypothetical: it
+dropped `window.__p` in the middle of a paired run, and later `hull.ts` was left
+in a state that threw `Cannot read properties of null (reading 'flip')` in
+`buildBulwarks` and the app stopped booting entirely. The last measurements in
+this note were taken in a **detached `git worktree` with its own dev server on
+port 5191**, which is what `AGENTS.md` prescribes and what I should have started
+with.
