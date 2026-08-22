@@ -177,6 +177,20 @@ import { ShipDynamics } from './ShipDynamics';
  *      (pose, rig, weather, dt) — the same dt twice is bit-identical, and 30 vs
  *      144 fps agree to 0.0001 kn. Frame-rate independence was never broken.
  *
+ *      READ THAT CLAIM NARROWLY. Both arms of it hold dt CONSTANT, so it says
+ *      nothing about an irregular clock, which is the only kind a browser
+ *      delivers. `DIAGNOSIS.md` §89 measures the hull's HEAVE under a fractional
+ *      clock and finds it is not frame-rate independent at all: the reversal rate
+ *      of the per-frame change in vertical velocity is 64-69% on fractional
+ *      intervals against 0.8-1.1% on whole multiples of the refresh period, at
+ *      equal mean interval, with a 20x rise in amplitude. Surge is unaffected
+ *      (4.8-6.7% either way), so it is the vertical channel specifically. §89
+ *      eliminates two candidate mechanisms and does NOT establish that the defect
+ *      is in this directory — it may be an interaction with the wave field's
+ *      piecewise-linear time advance in `src/ocean`. Unfixed. If you are about to
+ *      test frame-rate independence here, vary dt irregularly or you will
+ *      reproduce this same blind spot.
+ *
  *   2. THE GALE CASE MEASURED THE SEA, NOT THE SHIP. `run()` steps the solver but
  *      never ticks the ocean, so a 600 s gale sails one frozen wave snapshot, and
  *      which snapshot you get depends on how long the preceding tests took. With
