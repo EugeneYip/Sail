@@ -5489,3 +5489,102 @@ that the owner has stopped before you take anything, and never delete their note
 `preflight` now prints how long ago each unintegrated note was touched, because the
 one cheap signal available at the moment of the decision is recency, and I did not
 look for it.
+
+## 83. The sky's ruler-straight streaks were a tiling seam, and interiors were flat because one coefficient was three
+
+Integrated from `notes/cloud-cirrus-seam-and-flat-interiors.md` (377 lines; the note has the
+full working). Blind-critique items **(c)** and **#4**.
+
+### (c) The streaks are the cirrus layer's tiling seam — not the marched volume
+**My brief's hypothesis was wrong.** I had them as "slab layers seen edge-on" and told the
+agent to chase that first. Attributed in one frozen frame, three independent ways: forcing
+`cirrusOpticalDepth` to 0 makes the lines vanish while the cumulus is unchanged; transposing
+the A-channel fetch rotates the whole family 90°, so their direction comes from the weather
+map's own uv axes; and reading the real 512² bake off the GPU gives a mean |step| across the
+**v** wrap of **0.306 against 0.0047** in the interior — a **65.6×** discontinuity on a
+channel whose sd is 0.288. Across u it is 1.1×, clean.
+
+They pass *behind* the cumulus because the cirrus slab is composited after the low march
+against its accumulated `T` — which is exactly what made them look like a volume artefact.
+
+**One missing `vec2`.** `tilePerlin2(vec2(p.x*9.0, p.y*1.6), 9.0, 4)` hands one scalar period
+to a deliberately anisotropic coordinate. `tileGrad2` wraps with `mod(cell, vec2(period))`, so
+x — spanning 9 with period 9 — tiles, while v — spanning 1.6 with period 9 — never closes. A
+step at constant v is a dead-straight line at constant world Z running along world X,
+repeating every 96 km; the cirrus shell at 7.6 km is visible to ~320 km, so **three wraps fall
+inside it**. Uniform width because it is a one-texel step in a bilinear map, converging on the
+world-X vanishing point because the lines are parallel in world space.
+
+**The discriminator is the part worth keeping.** Two candidates fit the symptom — the seam and
+the anisotropy itself. Setting per-axis periods **holds** the anisotropy (6.76 → 6.57×) and
+the streak length (17.17 → 17.76 km) while removing **only** the seam (65.6 → **1.0×**), and
+the hairlines go. That separates them; changing both at once would not have. Non-integer
+periods would be worse, not better: `mod(cell, 1.6)` lands off-lattice and breaks the field
+everywhere.
+
+Verified independently on a fresh capture: the sky carries a soft cirrus wisp and no
+hairlines.
+
+### #4 The interiors: a coefficient that should have been three numbers
+Baseline over 52,400 interior texels of one cumulus (mask = composite opacity > 0.9, so edges
+are excluded): scene-linear lit/shaded **1.578**, crown/base **1.185**. A second, compact body
+came back at **0.973** — its shaded flank *brighter* than its lit one.
+
+- **The two-stream coefficient was one flat 0.19 for three octaves.** 0.19 is
+  `0.75 × (1 − 0.75)`, the asymmetry of the *first* scatter; each octave carries its own
+  eccentricity, so k should rise 0.38 / 0.53 / 0.62. Flat, it under-attenuated all three by
+  2–3× — and they carry ~80% of the signal, so the sun term ran **2.81 at τ=2, 2.57 at τ=8,
+  0.76 at τ=71**: non-monotonic, and under 4× across two decades of optical depth. With the
+  octaves ablated off, crown/base is **1.913**, which is the proof.
+- **Beer's-powder was applied at twice its value.** `mix(1, 2*powder, powderMix)` tends to
+  **2.0** as τ grows — a 2× gain on everything thick, blended in by view–light angle, so it
+  lands on the **anti-solar** side. It was brightening the very flank it exists to darken.
+- `CLOUD_MULTISCATTER_GAIN` was **split** (octave 4.5 → 6.5, ambient held). They shared one
+  constant and the ambient path runs no octaves, so raising it lifted the ambient floor by the
+  same 44% and made the contrast fix pay for itself.
+
+| body0 | before | after | |
+|---|---|---|---|
+| scene-linear lit / shaded | 1.578 | **2.097** | +33% |
+| scene-linear crown / base | 1.185 | **1.310** | +11% |
+| scene-linear p90 | 3.542 | 3.532 | **−0.3%** — top end held |
+| display ΔL lit − shaded | 16.4 | **32.4** | ×1.98 |
+| second body lit/shaded | 0.973 | **1.133** | sign corrected |
+
+**The coverage calibration provably did not move:** the fix never touches `cloudDensity` and
+the shadow pass never calls `cloudScatteredRadiance`, and cloud-buffer opacity is identical
+across every variant — mean 0.2853/0.2855, frac>0.5 19.87/19.88%, frac>0.9 15.88/15.90%. So
+`CLOUD_COLUMNS_PER_RAY` cannot have shifted.
+
+### Three instrument findings, one of which invalidated a column of its own results
+- **`world.uniforms.uExposure` is a CPU estimate**, and `AutoExposure.ts` says not to
+  calibrate against it. It reported +0.5% for a pair in which **738,856 clear deep-blue sky
+  pixels darkened 10.0%**. Use `world.ext.post.exposure`. (This is §72 again, from a third
+  direction.)
+- **Auto-exposure state carries across variants inside one `skyab.mjs` run** and does not
+  re-converge in 90 frames — proven by running the same A/B both ways: whichever shader ran
+  second came out darker. So every display-*level* comparison across variants is confounded,
+  while **contrast ratios survive the flip**, which is why the result above leads with
+  scene-linear radiance.
+- **Do not invent a sun vector to pin a known elevation.** Keeping the measured `sunY` and
+  making up the horizontal pair put a 15.6 h sun in the east and flipped every lit flank.
+
+### What did not hold, stated plainly
+**Items (a) and (b) do not share a cause with (c)** — my brief proposed they might, and they
+do not. (a), the 700 px straight bottom cut, is still present. The one candidate tested for
+(b) (halving `DT_MAX`) was run on `golden` at pitch 8 — a solid overcast with no ribbed
+cumulus face — so **that ablation proves nothing and the test needs redoing** on a view that
+shows the ribs. The haze cull is ruled out at 26 km visibility.
+
+**Interiors are better, not good:** display lit/shaded 1.22 where a real cumulus shows 2–4×.
+The ceiling is structural — `cloudLightDepth` runs with `detail = false`, so the cauliflower
+lobes cast no shadow on each other, and `DT_MAX` 1.2 km resolves a cloud's first optical depth
+with one or two samples. Note for whoever takes it: the lobe term uses `base.b`/`base.a`,
+already fetched for `lowFbm`, so it costs no extra fetch — but it changes the shadow map's
+density and needs its own mass proof.
+
+**Also open:** the cirrus A/B is a different field realisation rather than the same field with
+the lines removed, because the fix is in a baked texture an in-page ablation cannot reach (the
+low deck is measured unchanged). Cirrus is still world-axis-locked. And a pre-existing hazard
+sits in the way of fixing that: `uCirrusOffset`/`uFieldOffset` wrap at 48 km while the cirrus
+lookup divides by 96 km, so the field already teleports half a period every few hours.
