@@ -7387,3 +7387,57 @@ document, do not fix without a demonstrated effect.
 casting is to give it a `customDepthMaterial` whose fragment shader `discard`s. That
 is the lever §99 had to build to isolate the sail, and it is the lever anyone
 attempting selective shadow casting here will need.
+
+## 103. Sail-film decision package: five controlled variants, no art change landed
+
+Prepared for the owner's decision, not as a recommendation. **No source change** — the
+variants exist only as in-page patches in a gitignored probe
+(`.tmp/sailvariants.mjs`); nothing was committed and nothing is ranked.
+
+Everything held fixed except the named change: station (12 fwd / 26 up / 26 to port,
+aimed 0/14/0), sim state, camera, time of day 12.3, exposure, sail geometry,
+background. Fresh page load per variant, every lever asserted bound. Measurement
+boxes declared before capture and identical to §98's, so the numbers are comparable.
+
+| variant | sail L | ratio to sea | sail B−R | sea B−R | streak sd |
+|---|---|---|---|---|---|
+| A current (shipped) | 0.0880 | 0.309 | +41 | +7 | 5.06 |
+| B indirect sheen x0.40 | 0.0683 | 0.242 | +38 | +9 | 5.62 |
+| C warm canvas bounce | 0.0969 | 0.356 | +30 | +9 | 4.77 |
+| D warmer flax albedo | 0.0825 | 0.287 | +34 | +6 | 4.56 |
+| E = B + C | 0.0780 | 0.280 | +27 | +8 | 5.47 |
+
+Deltas against A: **B** −22.3% luminance, hue −3; **C** +10.2% luminance, hue −11;
+**D** −6.2%, hue −7; **E** −11.3%, hue −14.
+
+### The trade-off, stated without a preference
+
+The two things wrong with the shipped sail pull in **opposite** directions.
+
+- Its **hue** is too blue: sail B−R +41 against the sea reference's +7. Only the
+  bounce axis moves that materially (C −11, E −14). B, the sheen axis, barely touches
+  it (−3) — consistent with §98, where dimming moved luminance and left hue alone.
+- Its **luminance** already sits at 0.309 of the background. **C brightens it to
+  0.356**, i.e. *closer* to the background, which is the direction that made it read
+  as film in the first place. **B darkens it to 0.242**, further from the background,
+  but at the cost of 22% of the sail's light — the direction §87 measured into a dark
+  blue tarpaulin.
+
+So the axis that fixes the colour makes the luminance match worse, and the axis that
+improves the luminance separation does nothing for the colour and risks the
+tarpaulin. E splits the difference: hue −14 for −11.3% luminance.
+
+### What none of them fixes
+
+**The pale streak structure survives in every variant.** `streak sd` moves only
+between 4.56 and 5.62 against the shipped 5.06, and the patches are plainly visible
+in all five at 2x. Combined with §98 (they survive every radiance-term ablation) and
+§99 (they survive the shadow lookup being disabled entirely), the streaks are a
+distinct and still-unexplained component of the artefact. **They are not addressed by
+any of these axes**, so whichever the owner picks, that part remains.
+
+### Artefacts
+
+Full-resolution captures plus a 2x crop sheet and a wide-context sheet are staged
+outside the repository, in this session's scratchpad under `sailpkg/`. Deliberately
+not committed.
