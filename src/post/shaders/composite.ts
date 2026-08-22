@@ -46,6 +46,14 @@ ${POST_COMMON}
 
 #define LUT_N ${LUT_SIZE}
 
+// Grain shaping. GRAIN_TOE is the display-encoded luminance below which grain is
+// held proportional to the signal instead of absolute, and it is deliberately the
+// same value the highlight rolloff starts at, so the curve is one ramp up to the
+// midtone knee and one rolloff after it. GRAIN_CHROMA is how much of the swing is
+// per-channel rather than achromatic.
+#define GRAIN_TOE 0.35
+#define GRAIN_CHROMA 0.30
+
 uniform sampler2D tColor;
 uniform sampler2D tBloom;
 uniform sampler2D tDirt;
@@ -176,16 +184,30 @@ void main() {
   col = clamp(mix(vec3(l), col, uSaturation), 0.0, 1.0);
 
   // Grain on the negative: strongest through the midtones, almost absent in the
-  // highlights (where real silver halide is saturated) and pulled back in the
-  // deep shadows so night does not turn to static.
+  // highlights (where real silver halide is saturated), and PROPORTIONAL to the
+  // signal below the midtone knee rather than absolute.
+  //
+  // That last clause is the whole of DIAGNOSIS §75. Granularity is a density
+  // fluctuation, so a fixed absolute swing is wrong in the toe — and this frame
+  // may sit entirely in the toe, because auto-exposure is pinned at its 4.5-stop
+  // ceiling at dusk and night (§74) and the sails land around code 16 there. The
+  // old 'smoothstep(0.0, 0.10, gLum)' rollback reached full strength by code 25,
+  // so it injected the same ~2 codes of red-blue noise at every light level: 1.7%
+  // of a midday sail and 12.5% of a dusk one.
   if (uGrain > 0.0) {
     float gLum = lwLuminance(col);
-    float shape = (1.0 - smoothstep(0.35, 0.95, gLum)) * smoothstep(0.0, 0.10, gLum);
-    float n = animatedNoise(gl_FragCoord.xy, uFrame);
-    // Two decorrelated draws so the grain has some chroma, like real film.
-    float n2 = animatedNoise(gl_FragCoord.xy + 37.0, uFrame + 11.0);
-    vec3 g = vec3(triangularNoise(n), triangularNoise(mix(n, n2, 0.5)), triangularNoise(n2));
-    col += g * uGrain * shape;
+    float shape = (1.0 - smoothstep(0.35, 0.95, gLum)) * min(1.0, gLum / GRAIN_TOE);
+    // White noise, and NOT 'animatedNoise'. That is interleaved gradient noise: a
+    // low-discrepancy lattice whose fractional part has a period near 2 px across
+    // and 3.2 px down. Exactly right for a dither TAA will average away over many
+    // frames, and a visible woven chequer when it is the still grain of one.
+    float mono = triangularNoise(hash12(gl_FragCoord.xy - vec2(uFrame * 0.3247180, uFrame * 2.2360679)));
+    vec3 h = hash32(gl_FragCoord.xy + vec2(uFrame * 1.6180339, uFrame * 0.7548777));
+    // Real film has per-layer grain, so some chroma belongs here — but only some.
+    // Two independent full-amplitude draws for R and B put 1.8x more energy on the
+    // red-blue axis than on luma, which reads as coloured pepper, not as grain.
+    vec3 perLayer = vec3(triangularNoise(h.x), triangularNoise(h.y), triangularNoise(h.z));
+    col += mix(vec3(mono), perLayer, GRAIN_CHROMA) * uGrain * shape;
   }
 
   // No sRGB encode here. AgX already left us display-encoded and everything
