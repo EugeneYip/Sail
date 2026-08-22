@@ -7444,6 +7444,9 @@ not committed.
 
 ## 104. Issue 3 reproduced and causally isolated: the ocean reflecting the cloud-bearing env probe. Fix attempt reverted.
 
+> **SUBSYSTEM ATTRIBUTION RETRACTED BY §107.** The reproduction and the ablations
+> below stand. The owner is the cloud shadow map, not the env probe.
+
 Supersedes §97's NOT-REPRODUCED for this report. §97 measured a *fixed far station*
 looking forward at the horizon and found nothing; the owner's condition is different
 — **zoomed far out, high, looking down at a large area of sea, under heavy cloud** —
@@ -7534,6 +7537,8 @@ which §67 and §17C fought to win. No discriminator yet says which preserves it
 is a genuine stop, not an invitation to tune.
 
 ## 105. Issue 3's flicker is the EnvProbe's 6 Hz staircase, reflected by the sea
+
+> **RETRACTED — temporal claim by §106, subsystem by §107.** Measurements stand.
 
 Completes §104 and **corrects its mechanism wording**. §104 named
 "unresolved-normal / insufficient angular filtering" as the leading candidate. That
@@ -7707,3 +7712,108 @@ defect actually needs it.
 the probe's temporal staircase and the cloud-shadow term are now **excluded** as its
 cause. The next arm is Sky's published radiance scalars and sun state, frozen
 individually.
+
+## 107. Issue 3 is the cloud shadow map, not the env probe — and arm D's "held" assertion was vacuous
+
+§104 and §105 attributed the blotches to the ocean reflecting the cloud-bearing env
+probe. **That attribution is withdrawn.** The owner is `uCloudShadowMap`, sampled by
+`lwCloudShadow` in `src/core/SharedUniforms.ts`. §106 already retracted the temporal
+half; this retracts the subsystem.
+
+### The methodology error that hid it for three rounds
+
+The mandated hierarchical freeze reached arm D — *every* ocean-consumed Sky output
+frozen at once — and reported `allHeld=true` post-tick with **no effect** (churn 61.22
+vs live 67.44), against a whole-Sky-module freeze of **1.82**. The parts did not sum to
+the whole, and the lever assertion said the parts were genuinely frozen.
+
+They were not. The set included `uCloudShadowMap`, whose `.value` is a *pointer* to a
+render target that `Clouds` overwrites **in place** every frame. Freezing the pointer
+freezes nothing, and asserting the pointer is unchanged asserts nothing.
+
+> **A `.value` equality check proves a lever bound only for immutable values.** For a
+> texture uniform it is vacuous: the pixels live behind the reference. Freeze the pass
+> that writes the target (`Clouds.shadowPass.render`), and assert on the *blocked call
+> count*, not on the uniform.
+
+Same trap would have applied to `uEnvMap`; that one happened to be frozen correctly,
+by stubbing `probe.update`, which really does stop `pass.render`.
+
+Before finding this I had also tested the coupling the brief anticipated — probe **and**
+all Sky scalars frozen together (62.44 churn / 6.056 raw vs live 65.89 / 6.546). Also
+nothing. Both negatives were real; both were measuring the wrong subsystem.
+
+### Single-source reproduction, with the two halves separated
+
+Fresh load per arm, camera locked, `autoExposure` off, palindrome ordering, levers
+asserted (`shOff` held strength at 0; `shStatic` blocked exactly 10 shadow renders in
+10 frames with strength intact at 0.786).
+
+| arm | blotch | churn | raw dLuma | minres |
+|---|---|---|---|---|
+| live | 45.40 | 68.11 | 7.524 | −14.7 |
+| **shOff** — `uCloudShadowStrength = 0` | **9.20** | **10.22** | 3.069 | **−6.0** |
+| **shStatic** — shadow present, pixels frozen | 62.50 | **24.00** | 3.510 | −14.5 |
+| live2 (return-to-baseline) | 51.30 | 77.44 | 6.887 | −15.9 |
+
+baseline churn 72.78, control spread 9.33 — so −6.7x and −5.2x control respectively.
+
+This is the partition the previous rounds could not find:
+
+- **The black patches are cloud shadows.** Ablating the term takes blotch area 48.35 to
+  9.20 and, decisively, the residual *depth* from −14.7 to −6.0 — right at the
+  threshold. Nothing else in the scene makes the sea that dark.
+- **The flicker is the shadow map's per-frame content.** Freezing the pixels drops churn
+  to 24.00 while blotch area *rises* to 62.50 and depth holds at −14.5. The patches stay,
+  large and deep; they stop moving. Area rising is the expected sign — a static pattern
+  no longer averages out across frames.
+
+### Mechanism: an unfiltered tap, not insufficient resolution
+
+`CLOUD_SHADOW_SIZE = 512` over `CLOUD_SHADOW_EXTENT_M = 26000` is **50.8 m per texel**.
+The target is built `generateMipmaps: false` with `LinearFilter`, so there is no mip
+chain, and `lwCloudShadow` takes a **single `texture2D` tap** with no footprint term.
+A sea pixel at a zoomed-out camera covers a large world footprint and samples that map
+once. Hence the zoom dependence in the player's report: zoom out, footprint grows,
+aliasing grows.
+
+Depth comes from the floor being divided by the strength it was meant to survive:
+`max(exp(-tau), 0.035)` then `t / max(uCloudShadowStrength, 0.05)` gives **0.035/0.80 ≈
+4.4 % sun** in the deepest patches. The floor's comment says it "keeps an overcast sea
+leaden rather than black"; the division partly undoes that.
+
+### Two candidate fixes tested. Both failed, and the failure is the diagnosis.
+
+| arm | blotch | churn | vs baseline |
+|---|---|---|---|
+| base (512 tex / 14 steps) | 60.80 | 91.22 | — |
+| `CLOUD_SHADOW_STEPS` 14 → 40 | 45.30 | 64.78 | −17.33, **−1.0x control** |
+| `CLOUD_SHADOW_SIZE` 512 → 1024 | 119.10 | **197.89** | +115.78, **+6.4x control** |
+| base2 (return-to-baseline) | 44.50 | 73.00 | — |
+
+control spread 18.22 on this run.
+
+- More march steps is **not significant**. The coarse 14-step march (up to 2.86 km per
+  sample through a deck a few km thick) is real, but it is not what the player sees.
+- **Doubling the resolution makes it 6.4x worse.** That is the whole answer: the defect
+  is not a lack of source detail, it is a receiver sampling a high-frequency source with
+  one unfiltered tap. Halving the texel size doubles the spatial frequency projected onto
+  the sea and therefore doubles the aliasing.
+
+Corroborated independently by an equirect-pole discriminator run on the reflection path
+(before the shadow map was implicated). Relocating the mapping's singularity off +Y made
+the metric **worse** (+2.1x control) while a null control that rotated the environment
+90 deg about the *same* pole — same arithmetic, comparable content change — moved it
+**+0.0x control**. The metric responds to sampling geometry and is indifferent to which
+cloud content is sampled. Two different samplers, same conclusion.
+
+### Status
+
+Mechanism isolated; **no fix landed**. The deficient stage is receiver-side footprint
+filtering of the cloud shadow lookup. Per the standing instruction not to tune after a
+failed acceptance, the trade-off goes to the owner rather than into more parameter arms.
+
+Not reconciled: §104's ablation forcing the ocean reflection off the probe drove the
+metric to exactly 0.00. That is not explained by shadow ownership and is left open —
+plausibly the two terms are multiplicative in the sun's contribution, but that was not
+measured.

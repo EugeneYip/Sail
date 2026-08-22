@@ -403,3 +403,43 @@ correct; the player-visible defect is the **flicker**, and that is environment-s
 Per the owner's decision tree this sends the work to EnvProbe / cloud temporal
 filtering, and explicitly away from dark floors, reflection clamps, sea brightening,
 removing clouds from the probe, and global reflection blur.
+
+### Issue 3 SOLVED (mechanism): the cloud shadow map, sampled with one unfiltered tap
+
+Full record in DIAGNOSIS §107. What matters for the running log:
+
+**I was wrong three times in a row about the subsystem**, and the reason was one
+instrument error, not three. The mandated freeze partition kept reporting "lever bound,
+no effect" for the sky→ocean data path, including arm D which froze *every* ocean-consumed
+Sky output simultaneously and asserted them held. `uCloudShadowMap` is a **texture**
+uniform: its `.value` is a pointer to a render target that `Clouds` overwrites in place
+every frame. Holding the pointer freezes nothing, and asserting the pointer is unchanged
+asserts nothing. Every "excluded the cloud-shadow term" step in this file that froze the
+strength scalar and the matrix but not the *pixels* was therefore invalid.
+
+Rule added: **a `.value` equality check proves a lever bound only for immutable values.**
+For a texture, stub the pass that writes the target and assert on blocked call count.
+
+Freezing `Clouds.shadowPass.render` (10 blocked renders in 10 frames, strength intact)
+and separately ablating the term gave the partition every previous round had missed:
+
+- shadow **ablated**: blotch 48.35 → 9.20, churn 72.78 → 10.22, residual depth −14.7 → −6.0
+- shadow **present but frozen**: churn 72.78 → 24.00, blotch *rises* to 62.50, depth −14.5
+
+So the black patches *are* cloud shadows, and the flicker *is* that map's per-frame content.
+Both halves of the player's "black flickering blotches" land on one input.
+
+**The two obvious fixes both failed, and that is the diagnosis.** More march steps: not
+significant (−1.0x control). Doubling the shadow map to 1024: **6.4x worse** (churn 91 → 198).
+The map is 512 texels over 26 km = 50.8 m/texel, built `generateMipmaps: false`, and
+`lwCloudShadow` takes a single `texture2D` with no footprint term — so the deficient stage
+is receiver-side filtering, and adding source detail adds aliasing. That also explains the
+zoom dependence the player reported: zoom out, the per-pixel world footprint grows.
+
+An independent equirect-pole discriminator on the reflection path agrees: moving the
+mapping's singularity made things worse (+2.1x control) while a null control that rotated
+the environment 90 deg about the same pole moved nothing (+0.0x). The metric tracks
+sampling geometry and ignores which cloud content is sampled.
+
+No fix landed. Standing instruction after a failed acceptance is to stop rather than tune,
+so the resolution-vs-cost trade-off goes to the owner.
