@@ -289,3 +289,20 @@ Not rewritten: `main` has several sessions committing to it concurrently
 (`fc15f7b`, `206218a` land between my own), and rewriting a shared tip to tidy a
 label is a worse trade than the label. Every commit here now passes an explicit
 `--` pathspec.
+
+### Operational note for whoever runs this next
+
+`.tmp/jitterrel.mjs` and the first version of `.tmp/jitter2.mjs` waited 120 s for
+`window.__leeward`. On a box with five other agents rendering, boot at 1600x900
+exceeded that and the job died with a bare `TimeoutError` after fifteen minutes of
+apparently-running silence. Raised to 420 s. A smoke test at 400x300 booted fine
+in the same minute, so a short boot timeout will mislead you about whether the
+page is broken.
+
+Also, right now the page throws `TypeError: Cannot read properties of null
+(reading 'flip')` from `MeshBuilder.grid` via `buildBulwarks` in
+`src/ship/build/hull.ts` — a ship session's uncommitted work in progress, and the
+reason `npm run typecheck` currently reports one error, in that file only. It
+breaks the bulwark GEOMETRY, not `world.ship.position/quaternion`, so the jitter
+statistic is unaffected; but it does explain the black block in a bowsprit
+screenshot taken tonight.
