@@ -97,6 +97,42 @@ duplicates. §36, §40, §46 and §60 each appear twice from earlier collisions;
 they stay, because a stable reference someone has already cited is worth more
 than a tidy sequence.
 
+## Reconciling another session's work
+
+**Dirty is not a state. It is the normal condition of a worktree whose owner is
+mid-edit.** Uncommitted files and an untracked note mean *someone may still be
+typing*, not that a session died. Treat them as live until you have evidence
+otherwise.
+
+This is not hypothetical: an integrator once read a foam session's dirty
+`src/vfx` files and untracked note as an interruption, committed the source,
+folded the note into `DIAGNOSIS.md` and deleted the note — while the agent was
+still tuning. It happened to match that agent's final state byte-for-byte, and
+nothing about that was earned. See §82a.
+
+Before you consume source, integrate a note, or delete a note that belongs to
+another session:
+
+1. **Establish the owner's state** — active, completed, paused on a limit, or
+   dead. A completion report, a task notification, or the owner saying so all
+   count. A file's mtime is a hint, not evidence; `preflight` prints how long ago
+   each note was touched precisely because that is the one cheap signal at the
+   moment of decision.
+2. **If it may still be active, take nothing.** Do not stage its files, do not
+   fold its note, do not delete its note.
+3. **Integrate only after explicit completion or handoff**, or once the session is
+   confirmed stopped.
+4. **If an emergency forces you to snapshot live work** — an imminent push, a
+   machine you are about to lose — copy it forward without deleting or rewriting
+   the owner's working state, and say in the commit message that it is a snapshot
+   of work in progress rather than a finished result.
+5. **If you integrated early and the owner later finishes**, compare its final
+   state against `main` byte-for-byte and reconcile the delta before calling the
+   task closed. Do not assume your snapshot was the end of it.
+
+The `notes/` convention exists to stop interrupted work being lost. It must not
+become a way to race a writer who has not finished.
+
 ## Keeping the repo publishable
 
 `npm run preflight` must stay green — it also runs in CI before any deploy. It

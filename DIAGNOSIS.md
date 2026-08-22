@@ -5458,3 +5458,34 @@ is the correct ordering — aliasing would show as a far-band spike *above* the 
 Four rafts in a 2×2 atlas selected by seed would cost nothing and remove the last repetition,
 but the full-turn rotation already broke the visible cloning, so it is left for a fresh
 complaint rather than done speculatively.
+
+### 82a. Provenance correction, and the race it exposed
+
+**The foam session was not interrupted. It was still working.**
+
+§82 and the commit that carried its source (`843be25`) both describe the work as
+"recovered from an interrupted background session's uncommitted working tree". That
+is wrong. The agent was actively tuning when I found its dirty `src/vfx` files and
+its untracked note, took the source, folded the note into §82, and **deleted the
+note out from under a live writer.**
+
+It has since finished and independently confirmed that the state I captured in
+`843be25` is byte-for-byte its final tuned source, with its own validation clean:
+typecheck, `check-glsl`, `build`, `preflight`, **17/17 scenes with zero console
+errors**, no timing claims (every run was contention-tainted), and nothing outside
+`src/vfx`. So `843be25` and §82 stand and must not be redone or reverted.
+
+**But nothing about that outcome was earned.** I inferred "interrupted" from
+"dirty", and dirty is not a state — it is the *normal* condition of a worktree
+whose owner is mid-edit. Had the agent been two tuning passes from done, I would
+have shipped an intermediate state under a commit message claiming it was final,
+and deleted the notes file it was still writing into. The mechanism built to stop
+interrupted work being lost had become a way to race a running one.
+
+The corrected rule is in `AGENTS.md` under **Reconciling another session's work**.
+The single sentence version: **dirty means someone may still be typing — establish
+that the owner has stopped before you take anything, and never delete their note.**
+
+`preflight` now prints how long ago each unintegrated note was touched, because the
+one cheap signal available at the moment of the decision is recency, and I did not
+look for it.

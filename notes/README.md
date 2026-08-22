@@ -41,7 +41,12 @@ nothing else writes that path.
   real note written under this convention tripped it on the words "as §40 already
   proved".
 - **The integrating session on `main`** folds the content into `DIAGNOSIS.md`,
-  assigns the next sequential number at that moment, and deletes the note.
+  assigns the next sequential number at that moment, and deletes the note —
+  **but only once the owning session has stopped.** A note on disk means someone
+  may still be writing into it. An integrator once deleted a live agent's note
+  mid-edit on the assumption that untracked meant abandoned; see `AGENTS.md`,
+  *Reconciling another session's work*, and §82a. `preflight` prints each note's
+  age and marks recent ones `MAY BE LIVE` for exactly this reason.
 - A note left here is *unintegrated work*, not clutter — `preflight` reports them
   so a paused session's findings cannot be quietly lost. That has already happened
   once: an interrupted session's uncommitted `src/vfx` work survived only because

@@ -209,9 +209,29 @@ async function findNotes(trackedFiles) {
         + ' in prose freely; just do not number your own.');
     }
   }
+  /*
+   * Report how long ago each note was touched, because an integrator's real
+   * question is not "is there a note" but "has its author stopped writing it".
+   *
+   * An integrator once read a live session's untracked note as an interruption
+   * and deleted it mid-edit (§82a). Recency is the one cheap signal available at
+   * that moment and nobody looked for it. It is a hint and not evidence — a note
+   * can be minutes old and abandoned, or hours old and about to be appended to —
+   * so this prints the age and leaves the judgement where it belongs.
+   */
   if (notes.length) {
-    warn.push(`${notes.length} unintegrated note(s) in notes/: ${notes.join(', ')}`
-      + ' — fold into DIAGNOSIS.md and delete');
+    const now = Date.now();
+    const aged = await Promise.all(notes.map(async (n) => {
+      try {
+        const mins = Math.round((now - (await stat(n)).mtimeMs) / 60000);
+        return `${n} (touched ${mins < 1 ? '<1' : mins} min ago${mins < 20 ? ' — MAY BE LIVE' : ''})`;
+      } catch {
+        return n;
+      }
+    }));
+    warn.push(`${notes.length} unintegrated note(s) in notes/: ${aged.join(', ')}`
+      + ' — fold into DIAGNOSIS.md and delete, but only once the owning session has'
+      + " stopped; see AGENTS.md 'Reconciling another session's work'");
   }
 
   // Duplicate section numbers are reported, never auto-fixed: an existing number
