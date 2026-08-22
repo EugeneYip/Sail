@@ -6627,3 +6627,90 @@ demonstrated cause. The obvious discriminator is to vary the 0.06 threshold and 
 blurring foam. Note that both candidate levers here are *sharpening* operations
 being applied to a field that cannot support them — so the fix direction is to stop
 thresholding a coarse field, not to soften the result.
+
+## 95. The near-hull plate is the wake channel's foam, and two mechanisms are refuted
+
+Continues §94. The dispatched wake agent stalled after writing its note (committed
+verbatim, then folded in here and deleted); the integrating session finished the
+work after a third consecutive agent stall made re-dispatching pointless.
+**Localised, not fixed.**
+
+### First, a correction to §94 from the agent, which was right
+
+§94 said `cover = max(cover, wakeFoam * 0.88)` "replaces the ocean's own detailed
+foam". **The ocean's detail is not in `cover`.** `cover` is a scalar coverage
+*fraction*, and all the tearing is applied downstream in §40's
+threshold-on-flattened-noise (`thr = 1 - cover + bite * (...)`,
+`foam = linstep(thr - wThr, thr + wThr, decide)`). Whatever raises `cover`, the
+breakup is applied afterwards — so raising it from a smooth metre-scale field
+should still come out torn, and §94's mechanism as literally written has a hole in
+it. The agent also eliminated the `bite` collapse arithmetically: the wake's
+ceiling is `(0.78 - 0.06)/0.94 * 0.88 = 0.674`, giving `bite = 0.652`, not
+collapsed.
+
+### What the artefact actually is, at 3x
+
+Two features, not one, and conflating them is what made my first statistic
+contradict my own eyes:
+
+1. **A featureless cream band** hugging the hull with a hard ruled edge. Vertical
+   profiles put its interior at a flat **198 codes, varying ±3 over 28 px**.
+2. **Crazed foam beyond it** — near-solid white broken by thin dark fissures, the
+   signature of a *binary* threshold on a flattened field rather than graded foam.
+
+My first box spanned both. The crazing is high-frequency, so the box reported
+*more* structure in the "smooth plate" than in open sea, at every scale from 1 to
+16 px. **The statistic was right and the box was wrong.** Locate the feature with a
+profile before drawing a box around it.
+
+### Ablation, one frozen frame, four arms, every needle asserted
+
+Boxes placed from the profiles: `PLATE` is the flat band interior, `FOAM` the
+crazed region beyond. `% flat` is the share of pixels within 5 codes of the box
+median.
+
+| arm | PLATE mean | sd | % flat | FOAM sd |
+|---|---|---|---|---|
+| base | 198.2 | 26.1 | **49.0** | 14.2 |
+| `cover` clamped to 0.45 | 183.2 | 44.9 | 36.1 | 14.2 |
+| `wThr` pinned to 0.25 | 197.8 | 20.6 | 41.1 | **31.5** |
+| `wakeFoam = 0` | **157.1** | 61.6 | **7.8** | 15.3 |
+
+**Confirmed: the plate is the wake channel's contribution.** Zeroing `wakeFoam`
+collapses the plateau — flatness 49.0% to 7.8%, mean 198 to 157 — by far the
+largest lever of the four.
+
+**Refuted 1: the footprint wash.** Pinning `wThr` to a wide 0.25 leaves the plate
+at 197.8 and 41.1% flat. It transforms the *surrounding* foam instead (`FOAM` sd
+14.2 to 31.5), so the lever works and simply does not act here. Consistent with the
+arithmetic: `wThr = mix(0.05, 0.5, smoothstep(1.2, 3.5, pxWorld))` only widens past
+`pxWorld` 1.2 m, and at ~1.3 mrad/px a 30 m near-hull distance gives
+`pxWorld ~= 0.04 m`, so `wThr` sits at its sharp floor. **That hypothesis was a
+far-field story mistaken for a near-hull one** — it may still matter for P4.
+
+**Refuted 2: coverage saturation collapsing `bite`.** Clamping `cover` to 0.45
+moves the plate only from 49.0% to 36.1% flat. If the plateau were simply
+`foam` saturating at high coverage, forcing coverage to 0.45 should have torn it
+open. It does not.
+
+### A lever that was found but did not bind
+
+My first round clamped `cover` at **0.85** and reported no effect at all. The needle
+was found and the code did change — but the wake's ceiling is 0.674, so the clamp
+was never reached and the edit was a **semantic no-op**. Same family as §91's
+rewritten uniforms, one level subtler: asserting that the *string* was patched is
+not the same as asserting the *constraint binds*. Check that a clamp is below the
+value it is meant to clamp.
+
+### What remains open
+
+The chain from `wakeFoam` to a ±3-code plateau is **not closed**. Coverage
+saturation is not sufficient and the ramp width is not involved, so something
+between them — the `decide` field's own dynamic range where the wake dominates, or
+the foam shading downstream of the mask — is doing it. Whoever continues should
+instrument `cover`, `thr` and `decide` as output channels in that band rather than
+inferring them from the composite, which is what every arm above had to do.
+
+**No fix committed.** The wake channel is confirmed as the source and two
+mechanisms are eliminated, which is real progress, but nothing here justifies
+source changes yet — and P2 still forbids resolving it by globally blurring foam.
