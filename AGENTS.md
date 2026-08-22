@@ -324,3 +324,36 @@ weathered flax canvas sails.
 - `frustumCulled = false` only for things that genuinely fill the screen
   (ocean, sky).
 - Prefer a texture LUT baked once at init over per-frame math in a shader.
+
+## Measuring anything: use the harness
+
+`scripts/measure.mjs` (`npm run measure-selftest` proves it works). Use it for any
+A/B, ablation or parameter sweep instead of hand-rolling a probe.
+
+Five conclusions on this project were retracted because of instrument mistakes, not
+bad reasoning. The harness closes those specific traps:
+
+- **One fresh page load per arm.** Sharing a load lets simulation state drift between
+  arms, and in an ascending sweep the drift runs *with* the parameter. This produced
+  the largest single false positive.
+- **A control channel is mandatory** — something the arm cannot possibly influence.
+  When the control moves as much as the result, the result is noise. This is what
+  caught every retraction.
+- **Deltas inside control variance are REJECTED, not reported.** The floor comes from
+  repeat-to-repeat spread converted to sigma, at 3 sigma on a difference of means. A
+  range of two repeats is not a noise floor.
+- **Assert the lever BINDS.** A patched string is not a bound lever. Real examples
+  here: a clamp set above the value it clamped, a uniform rewritten from settings
+  every frame, `castShadow = false` (three ignores it for receivers under
+  `VSMShadowMap`), and a `customProgramCacheKey` returning a constant so
+  `onBeforeCompile` was never called.
+- **`dt = 0` does not freeze the renderer, it starves it.** Shadow maps and other
+  refresh-on-tick subsystems stop updating, so you measure a stale state. The harness
+  warns.
+- **Declare sample regions in the config, before measuring.** Defining a mask from
+  the quantity under test guarantees the finding.
+- **Both mean and median, always.** Choosing after seeing the data is how a mean
+  invariant got read as a median.
+
+If a result contradicts physics, or arms order impossibly, suspect the instrument
+before believing the discovery.
