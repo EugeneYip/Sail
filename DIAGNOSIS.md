@@ -8352,3 +8352,51 @@ acceptance is the in-load pre-tonemap instrument above plus inspection.
 
 `surface.ts` is untouched, so the P2 ocean-foam fix and open-sea foam cannot have regressed —
 a structural guarantee rather than a measurement.
+
+## 113. Issue 4B: the "flat blades" are the open gunport lids, caught mid-swing
+
+Identified and causally confirmed. **No fix landed** — the correction is an authenticity
+choice and was not authorised in this pass.
+
+### What they are
+
+At a close stern-quarter station the hull side carries a row of **evenly spaced flat grey
+slabs projecting horizontally outboard**, one per open port along the whole length, each with
+dead-square ends. They are the gunport lids, in `buildPortLid`:
+
+```ts
+const ang = p.open ? 1.32 : 0.03;
+lid.box(nx * 0.035, -lh * 0.5 * inv, 0, 0.035, lh * 0.5, lw);
+```
+
+A 7 cm-thick flat plate, hinged at the head. **1.32 rad is 75.6°**, and since the lid hangs
+along local −Y at 0 rad, 75.6° leaves it **14° below horizontal** — standing straight out of
+the ship's side like a shelf, presenting its maximum silhouette broadside to the eye.
+
+Confirmed by isolation: rebuilding with `ang = 0.55` rotates the same slabs down against the
+hull, so the objects are the lids and nothing else.
+
+### Why 1.32 is the worst available value
+
+Hinged at the head, the lid sweeps: 0 rad closed over the port, ~π/2 a horizontal shelf,
+and ~2.4–2.8 rad lying back against the ship's side above the port, which is where a triced-up
+lid actually sits. 1.32 rad is almost exactly the middle of that sweep — the one place the
+plate is broadside-on to a level camera and reads as a blade.
+
+The section's own comment records that the *sign* of this rotation was fixed once, because
+`-ang` swung the lids inboard and left the ports unobstructed (part of §37's see-through
+hull). The **magnitude** appears never to have been reviewed after that.
+
+### Relation to Issue 4A
+
+Separate, and 4A is unchanged: the rope ribbons are square-ended by construction
+(`makeRibbonGeometry` is two vertices across at constant half-width) and that remains a
+deliberate choice, since most lines end at a fitting. **The blades are not ropes.** The two
+halves of Issue 4 are now both attributed, and neither wants a global rope taper.
+
+### Fix direction, not taken
+
+Either carry the lid on to ~2.4–2.8 rad so it lies back against the side as a triced-up lid
+does, or leave it hanging near-closed. Either removes the shelf. Which one is an appearance
+call for the owner, and the port-open logic that decides `p.open` should be looked at in the
+same pass.

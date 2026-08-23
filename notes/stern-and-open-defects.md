@@ -622,3 +622,22 @@ moved both ways (+45 %, −22 %). That is the fresh-load brightness measurement 
 be swamped by wake-state variance — I re-created a known-bad instrument and am not counting it.
 Acceptance rests on the in-load pre-tonemap scalars plus inspection, including bow and beam
 stations since the alpha line is shared with the bow sheet.
+
+### Issue 4B IDENTIFIED: the flat blades are the open gunport lids
+
+DIAGNOSIS §113. Not fixed — the correction is an authenticity call and was not authorised.
+
+The row of evenly spaced flat grey slabs standing straight out of the hull side, one per open
+port, square-ended, are the gunport lids. `const ang = p.open ? 1.32 : 0.03;` — and 1.32 rad
+is 75.6°, which for a lid hinged at the head leaves it 14° BELOW horizontal, i.e. a shelf
+projecting from the ship's side with its maximum silhouette broadside to the eye. Confirmed by
+isolation: rebuilding at 0.55 rad rotates the same slabs down against the hull.
+
+1.32 is close to the worst value available. The sweep runs 0 = closed over the port, ~pi/2 =
+horizontal shelf, ~2.4-2.8 = lying back against the side, which is where a triced-up lid
+actually sits. The section's comment records that the SIGN of this rotation was fixed once
+(it used to swing them inboard); the magnitude was never revisited.
+
+Issue 4A is untouched and unchanged: rope ribbons are square-ended by construction and that
+stays deliberate. **The blades are not ropes** — so both halves of Issue 4 are now attributed
+and neither calls for a global rope taper.
