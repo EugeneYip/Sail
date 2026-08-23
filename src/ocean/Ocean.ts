@@ -297,7 +297,32 @@ export class Ocean implements Module, IOcean {
     this.material.uniforms.uWaveHeight.value = this.params.hs;
     // Monahan: whitecap coverage grows as U^3.4. Below a fresh breeze there
     // simply are no whitecaps, and the fold mask must not invent any.
-    const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(env.windSpeed, 0.5), 3.41) * 24);
+    /*
+     * Monahan's law is a function of WIND ALONE, and that is only true while the
+     * wind has a sea to break.
+     *
+     * Whitecaps are broken wave crests. A player can set 41 kn against sea state 0
+     * and a wave height of 0.0 m — an unphysical pair, but the sliders allow it —
+     * and the raw law then returns 2.97, clamps to 1.0, and asks for a HUNDRED per
+     * cent whitecap coverage on a mirror. The shader's far-field substitute at
+     * 'cover = max(cover, uFoamCover * (1.0 - foldLive))' has no folds to defer to
+     * on a flat sea, so that full coverage lands across the whole surface. Foam
+     * suppresses the water's specular — see the coverage note in shaders/surface.ts
+     * — and at golden hour that specular IS the brightness, so every fleck of it
+     * came out as a DARK speck on a bright sea. That is the player's "flickering
+     * dark blotches at high wind on a flat sea", and it is a different mechanism
+     * from the cloud-shadow blotches of 107/108: it survives cloud cover 0.
+     *
+     * Gated on the wave height the spectrum is actually given ('Spectrum.ts' takes
+     * 'hs' straight from it), so no sea means no breaking and no whitecaps however
+     * hard the wind blows. Unity by 0.4 m, which every real sea state clears, so
+     * the far-field substitute keeps working exactly as designed wherever there is
+     * a sea to break.
+     */
+    const hsN = Math.min(1, Math.max(0, (env.waveHeight - 0.06) / (0.40 - 0.06)));
+    const breaking = hsN * hsN * (3 - 2 * hsN);
+    const cover = Math.min(1, 3.84e-6 * Math.pow(Math.max(env.windSpeed, 0.5), 3.41) * 24)
+      * breaking;
     // Where the fold mask cuts. Measured against the Jacobian's own distribution:
     // the surface spends most of its area between fold 0.8 and 1.1, so a fixed
     // 0.78 threshold selected almost nothing even in a gale. These two ends give

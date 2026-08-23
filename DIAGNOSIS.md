@@ -8768,3 +8768,82 @@ spanker's edge with no intersection.
   contaminated by a mask that included the hull and wake, so nothing is concluded yet.
 - **Mobile / iPad double-tap browser zoom** not yet started.
 - Boston harbour remains **pending player validation** and is not to be described as closed.
+
+## 119. The high-wind flat-sea specks are whitecap coverage on a mirror — and a measurement fault that invalidates part of §118's round
+
+### First, the measurement fault, because it comes before the finding
+
+**`world.env` is driven by a weather simulation, and a bare `Object.assign(world.env, …)`
+does not hold.** Measured: setting `windSpeed 41, seaState 0, waveHeight 0.0` and reading back
+gives
+
+| after | waveHeight | seaState | windSpeed |
+|---|---|---|---|
+| 0 s | 0.00 | 0.0 | 41.0 |
+| 6 s | **2.38** | **4.90** | **27.3** |
+| 17 s | **2.94** | **5.30** | **15.2** |
+
+So the flat-sea condition **never existed** in the first four arms of this investigation: they
+all drifted to whatever the weather sim wanted, which is why every one of them looked alike
+and why a nominal "cloud cover 0" arm still showed blotches. **That arm's evidence is void and
+is not used below.**
+
+The player's panel holds their sliders through `world.ext.env.pin(field, value)`; a harness
+must do the same. Every arm in this section pins and asserts the pin after the settle.
+
+> **Any measurement in this document that set `world.env` directly and then waited is a
+> measurement of a drifting environment, not of the stated condition.** Comparisons *within*
+> a run stay valid because all arms drift together, which is why the §118 fixes still
+> validate — but absolute conditions quoted from such runs are not what was set.
+
+### The finding
+
+At the player's held condition — 41 kn, sea state 0, wave height 0.0 m, chop 100 %, golden
+hour — the flat sea carries **dense dark speckle**, reproducing their screenshot.
+
+`Ocean.ts` computes whitecap coverage from Monahan's law:
+
+```ts
+cover = min(1, 3.84e-6 * windSpeed^3.41 * 24)
+```
+
+**a function of wind alone.** At 41 kn that evaluates to 2.97 and clamps to **1.0** — a request
+for a hundred per cent whitecap coverage. `surface.ts` then applies its far-field substitute,
+`cover = max(cover, uFoamCover * (1.0 - foldLive))`, and on a flat sea there are no folds for
+`foldLive` to report, so the full coverage lands across the entire surface.
+
+Foam suppresses the water's specular — the coverage note in `surface.ts` says so explicitly —
+and at golden hour on a mirror-flat sea that specular *is* the brightness. So every fleck of
+foam renders as a **dark** speck rather than a white one. Whitecaps are broken wave crests;
+with a wave height of zero there is nothing breaking, however hard the wind blows.
+
+**This is a different mechanism from the cloud-shadow blotches of §107/§108** — it is the foam
+path, not the shadow path, and the fix is in the foam path. (The separation rests on the foam
+isolation and on the fix, *not* on the drifted "cloud cover 0" arm, which is void.)
+
+### Fix
+
+Gate the coverage on the wave height the spectrum is actually given (`Spectrum.ts` takes `hs`
+straight from it): a smoothstep from 0.06 m to 0.40 m. Unity by 0.40 m, which every real sea
+state clears, so the far-field substitute keeps working exactly as designed wherever there is
+a sea to break.
+
+### Validation, both arms pinned and asserted held
+
+| | uFoamCover | uFoamAmount | blotch | churn | depth |
+|---|---|---|---|---|---|
+| as shipped | 1 | 1 | 144.30 | 16.22 | −30.7 |
+| gated | **0** | 0.72 | **68.80** | **10.00** | **−23.6** |
+
+Blotch area **−52 %**, churn **−38 %**, residual depth −30.7 → −23.6, and visually the dark
+speckle is gone: a smooth mirror sea with the sun's glitter path.
+
+**Gale regression:** pinned 41 kn with sea state 6 and a 5 m wave height reads `uFoamCover 1,
+uFoamAmount 1` — bit-identical to as-shipped, as the arithmetic requires, since any
+`waveHeight ≥ 0.40` gives `breaking = 1.0` exactly. The gate cannot change a real sea.
+
+### Still open
+
+Pale blocky blobs remain on the flat mirror at this condition — pale, not dark, so not the
+reported defect, and not investigated. Mobile/iPad zoom not started. Boston still pending
+player validation.
