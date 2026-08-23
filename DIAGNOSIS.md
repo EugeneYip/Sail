@@ -8519,3 +8519,60 @@ Two options, both bounded, neither taken here:
 
 Issue 4A therefore stays open with its owner and cause identified. The generic primitive is
 **not** the defect: it is square-ended by construction and that remains deliberate.
+
+## 116. Issue 3 pre-push gate: PASSES on all three events. Stern residual diagnosed, not closed.
+
+### The gate
+
+Three events, each fired from a settled state at a high astern station, with the published
+shadow slice read back per frame for three frames before and 26 after.
+
+One instrument fault had to be caught first: the slice is **`RedFormat`**, one channel per
+texel, and the first run read it with a `width*height*4` buffer. Three quarters of that buffer
+is never filled, so it read back as zeros — giving a "minimum of 0" and "76 % of texels below
+0.06" on a map whose floor is 0.035. The tell was that the reported mean, 0.2233, is exactly
+0.853/4. A guard now aborts the run if the readback floor comes in under 0.03.
+
+| event | frame 0 meanAbsΔ | settles to | slice min, every frame | ghosting |
+|---|---|---|---|---|
+| cloud cover 0.45 → 0.85 | 0.481 | 0.0129 | **0.035** | none — monotone convergence, %<0.06 decays 55.7 → 11.9 |
+| time of day 11.0 → 19.2 | 0.307 | 0.0075 | **0.035** | none — %<0.06 decays 22.8 → 10.2 |
+| origin rebase +4000 m | 0.043 | 0.0013 | **0.035** | none — back to the pre-event steady state in one frame |
+
+- **No one-frame black flash anywhere.** The slice's minimum is 0.035 — its own floor — at
+  every frame of every event. It never goes below it.
+- **The rebase realigns exactly.** `uHistShift` reads **−0.1543** on the event frame, against
+  −4000/26000 = −0.153846. The disturbance is 0.043 for one frame and then the slice returns to
+  the same 0.0013 it had before the event, so the history was re-anchored rather than smeared
+  or thrown away.
+- The first rebase arm was invalid and was redone: shifting `world.origin` while holding the
+  camera at a fixed render position leaves `uShadowCentre` put, so the realignment path was
+  never entered. A real rebase moves every render-space position including the camera.
+
+**No flicker recurrence.** Blotch metric at the §108 repro state after each event settles:
+
+| | blotch | churn | depth |
+|---|---|---|---|
+| steady | 0.42 | 0.36 | −6.0 |
+| after weather jump | 2.00 | **0.00** | −6.8 |
+| after time jump | 0.00 | **0.00** | −5.2 |
+| after rebase | 0.00 | **0.00** | −4.6 |
+
+Against a pre-fix churn of ~70.5. Gate passes.
+
+### Stern residual: diagnosed as the unfloored band, minimal closure did NOT work
+
+From a steep astern-and-above station the sequence reads: after deck → the transverse bulwark
+from §hull → **open sea and wake foam** → transom exterior. So the residual is the first of the
+three candidates: **the deck still stops short.** `buildDecks` runs to `t1 = 0.992`, leaving
+~0.4 m of hull length unfloored, and the transom's aft rake widens that band into a
+see-through gap from above.
+
+Carrying `t1` to 1.0 was tried and **reverted**. It is not a clean closure: the band's
+water/foam pixel fraction went 19.14 % → 16.62 % at the steep station but 1.94 % → 2.29 % from
+directly overhead — the two views disagree in sign and both deltas sit inside the load-to-load
+heave variance. Visually the improvement is modest and ambiguous.
+
+A real closure wants a **counter surface bridging the deck's after edge to the transom head**,
+which is new stern geometry rather than a parameter change, and redesigning the stern again was
+out of scope. Left open with the cause named.

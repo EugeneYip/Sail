@@ -683,3 +683,31 @@ Pulling it inboard narrows the backstay slot right where the spanker boom sweeps
 is written so the drawn rig and the envelope cannot drift; changing this needs a spanker-clearance
 check across trim states. Alternative that avoids the envelope entirely: add the missing deadeye
 and chainplate at the existing foot (18 fittings, additive, wants its own visual pass).
+
+### Issue 3 pre-push gate PASSES. Stern residual diagnosed, closure attempt reverted.
+
+DIAGNOSIS §116.
+
+Gate: weather jump, time-of-day jump, origin rebase. Slice minimum is **0.035 — its own floor —
+at every frame of every event**, so no black flash anywhere. The rebase realigns exactly:
+uHistShift reads −0.1543 against −4000/26000 = −0.153846, the disturbance lasts one frame
+(0.043) and then returns to the same 0.0013 steady state, so the history is re-anchored rather
+than smeared. Blotch churn after each event: 0.00 / 0.00 / 0.00 against a pre-fix ~70.5.
+
+Two instrument faults caught on the way, both worth remembering. The slice is **RedFormat** —
+one channel — and reading it with a width*height*4 buffer leaves three quarters unfilled and
+reads as zeros; the tell was a reported mean of 0.2233, exactly 0.853/4. And the first rebase
+arm shifted world.origin while holding the camera at a fixed render position, which leaves
+uShadowCentre put and never enters the realignment path at all — a real rebase moves every
+render-space position, camera included.
+
+Stern residual: it is the **deck stopping short**. From steeply astern and above the sequence is
+deck → bulwark → open sea → transom exterior, so the ~0.4 m left unfloored by `t1 = 0.992`,
+widened by the transom's rake, is the gap. Carrying t1 to 1.0 was tried and **reverted** — the
+band's water fraction went 19.14 % → 16.62 % at one station but 1.94 % → 2.29 % from overhead,
+disagreeing in sign and inside heave variance. A clean closure needs a counter surface bridging
+the deck's after edge to the transom head, which is new geometry, not a parameter change.
+
+Housekeeping: three stray `* 2.ts` duplicates of Clouds/constants/cloudPasses appeared from a
+`git stash push`/`pop` cycle on exactly those paths. Verified byte-identical to the tracked
+files and deleted. Worth watching for after any stash-based before/after harness.
