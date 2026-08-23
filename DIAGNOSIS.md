@@ -8400,3 +8400,50 @@ Either carry the lid on to ~2.4–2.8 rad so it lies back against the side as a 
 does, or leave it hanging near-closed. Either removes the shelf. Which one is an appearance
 call for the owner, and the port-open logic that decides `p.open` should be looked at in the
 same pass.
+
+## 114. Issue 4B closed: gunport lids at 2.2 rad, and why the intermediate angle fails
+
+§113 identified the owner. This picks the angle, with a bounded sweep of 1.32 (as-was),
+1.9, 2.2 and 2.5 at one ship state across broadside, both stern quarters, bow quarter,
+elevated chase, and a close looking-down station added because that is the view a shelf is
+most exposed in.
+
+### The trap in the middle of the range
+
+The lid is hinged at the port head and hangs along local −Y at 0 rad, so its **face normal
+starts horizontal and points straight up at 90°**. How much it reads as a shelf therefore
+goes as `sin(ang)`, which is **symmetric about 90°**:
+
+| ang | degrees | vertical component of the lid's face normal |
+|---|---|---|
+| 1.32 (as-was) | 75.6 | **0.969** |
+| 1.9 | 108.9 | **0.946** |
+| 2.2 | 126.1 | 0.808 |
+| 2.5 | 143.2 | 0.599 |
+
+**1.9 rad is essentially as shelf-like as 1.32.** It looks better only from a camera at deck
+level, because the plate tilts away from the eye; from anything elevated it still presents
+almost its whole face. The captures agree: at the close looking-down station 1.32 shows bright
+horizontal top faces, 1.9 still shows visible plates, and only 2.2 folds them back against the
+side. At 2.5 they stop being shelves but start reading as large dark panels on the planking.
+
+Had the sweep been judged from the level broadside view alone, 1.9 would have looked like a
+clean pass. It is not one.
+
+### Chosen: 2.2 rad
+
+Smallest of the three candidates that actually removes the silhouette. Against the checklist:
+
+- **no longer a blade/shelf** — folded back against the side from above and at eye level;
+- **still reads as an open lid** — visible above each port on both rows;
+- **no hull penetration** — the rotation is outboard, away from the hull;
+- **no z-fighting** — 2.2 rad leaves the lid 54° off the ship's side, so nothing is coplanar,
+  which a lid carried to 180° would risk;
+- **not floating** — it turns about the hinge, and the hinge straps are drawn there;
+- **port opening readable, gun not obscured** — the lid sits above the aperture, guns visible.
+
+Geometry and thickness are untouched: angle alone was sufficient, as required.
+
+The section's existing note records that the **sign** of this rotation was corrected once,
+because `−ang` swung the lids inboard and left the ports unobstructed. The **magnitude** had
+never been reviewed after that.

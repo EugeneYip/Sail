@@ -641,3 +641,23 @@ actually sits. The section's comment records that the SIGN of this rotation was 
 Issue 4A is untouched and unchanged: rope ribbons are square-ended by construction and that
 stays deliberate. **The blades are not ropes** — so both halves of Issue 4 are now attributed
 and neither calls for a global rope taper.
+
+### Issue 4B CLOSED: gunport lids 1.32 -> 2.2 rad
+
+DIAGNOSIS §114. Bounded sweep of 1.32 / 1.9 / 2.2 / 2.5 at one ship state, five views plus a
+close looking-down station.
+
+The useful finding is why the middle candidate fails. The lid's face normal starts horizontal
+and points straight UP at 90 deg, so shelf-ness goes as sin(ang) and is **symmetric about
+90 deg**: 1.32 gives 0.969 and 1.9 gives 0.946 — practically identical. 1.9 only looks better
+from a deck-level camera because the plate tilts away; from anything elevated it still shows
+almost its whole face, and the looking-down captures confirm it. 2.2 (0.808) folds the lids
+back against the side; 2.5 (0.599) removes the shelf but starts reading as large dark panels
+on the planking. So 2.2 — the smallest that actually works.
+
+Judged from the level broadside alone, 1.9 would have passed. It does not. Worth remembering
+for any future "rotate it a bit further" fix: check the quantity that governs the silhouette,
+not the one view where it happens to hide.
+
+Angle only; lid geometry and thickness untouched. No penetration, and 54 deg of clearance off
+the topsides so no z-fighting.

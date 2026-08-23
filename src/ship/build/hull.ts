@@ -461,7 +461,34 @@ function buildPortLiner(
 
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
-  const ang = p.open ? 1.32 : 0.03;
+  /*
+   * 2.2 rad, and the number matters more than it looks.
+   *
+   * This was 1.32 rad. The lid is a 7 cm plate hinged at the port head, hanging
+   * along local -Y at 0, so 1.32 rad is 75.6 deg — fourteen degrees short of
+   * horizontal. Every open port therefore carried a plate standing straight out
+   * of the topsides like a shelf, and a row of them down the side is the "flat
+   * blades" in the defect reports.
+   *
+   * The trap is that the lid's face normal starts horizontal and points straight
+   * UP at 90 deg, so how much it reads as a shelf goes as sin(ang) — symmetric
+   * about 90 deg. Measured that way, 1.9 rad is 0.946 against 1.32's 0.969: it
+   * looks better only from a camera at deck level, because the plate tilts away
+   * from the eye, and from anything elevated it still shows nearly its whole
+   * face. Captured from a close looking-down station, 1.9 still had visible
+   * plates; 2.2 (0.808) folds them back against the side and 2.5 (0.599) turns
+   * them into large dark panels on the planking. 2.2 is the smallest of the three
+   * that actually removes the silhouette.
+   *
+   * It also stays clear geometrically: 2.2 rad leaves the lid 54 deg off the
+   * ship's side, so it cannot z-fight the topsides the way a lid carried all the
+   * way to 180 deg would, and rotating outboard moves it away from the hull
+   * rather than into it.
+   *
+   * The SIGN of this rotation was corrected once before, for a different reason —
+   * see the note below. The magnitude had never been reviewed.
+   */
+  const ang = p.open ? 2.2 : 0.03;
   /**
    * Hinge axis is horizontal, along the hull, and the SIGN matters.
    *
