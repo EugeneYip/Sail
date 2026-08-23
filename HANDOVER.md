@@ -132,8 +132,9 @@ this box** (see `DIAGNOSIS.md` §41 — only *negative* lead steps).
 - `node scripts/capture.mjs` — the only instrument for material shaders (zero
   `ERROR:`/`Material Name:` in console) and the only source of frames. **Its p25
   varies 13–14 ms run-to-run on byte-identical code**, so a single-run timing
-  difference under ~14 ms means nothing; use a paired multi-sample run or
-  `ext.post.profile()`. For pixel statistics prefer **`--scene shadow`**, which runs
+  difference under ~14 ms means nothing; use a paired multi-sample run. **Not
+  `ext.post.profile()`** — see "Instruments that lie" below, and `AGENTS.md` #5,
+  which forbids it. This line used to recommend it; that was wrong. For pixel statistics prefer **`--scene shadow`**, which runs
   at cloudCover 0 and is six times more repeatable (p10 spread 1.4 sRGB vs 9.0)
   because the cloud field no longer advects between runs — drifting cloud shadow has
   invalidated two measurements here.

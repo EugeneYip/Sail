@@ -252,7 +252,10 @@ storm fog helm masthead orbit waterline island`.
 
 **Grade yourself against `RUBRIC.md`.** It has eight weighted axes and a list of
 automatic failures (water tiling, LOD popping, sky banding, TAA ghosting, a
-horizon that reads as a hard seam, placeholder geometry, sub-60fps). Most frames
+horizon that reads as a hard seam, placeholder geometry). **Performance is NOT one
+of them** — `RUBRIC.md` removed it deliberately, because at the standing cost model
+a sub-60 criterion caps every frame at 4 and destroys the exercise. An earlier
+revision of this list said `sub-60fps`; that was wrong. Most frames
 honestly score 4-6; reserve 8+ for a frame a stranger could not distinguish from
 a commercial release.
 

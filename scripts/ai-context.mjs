@@ -139,7 +139,9 @@ if (existsSync('notes')) {
 h1('GATES');
 console.log('  npm run typecheck      GLSL lint + tsc');
 console.log('  npm run check-shaders  compiles/links every program on a real driver');
-console.log('  npm run preflight      publishability: no scratch files, no downloaded assets');
+console.log('  npm run preflight      publishability: scratch files, secrets, size, docs, notes');
+console.log('                         (it does NOT detect a downloaded asset as downloaded --');
+console.log('                          that rule is AGENTS.md #7 plus review)');
 console.log('  npm run build          tsc --noEmit && vite build');
 console.log('  node scripts/physics-test.mjs --quick');
 console.log('\n  DO NOT PUSH unless the owner asks — a push to main deploys to players.\n');

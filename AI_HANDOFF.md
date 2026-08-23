@@ -218,10 +218,13 @@ harness* is the binding list; these are the ones that cost the most.
 - **Wall-clock fps under GPU contention is noise.** Load average is a CPU run-queue metric and
   cannot see a rival renderer. If a capture prints `!! rival renderer(s) — TIMINGS INVALID`,
   believe it — state readouts are still fine, timings are not.
-- **Sub-60 fps is the engine's standing state, not a regression signal.** `RUBRIC.md` lists
-  sub-60 as an automatic failure and `AGENTS.md` records the target as currently unmet; taken
-  literally the rubric fails every frame. Judge a *change* against a measured baseline, not
-  against 60.
+- **Sub-60 fps is the engine's standing state, not a regression signal.** `AGENTS.md`
+  non-negotiable #5 records the target as currently unmet and gives the measured model,
+  `cost = 9.44 ms + 13.83 ms/Mpx`, so 1600x900 at 1:1 costs ~29 ms by design. Judge a *change*
+  against a measured baseline at the same pixel count, and always quote the pixel count and
+  whether it is CSS or backing store. `RUBRIC.md` **deliberately excludes** performance from
+  its automatic failures and says why — beware: `AGENTS.md` "Verifying your work" still lists
+  `sub-60fps` among them, which is wrong; `RUBRIC.md` is the authority on its own contents.
 
 ## 10. What to work on next
 
