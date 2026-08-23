@@ -8576,3 +8576,101 @@ heave variance. Visually the improvement is modest and ambiguous.
 A real closure wants a **counter surface bridging the deck's after edge to the transom head**,
 which is new stern geometry rather than a parameter change, and redesigning the stern again was
 out of scope. Left open with the cause named.
+
+## 117. Fold of `notes/stern-and-open-defects.md` — the four findings that were not yet here
+
+The post-deploy note is folded and deleted. Most of it is already §104–§116; these four are
+the parts that existed only in the note. Recorded with their retractions intact — two of
+them are failed experiments and are written as failures.
+
+### A. Issue 1's actual root cause: no taffrail, and the deck stopped short
+
+The stern was never transparent, never culled, never a shading artefact. It was **missing
+structure**. `hull.ts` built the bulwark for `iStart..iEnd` with `iEnd = stations.length - 1`,
+so it stopped at the last station while the transom sits *aft* of that station, bridged only
+by the counter band — the deck's after edge was simply unclosed. And `taffrail` appeared in
+`hull.ts` only in comments: **no taffrail geometry was ever built.**
+
+Confirmed from two independent angles: at a 34 m chase the after deck read as an open tray
+with a dark void at the port quarter; from directly above the poop the quarterdeck planking
+ended at a bare squared edge, and beyond it you looked down onto the *inside face of the
+transom* with the stern window openings visible from within the hull.
+
+Refuted along the way, each with its own control: a hole or reversed winding (FrontSide and
+DoubleSide identical); the ocean or vfx drawing over the hull (the "veil" survived hiding
+both, and was my own emissive bloom); wrong normals on the counter (the normal visualisation
+is smooth and continuous); and bloom (1–3 codes at the station, `base2` return 0.50).
+
+Fixed by the transverse bulwark and taffrail cap at the after station plus carrying the deck
+grid from `t1 = 0.968` to `0.992`. Inboard-visible window frames went from about twenty to
+about six. **Status, then and now: major stern structural defect fixed; residual
+aft-interior exposure remains open** — and §116 identifies that residual as the ~0.4 m the
+deck still leaves unfloored.
+
+### B. The physics assertion: one retraction, and the conclusion to keep
+
+I claimed a post-change peak of 15.87 kn was "inside" a 13.90–15.27 kn parent spread.
+**That was wrong — 15.87 is above 15.27**, and two parent runs are not a distribution
+anyway. The question was settled by dependency analysis instead:
+
+- nothing in `src/physics/` imports `src/ship/build/*`;
+- `hull.ts` is imported by exactly one module, `Ship.ts`, and exports only `Bins`,
+  `createBins`, `buildHull`, `HullResult`, `CHANNELS` and `stanchion` — nothing physics reads;
+- it writes nothing to `world.*`, `world.ext.*` or any uniform: pure geometry into mesh bins;
+- `src/physics/Hull.ts` takes every dimension from `./constants`, and its own docstring says
+  so precisely because `world.ext.ship.hullPoints` is "a bare point cloud … useless for a
+  pressure integral".
+
+**So there is no code path by which a visual hull-geometry change can reach the state that
+assertion measures.** That is the supportable claim, and it is the one to keep.
+
+What must *not* be claimed is that the assertion is healthy. It fails on HEAD 3 of 3 and on
+the unmodified parent 1 of 2, and `bowSlam is scaled for spray and shake` also flipped
+between runs on one tree. `src/physics/index.ts` already documents why: the gale case sails
+one frozen wave snapshot and which snapshot you get depends on how long the preceding tests
+took. **Pre-existing, unstable, unexplained, and out of scope** — fixing it needs the sim
+clock made reachable from a test, which that file says wants a small addition to `src/ocean`.
+Not to be re-investigated.
+
+### C. Issue 3's early metric work, all of it superseded
+
+Three successive instruments were built and all three were discarded. Kept because the
+failures are the reason the eventual answer was trusted.
+
+1. The **median-relative dark-block metric** was retired as primary: it manufactured dark
+   blocks after a global brightening.
+2. A **supersampled reference** replaced it, and initially read as a clean answer — at block
+   scale the reference differed from the normal render by 9× the cross-load floor
+   (block RMS 2.800 vs 0.297, 13/1210 blocks past −6 vs 0/1210), negative in sign, i.e.
+   "supersampling removes the blotch". **Retracted**: that reference was built in a state
+   that contained no defect at all.
+3. Take three, at the same station and cover, gave **normal 1.94 dark blocks against
+   supersampled 2.69** — the supersampled arm was *worse*, and the normal arm barely
+   reproduced against 7.12 / 8.56 / 9.31 / 8.50 measured earlier at the same settings.
+
+**Severity therefore ranged from ~1.9 to ~9.3 dark blocks between loads** — as large as any
+effect being measured — so no two-arm comparison at that condition could resolve anything.
+That instability, not the hypothesis, is what blocked Issue 3 for two attempts.
+
+What survived from that period, and why: §104's exact zeros. In runs where base measured 7–9
+dark blocks, two independent ablations drove the metric to **exactly 0.00 with 0.00 churn**,
+and an exact zero cannot come from load-to-load luck against a base of 7–9.
+
+All of it is superseded by §107 and §108: the owner was the cloud shadow map, the mechanism
+was a 14-sample point estimate with a static dither and no temporal filter, and the fix was
+to give the slice the temporal resolve the rest of the cloud system already had. The
+"insufficient angular filtering" wording from this period is **withdrawn** — §108 measured
+the map as magnified 60–120×, never minified.
+
+### D. Release-open defects, carried forward deliberately
+
+Not closed, and not to be described as closed:
+
+- **Issue 4A** — backstay and shroud-lower rope ends (§115); cause is the backstay foot's
+  placement, and moving it is coupled to `fitRigEnvelope` and spanker clearance.
+- **Stern residual** — the deck/counter gap (§116); `t1 = 1.0` failed acceptance and was reverted.
+- **wgeom `tube`/`cyl`/`rope` normals** — a bounded cross-system lead only (§110); no global
+  correction authorised, and the vessel/buoy/creature consumers are unexamined.
+- **Far-sea dot-lattice aliasing** — recorded as probably separate from Issue 3, never isolated.
+- **Boston façade and city quality** — blockout-grade by intent; topology engineering-accepted,
+  **deployed/player acceptance pending**.
