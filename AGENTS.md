@@ -236,7 +236,7 @@ deliberately **no canonical tag** until the deploy URL is known.
 Dev server is already running on <http://127.0.0.1:5178>. It hot-reloads.
 
 ```bash
-cd tallship
+cd leeward
 npm run typecheck
 node scripts/capture.mjs --out shots/<yourname> --scene all --settle 6
 ```

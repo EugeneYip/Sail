@@ -11,7 +11,7 @@ repeat the project's history — it tells you what is true now and where to look
 | **AI_HANDOFF.md** (this file) | current state, onboarding, what to do next |
 | `AGENTS.md` | permanent engineering rules and the build contract — **binding** |
 | `DIAGNOSIS.md` | forensic history: why decisions were made, failed experiments, retractions |
-| `HANDOVER.md` | project narrative and design intent. **Its "State as of 2026-08-20" section is superseded by this file.** |
+| `HANDOVER.md` | project narrative and design intent. **Superseded where it conflicts with `AGENTS.md` or this file** — notably its "State as of 2026-08-20" section, and its suggestion to price changes with `ext.post.profile()`, which `AGENTS.md` now forbids (see §9). |
 | `RUBRIC.md` | how visual quality is judged |
 | `notes/` | scratch space for concurrent agents; see `notes/README.md` |
 | source + `scripts/` | the final behavioural authority. When docs and code disagree, code wins. |
@@ -25,7 +25,10 @@ Constitution (1797 frigate) on an open ocean. Three.js + TypeScript + Vite, WebG
 
 **Everything is generated in code**: hull, rigging, sails, ocean, sky, clouds, textures,
 audio. **No downloaded assets of any kind** — no textures, models, HDRIs or audio files.
-That constraint is deliberate and non-negotiable; `npm run preflight` enforces it.
+That constraint is deliberate and non-negotiable. Note what enforces it: `AGENTS.md`
+non-negotiable #7 and review — **not** `npm run preflight`, which gates scratch files,
+plausible secrets, file size, docs, HTML metadata, the Vite base and notes, but would not
+recognise a small downloaded texture as downloaded. Do not rely on the tooling to catch it.
 
 Repository: `https://github.com/EugeneYip/Sail`
 
@@ -40,21 +43,26 @@ Repository: `https://github.com/EugeneYip/Sail`
 > **Pushing deploys to players.** Do not push unless the owner asks. The owner pushes
 > manually.
 
-## 3. Authoritative checkpoint (verify before trusting)
+## 3. Authoritative checkpoint — derive it, do not read it here
 
-At the time of writing:
+**Any commit hash written into this file is stale the moment the next commit lands.** A
+previous version of this section hardcoded one and was already wrong by the time the first
+cold reader arrived. So there is no table here. Run:
 
-| | |
-|---|---|
-| local `main` HEAD | `48a6c57` |
-| `origin/main` (= **what is deployed**) | `a6fd927` |
-| relationship | local is **3 ahead**, 0 behind |
-| tree | clean except untracked `.claude/` |
+```bash
+git fetch origin && node scripts/ai-context.mjs
+```
 
-**So the deployed build does NOT contain the three most recent fix commits.** Never assume
-the player is testing your latest work — check `git rev-list --left-right --count
-origin/main...HEAD` first. Misreading this once caused a whole round of wrong conclusions
-(see `DIAGNOSIS.md` §118 opening).
+That prints the live HEAD, the deployed commit (`origin/main`), the ahead/behind count, and
+warns you outright when local work is not deployed.
+
+The two facts that do not change:
+
+- **`origin/main` is what players are running.** Local commits are not deployed until pushed.
+- **Never assume the player is testing your latest work.** Check the ahead/behind count before
+  interpreting any bug report. Misreading this once caused a whole round of wrong conclusions
+  (`DIAGNOSIS.md` §118 opening) — a report was attributed to unfixed code that had in fact
+  already been fixed, and vice versa.
 
 ## 4. First-start procedure
 
@@ -204,6 +212,16 @@ harness* is the binding list; these are the ones that cost the most.
   sits within ±5 m of the surface either way, because moored hulls float there (§110).
 - Class names are **minified in production builds** — runtime scans by
   `constructor.name` work in dev and silently find nothing in `dist` (§116).
+- **`world.ext.post.profile()` is not frame cost.** It leans on `gl.finish()`, which does not
+  block under ANGLE-on-Metal, so it reports CPU submission: its passes sum to ~2.3–2.6 ms
+  against frames costing 25–56 ms. `HANDOVER.md` still recommends it; `AGENTS.md` forbids it.
+- **Wall-clock fps under GPU contention is noise.** Load average is a CPU run-queue metric and
+  cannot see a rival renderer. If a capture prints `!! rival renderer(s) — TIMINGS INVALID`,
+  believe it — state readouts are still fine, timings are not.
+- **Sub-60 fps is the engine's standing state, not a regression signal.** `RUBRIC.md` lists
+  sub-60 as an automatic failure and `AGENTS.md` records the target as currently unmet; taken
+  literally the rubric fails every frame. Judge a *change* against a measured baseline, not
+  against 60.
 
 ## 10. What to work on next
 
