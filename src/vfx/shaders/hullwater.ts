@@ -351,8 +351,41 @@ void main(){
   // gates how much of it there can be. Peak is held at 0.95: a bow wave is
   // nearly opaque but never a perfect occluder, and the last 5% of the sea
   // showing through is what keeps it looking wet.
-  float a = min(cover * (0.34 + 0.66 * bubbles) * (0.30 + 0.88 * vThick)
-                * edge * uOpacity * 1.75, 0.95);
+  float drive = cover * (0.34 + 0.66 * bubbles) * (0.30 + 0.88 * vThick)
+              * edge * uOpacity * 1.75;
+  /*
+   * A SOFT KNEE, NOT A HARD CLAMP — and this is what ruled the transom.
+   *
+   * This was 'min(drive, 0.95)'. The 1.75 gain carries the product past the cap
+   * over the forward half of the transom pad, so inside that region alpha is
+   * pinned flat at 0.95 and the pad's SILHOUETTE is the cap's iso-contour rather
+   * than its fade. 'edge' varies almost entirely with vT, so that contour is a
+   * line of constant distance astern: measured at vT = 0.50, i.e. 4.75 m behind
+   * the transom, with 8-14 % of pad fragments sitting exactly on the cap. That
+   * line is the straight partition between the stern and the near wake.
+   *
+   * The pad's own fade was never the problem. Measured at its trailing edge,
+   * 'edge' is 3e-4 and alpha is 2e-4 — it closes correctly. Measured on a
+   * pre-tonemap readback of the pad's alpha, at the frozen close-astern station:
+   *
+   *   arm                        % at cap   plateau edge   mean alpha   max |da/dvT|
+   *   as-was                         8.05   vT 0.50             0.263          1.980
+   *   thickness floor able to 0      8.33   vT 0.50 (same)      0.210          2.253
+   *   soft knee (this)               0.00   none                0.272          1.700
+   *
+   * So gating '0.30 + 0.88 * vThick' so it can reach zero does NOT help: the flat
+   * top and its aft boundary stay exactly where they were. The clamp is the cause.
+   * A plain hyperbola over the whole range removes the plateau but halves the
+   * pad's opacity to 0.158, which thins the whitewater the pad exists to carry.
+   * The knee leaves everything below 0.55 exactly as it was and only softens above
+   * it, so the mass survives and no region is ever flat.
+   *
+   * Ceiling is unchanged in spirit: the knee asymptotes to 0.55 + 0.40 = 0.95 and
+   * never reaches it, which is the same "nearly opaque but never a perfect
+   * occluder" the hard cap was there to express.
+   */
+  float over = max(drive - 0.55, 0.0);
+  float a = min(drive, 0.55) + 0.40 * over / (0.40 + over);
   if (a < 0.006) discard;
 
   float dist = length(uCameraPos - vWorld);

@@ -8256,3 +8256,99 @@ The alpha line's own comment says `vThick * cover` "made vThick the sole author 
 silhouette, and vThick is linear across a triangle — a straight edge", and moved authorship
 to the bubble texture to fix it. The gain-and-cap appears to have re-created a flat-topped
 silhouette by a different route.
+
+## 112. Issue 2 closed: the ruled partition was the transom pad's alpha CLAMP, not its fade
+
+§111's ownership stands. §111's mechanism guess was wrong and is withdrawn: it proposed the
+thickness floor or the clamp, and measurement says the floor is not it.
+
+### The instrument that finally worked
+
+Three previous attempts encoded scalars in colour and read them from the composited
+framebuffer, where AgX and the look LUT corrupted them. This one reads the post stack's own
+**`post/scene` target** — `rgba16f`, `NoColorSpace`, rendered before exposure, AgX, the LUT,
+bloom and DoF — with the sheet switched to `NoBlending` for the run and every pad fragment
+stamping **alpha = 42** as a sentinel, so pad pixels are selected exactly instead of by hue.
+
+Validated before use, and it round-trips exactly:
+
+| written | read back (min / p50 / p99 / max) |
+|---|---|
+| 0.0 | 0.000000 / 0.000000 / 0.000000 / 0.000000 |
+| 1.0 | 1.000000 / 1.000000 / 1.000000 / 1.000000 |
+| 0.5 | 0.500000 / 0.500000 / 0.500000 / 0.500000 |
+
+Two further traps had to be closed to get there. **Particles blend additively over the pad**,
+which both lifted the scalar (a "1.0" arm read up to 1.0635) and shifted the alpha sentinel
+enough to change the selected pixel count between arms; they are held off for the run. And
+**separate page loads leave the ship in different states**, so scalars captured in different
+loads cannot be joined per pixel — the material's `fragmentShader` is therefore swapped
+in-page between readbacks, giving 30,885–30,908 pad pixels across four variants of the same
+frozen frame.
+
+### The pad's fade was never the problem
+
+Scalars across the pad, one frozen load, pixel-joined. `uLwl = 47.5`, so the pad is 9.50 m long.
+
+| vT | m aft | cover | bubbles | vThick | 0.30+0.88·vThick | edge | postGain | **alpha** | % at cap |
+|---|---|---|---|---|---|---|---|---|---|
+| 0.0–0.1 | 0.48 | 1.000 | 0.996 | 0.341 | 0.600 | 0.509 | 0.546 | 0.541 | 8.9 |
+| 0.3–0.4 | 3.33 | 0.935 | 0.996 | 0.461 | 0.706 | 0.682 | 0.977 | 0.637 | **52.4** |
+| 0.4–0.5 | 4.28 | 0.917 | 0.995 | 0.334 | 0.594 | 0.705 | 0.815 | 0.650 | **49.6** |
+| 0.6–0.7 | 6.18 | 0.938 | 0.995 | 0.121 | 0.407 | 0.418 | 0.308 | 0.308 | 0.0 |
+| 0.9–1.0 | 9.03 | 1.000 | 0.995 | 0.056 | 0.350 | 0.018 | 0.011 | 0.011 | 0.0 |
+
+At the trailing boundary (top 2 % of vT): **`edge` = 0.0003 and alpha = 0.0002.** The fade
+closes correctly and the geometry does not end with opacity on it. What the table shows
+instead is a **saturated plateau in the middle of the pad** — around half of all fragments
+between 3.3 m and 4.3 m astern sit exactly on the 0.95 cap.
+
+### The two mandated arms
+
+Same instrument, one frozen load each.
+
+| arm | % at cap | plateau aft edge | mean alpha | max &#124;dα/dvT&#124; |
+|---|---|---|---|---|
+| as-was | 14.17 | **vT 0.50 (4.75 m)** | 0.299 | 2.155 |
+| **A. floor** — `0.30 + 0.88·vThick` gated so it can reach 0 | 8.33 | **vT 0.50 — unchanged** | 0.210 | 2.253 |
+| **B. saturation** — clamp replaced by a plain hyperbola | **0.00** | **none** | 0.158 | **1.272** |
+
+**Classification: saturation-dominant.** Letting the thickness floor reach zero leaves the flat
+top and its aft boundary exactly where they were and does not reduce the gradient. Removing
+the clamp eliminates the plateau outright.
+
+### The fix, and why not the plain hyperbola
+
+The plain hyperbola halves the pad's opacity (0.299 → 0.158), which thins the whitewater the
+pad exists to carry. A soft knee keeps everything below 0.55 untouched and softens only above
+it, asymptoting to the same 0.95 ceiling the hard cap expressed:
+
+```glsl
+float over = max(drive - 0.55, 0.0);
+float a = min(drive, 0.55) + 0.40 * over / (0.40 + over);
+```
+
+| | % at cap | plateau | mean alpha | alpha at trailing edge | max &#124;dα/dvT&#124; |
+|---|---|---|---|---|---|
+| as-was | 8.05 | vT 0.50 | 0.263 | 0.00021 | 1.980 |
+| **knee** | **0.00** | **none** | **0.272** | 0.00024 | **1.700** |
+
+Mass preserved (slightly up), no new gap at the trailing edge, no region flat anywhere.
+
+### Acceptance, and one instrument I will not count
+
+Visual, at production settings with TAA, bloom, grain and exposure on: straight astern, both
+stern quarters, elevated chase, 15.1–15.7 kn and a slow calm arm, plus **bow and beam
+stations** because the alpha line is shared with the bow/quarter sheet. The abrupt
+termination astern is gone and the plume grades into the speckled wake; the pad still
+connects hull to wake with no gap; the bow wave and quarter wave are unchanged and still
+read as water rather than a slab.
+
+I also ran a screen-space "maximum coherent row step" metric over six station/condition
+pairs. It moved **both ways** (+45 % at one station, −22 % at another, +11 % in the mean) and
+**is not counted as evidence**: it is the same fresh-load brightness measurement already
+known to be swamped by wake-state variance, and I re-created it by accident. The valid
+acceptance is the in-load pre-tonemap instrument above plus inspection.
+
+`surface.ts` is untouched, so the P2 ocean-foam fix and open-sea foam cannot have regressed —
+a structural guarantee rather than a measurement.

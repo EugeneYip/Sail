@@ -592,3 +592,33 @@ framebuffer, and AgX plus the look LUT wrecked all three. Same trap as the old I
 Rule for next time: **never read numeric fields out of a tonemapped framebuffer** — sample a
 pre-tonemap target or write a dedicated debug target. No fix landed, because the two
 candidates imply different fixes and the brief requires closure first.
+
+### Issue 2 CLOSED: the ruled partition was the transom pad's alpha CLAMP
+
+DIAGNOSIS §112. §111 had the owner right and the mechanism wrong.
+
+The instrument that worked reads the post stack's own `post/scene` target — rgba16f,
+NoColorSpace, before exposure/AgX/LUT/bloom — with the sheet on NoBlending and alpha = 42 as
+a sentinel. It round-trips 0.0, 1.0 and 0.5 **exactly**. Two traps had to be closed first:
+particles blend additively over the pad (they lifted a "1.0" arm to 1.0635 and moved the
+sentinel), and separate page loads leave the ship in different states so scalars from
+different loads are not pixel-joinable — the fragmentShader is swapped in-page instead.
+
+**The pad's fade was fine all along.** At the trailing boundary `edge` = 0.0003 and alpha =
+0.0002. What the scalars actually showed is a **saturated plateau in the MIDDLE of the pad**:
+~50 % of fragments between 3.3 m and 4.3 m astern sitting exactly on the 0.95 cap. The
+visible ruled line is the cap's iso-contour, and since `edge` varies almost only with aft
+distance, that contour is a line of constant distance astern.
+
+Two arms settled it: gating the thickness floor so it can reach zero left the plateau and its
+aft boundary *exactly* where they were (vT 0.50, gradient slightly worse); removing the clamp
+eliminated the plateau entirely. **Saturation-dominant.** Fix is a soft knee — below 0.55
+untouched, above it asymptotes to the same 0.95 — because a plain hyperbola halved the pad's
+opacity. Result: % at cap 8.05 → 0.00, plateau gone, mean alpha 0.263 → 0.272 (mass kept),
+trailing-edge alpha still ~2e-4 (no new gap).
+
+One honest note: I also ran a screen-space "coherent row step" metric across six views and it
+moved both ways (+45 %, −22 %). That is the fresh-load brightness measurement already known to
+be swamped by wake-state variance — I re-created a known-bad instrument and am not counting it.
+Acceptance rests on the in-load pre-tonemap scalars plus inspection, including bow and beam
+stations since the alpha line is shared with the bow sheet.
