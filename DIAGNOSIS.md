@@ -8447,3 +8447,75 @@ Geometry and thickness are untouched: angle alone was sufficient, as required.
 The section's existing note records that the **sign** of this rotation was corrected once,
 because `−ang` swung the lids inboard and left the ports unobstructed. The **magnitude** had
 never been reviewed after that.
+
+## 115. Issue 4A: the exposed rope ends are the backstay feet, and the cause is placement
+
+Classified, not fixed, and the reason for not fixing it is specific.
+
+### Instrument
+
+The ribbon's along-length parameter `s` is `position.x`, so a temporary varying carries it
+into the fragment and everything with `0.06 < s < 0.94` discards. Every mark left in the frame
+is then a rope END: ends buried in a fitting are hidden by depth, exposed ones show. Families
+are isolated one at a time by zeroing `iParam.y` (the radius) on every other instance — the
+technique `rigging.ts` already documents at its own line 45.
+
+Counting a vivid magenta stub is a presence count, not a scalar read, so the composited
+framebuffer is acceptable here; §112's rule about not reading *values* out of it still stands.
+
+### Visible end pixels by family, close stern station, 960 instances over 29 families
+
+| family | visible end px | share |
+|---|---|---|
+| **backstay** | **2747** | **55 %** |
+| **shroud-lower** | **812** | **16 %** |
+| spanker-sheet | 338 | 7 % |
+| topping-lift | 221 | 4 % |
+| brace | 213 | 4 % |
+| vang / lift / yard-footrope | 141 / 140 / 115 | 8 % |
+| the remaining 22 families | ≤ 57 each | 10 % |
+
+So this is concentrated, not diffuse: two families carry 71 % of it, and everything below
+~140 px is sub-visible at any normal range. **A global rope taper would be the wrong fix** —
+it would change 29 families to address two.
+
+### Classification
+
+**backstay — genuinely exposed, and it is a placement bug, not a primitive one.**
+`rigEnvelope.ts` sets the foot at
+
+```ts
+bot: new THREE.Vector3(st.widthAt(sheerY(t) - 0.85) + 0.72, sheerY(t) - 0.5, z)
+```
+
+**0.72 m outboard of the planking**, half a metre below the sheer — and because the hull tucks
+in above that reference height, the real standoff is more than 0.72 m. The rope therefore ends
+in mid-air off the ship's side with nothing to bury the square cut. The captures show both
+halves of it: feet stopping clear above the rail, and feet landing on the topsides with a
+visible square cut and no chainplate under them. The 0.72 m mirrors the channels' 0.92 m
+projection, but backstays set up *abaft* the channels and `CHANNELS` only covers the three
+mast stations, so there is nothing out there to land on.
+
+**shroud-lower — should be hidden inside its fitting.** These land on the deadeyes, and a
+`deadeye` family exists, so the fitting is modelled; the ends being visible at all means they
+stop short of or protrude through it.
+
+### Why no fix landed
+
+Moving the backstay foot is not a local change. `fitRigEnvelope` builds its slots from
+`sets = [g.lower, g.topmast, g.tg, g.backstay]`, so **the foot is a term in the
+sail-clearance envelope**. Bringing it inboard by ~0.78 m narrows the backstay slot near the
+sheer, which is where the spanker boom sweeps — it would let the sail closer to the very stay
+the envelope exists to protect. `rigEnvelope.ts` is explicitly written so the drawn rigging and
+the envelope cannot drift apart; changing one end of that contract needs a spanker-clearance
+verification across trim states, which is its own pass.
+
+Two options, both bounded, neither taken here:
+
+1. **Land the foot on the ship's side** — correct, and requires the spanker-clearance pass.
+2. **Add the missing fitting** — a deadeye and chainplate at the existing foot, drawn from the
+   same `backstayTable` data, burying the cut without touching any envelope term. Additive and
+   envelope-safe, but it is 18 new fittings and wants its own visual check.
+
+Issue 4A therefore stays open with its owner and cause identified. The generic primitive is
+**not** the defect: it is square-ended by construction and that remains deliberate.

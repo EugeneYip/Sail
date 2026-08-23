@@ -661,3 +661,25 @@ not the one view where it happens to hide.
 
 Angle only; lid geometry and thickness untouched. No penetration, and 54 deg of clearance off
 the topsides so no z-fighting.
+
+### Issue 4A: exposed ends are the BACKSTAY FEET. Placement, not the primitive. Not fixed.
+
+DIAGNOSIS §115. Instrument: carry the ribbon's `s` into the fragment, discard everything but
+the first/last 6 %, isolate families by zeroing `iParam.y` on the others (the technique
+rigging.ts already documents). Every visible mark is then a rope end.
+
+Concentrated, not diffuse — of 960 instances across 29 families, **backstay 2747 px (55 %)** and
+**shroud-lower 812 px (16 %)** carry 71 % of all visible end pixels; everything below ~140 px is
+sub-visible. A global taper would change 29 families to fix two, so it stays off the table.
+
+Cause for backstay is placement: `bot` is set at `widthAt(sheerY - 0.85) + 0.72`, i.e. **0.72 m
+outboard of the planking** (more, because the hull tucks in above that reference), so the rope
+ends in mid-air with nothing to bury the cut. The 0.72 mirrors the channels' projection, but
+backstays set up abaft the channels and CHANNELS only covers the three mast stations.
+
+**Not fixed, and the reason is a real coupling**: `fitRigEnvelope` builds its slots from
+`[g.lower, g.topmast, g.tg, g.backstay]`, so the foot is a term in the SAIL-CLEARANCE envelope.
+Pulling it inboard narrows the backstay slot right where the spanker boom sweeps. rigEnvelope.ts
+is written so the drawn rig and the envelope cannot drift; changing this needs a spanker-clearance
+check across trim states. Alternative that avoids the envelope entirely: add the missing deadeye
+and chainplate at the existing foot (18 fittings, additive, wants its own visual pass).
