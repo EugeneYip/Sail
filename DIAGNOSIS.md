@@ -8847,3 +8847,67 @@ uFoamAmount 1` — bit-identical to as-shipped, as the arithmetic requires, sinc
 Pale blocky blobs remain on the flat mirror at this condition — pale, not dark, so not the
 reported defect, and not investigated. Mobile/iPad zoom not started. Boston still pending
 player validation.
+
+## 120. iPad double-tap zoom: the meta is ignored, and the app blocks its own way out
+
+Investigated on **real WebKit** (Playwright's WebKit engine, iPad gen-7 landscape descriptor).
+The iOS Simulator was unavailable — Xcode is installed but not selected, and the fix
+(`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`) needs the owner's password
+— so WebKit was used instead and the substitution is stated rather than made silently.
+
+### Two faults, and the second is ours
+
+1. **`user-scalable=no` does nothing on iOS.** `index.html` carries
+   `maximum-scale=1.0, user-scalable=no`, and iOS Safari has deliberately ignored both since
+   iOS 10 for accessibility. Confirmed present in the meta and confirmed not binding.
+2. **Nothing guarded the body.** `#viewport` has `touch-action: none` because the canvas must
+   swallow drags, but `html` and `body` had **no `touch-action` at all**, so a stray double tap
+   on the Ship's Book, the HUD or bare background zoomed the page.
+3. **The way back was blocked, and that is the part that made it unrecoverable.** Once zoomed,
+   most of the screen is `#viewport`; `touch-action: none` means Safari never sees the second
+   double tap that would zoom out. The player is stranded at 2–3× with UI off-screen and only a
+   reload gets out. That matches the report exactly.
+
+Measured on WebKit at iPad size, forcing the visual viewport to scale 2.4: `innerWidth`,
+`devicePixelRatio`, canvas CSS size, drawing buffer and `renderScale` **all unchanged**, and
+zero errors. So the engine does not mis-resize — it simply never learns the zoom happened.
+`grep` confirms **`visualViewport` is not referenced anywhere in the source.**
+
+### Fix
+
+- **Prevention.** `touch-action: manipulation` on `html, body`. That removes double-tap zoom —
+  the accidental trigger — while leaving deliberate pinch alone, so the accessibility gesture
+  survives. `#viewport` keeps `none`, which it needs.
+- **Recovery.** A new `src/ui/zoomGuard.ts`, installed from `UiLayer.init` and disposed with it.
+  It watches `visualViewport`, and after 450 ms of quiet at `scale > 1.02` it scrolls the
+  visual viewport home and re-reads the viewport meta with a pinned `maximum-scale` to put the
+  page back to 1, then restores the meta and dispatches a `resize` so the engine re-derives its
+  sizing — which nothing otherwise does.
+
+**Trade-off, stated rather than hidden:** auto-restoring means a *deliberate* pinch does not
+stick. That cost is taken because the product already declares `user-scalable=no`, a zoomed
+WebGL canvas is a magnified bitmap carrying no extra detail, and the alternative on this layout
+is a state the user cannot leave. Prevention is preferred over recovery — hence the CSS — and
+the guard only fires once prevention has been bypassed. The debounce means it never fights a
+pinch still in progress.
+
+### Validation, real WebKit at iPad size
+
+| check | result |
+|---|---|
+| `touch-action` on html / body / canvas | `manipulation` / `manipulation` / `none` |
+| forced visual-viewport scale 2.6 | guard fired |
+| viewport-meta writes | 2 (reset, then restore) |
+| engine resize events dispatched | 1 |
+| console / page errors | **0** |
+| `renderScale` disturbed by the guard? | **no** — 1.0 before, 1.0 after; the controller then settled it to 0.76 at 30 fps on its own |
+
+A no-zoom control at the same timing holds a steady 561×421 at renderScale 0.52, confirming the
+buffer differences between runs are the adaptive controller hunting, not the guard.
+
+### Not established
+
+Why the player also reports it going *laggy* is not proven. The engine's own state is
+unchanged by the zoom, so the likely cause is Safari compositing a magnified layer rather than
+anything in the app — but that was not measured, and it is left as an open observation rather
+than a claim.

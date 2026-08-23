@@ -1,6 +1,7 @@
 import type { Module, World } from '../types';
 import { DebugOverlay } from './Debug';
 import { add, el, setClass, setText } from './dom';
+import { installZoomGuard } from './zoomGuard';
 import { HudView } from './HUD';
 import { MiniHud } from './MiniHud';
 import { type HudMode, readExternalMode, writeExternalMode } from './mode';
@@ -34,6 +35,7 @@ const CHART_MS = 200;
 const IDLE_MS = 9000;
 
 export class UiLayer implements Module {
+  private detachZoomGuard: () => void = () => {};
   readonly name = 'ui';
 
   private root!: HTMLElement;
@@ -69,6 +71,7 @@ export class UiLayer implements Module {
   };
 
   init(world: World): void {
+    this.detachZoomGuard = installZoomGuard();
     const host = document.getElementById('ui-root');
     if (!host) throw new Error('#ui-root missing');
 
@@ -243,6 +246,7 @@ export class UiLayer implements Module {
   }
 
   dispose(): void {
+    this.detachZoomGuard();
     for (const d of this.detach) d();
     this.detach.length = 0;
     this.touch.dispose();

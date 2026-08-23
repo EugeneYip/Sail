@@ -203,6 +203,22 @@ body {
   padding: 0;
   height: 100%;
   overflow: hidden;
+  /*
+   * iOS Safari has ignored 'user-scalable=no' since iOS 10, so the viewport meta
+   * in index.html does NOT stop a double tap from zooming the page on an iPad.
+   * '#viewport' below carries 'touch-action: none' because the canvas has to
+   * swallow drags, but nothing guarded the body or the panels -- so a stray double
+   * tap on the Ship's Book, the HUD or the bare body zoomed the whole page. Worse,
+   * the way back was blocked: once zoomed, most of the screen is the canvas, and
+   * 'touch-action: none' there means Safari never sees the second double tap that
+   * would zoom out again. That is the reported "zooms in, goes laggy, and only a
+   * reload gets it back".
+   *
+   * 'manipulation' removes double-tap zoom while LEAVING deliberate pinch zoom
+   * alone, so the accidental trigger goes without taking the accessibility gesture
+   * with it.
+   */
+  touch-action: manipulation;
   background: #05090d;
   font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
