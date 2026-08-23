@@ -1,0 +1,221 @@
+# AI_HANDOFF — start here
+
+**Audience:** any competent AI (Claude, GPT, Grok, Codex, …) or human picking this
+repository up with **zero access to the conversation that produced it.**
+
+This file is the **current operational state**. It is deliberately short. It does not
+repeat the project's history — it tells you what is true now and where to look.
+
+| document | role |
+|---|---|
+| **AI_HANDOFF.md** (this file) | current state, onboarding, what to do next |
+| `AGENTS.md` | permanent engineering rules and the build contract — **binding** |
+| `DIAGNOSIS.md` | forensic history: why decisions were made, failed experiments, retractions |
+| `HANDOVER.md` | project narrative and design intent. **Its "State as of 2026-08-20" section is superseded by this file.** |
+| `RUBRIC.md` | how visual quality is judged |
+| `notes/` | scratch space for concurrent agents; see `notes/README.md` |
+| source + `scripts/` | the final behavioural authority. When docs and code disagree, code wins. |
+
+---
+
+## 1. What is this?
+
+**Leeward** — an endless procedural sailing game in the browser. You helm the USS
+Constitution (1797 frigate) on an open ocean. Three.js + TypeScript + Vite, WebGL2.
+
+**Everything is generated in code**: hull, rigging, sails, ocean, sky, clouds, textures,
+audio. **No downloaded assets of any kind** — no textures, models, HDRIs or audio files.
+That constraint is deliberate and non-negotiable; `npm run preflight` enforces it.
+
+Repository: `https://github.com/EugeneYip/Sail`
+
+## 2. Production
+
+- **URL:** <https://eugeneyip.github.io/Sail/>
+- **Deploy branch:** `main`. Any push to `main` deploys.
+- **Pipeline:** `.github/workflows/pages.yml` → `npm run typecheck` → `npm run check-shaders`
+  → `npm run preflight` → `npm run build` → GitHub Pages.
+- **Vite `base` must stay `'./'`** (`vite.config.ts`) or the Pages build 404s its assets.
+
+> **Pushing deploys to players.** Do not push unless the owner asks. The owner pushes
+> manually.
+
+## 3. Authoritative checkpoint (verify before trusting)
+
+At the time of writing:
+
+| | |
+|---|---|
+| local `main` HEAD | `48a6c57` |
+| `origin/main` (= **what is deployed**) | `a6fd927` |
+| relationship | local is **3 ahead**, 0 behind |
+| tree | clean except untracked `.claude/` |
+
+**So the deployed build does NOT contain the three most recent fix commits.** Never assume
+the player is testing your latest work — check `git rev-list --left-right --count
+origin/main...HEAD` first. Misreading this once caused a whole round of wrong conclusions
+(see `DIAGNOSIS.md` §118 opening).
+
+## 4. First-start procedure
+
+```bash
+git fetch origin
+git status --short
+git rev-list --left-right --count origin/main...HEAD
+git log --oneline -12
+git worktree list
+```
+
+Then, for the same picture in one shot including worktree ownership and open notes:
+
+```bash
+node scripts/ai-context.mjs
+```
+
+Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` sections named below.
+
+## 5. What is open and what is closed
+
+**Closed and validated** (each has a `DIAGNOSIS.md` section with the measurements):
+
+- Cloud-shadow dark blotches — §107, §108 (the shadow slice had no temporal filter)
+- Boston harbour *topology* — §109, §110 (shoreline, channel, closed volume, normals)
+- Stern/wake ruled partition — §111, §112 (the transom pad's alpha clamp, not its fade)
+- Gunport lids reading as shelves — §113, §114 (1.32 → 2.2 rad)
+- Stern residual see-through — §118 A (the counter top was never built)
+- Sail **false translucency** / ungated sky wash — §118 B, §121
+- Ensign penetrating the spanker — §118 C
+- Dark specks at high wind on a flat sea — §119 (whitecaps without waves)
+- Accidental iPad double-tap zoom — §120, §121
+
+**Open — do not describe these as closed:**
+
+| item | state |
+|---|---|
+| **Boston harbour** | topology engineering-accepted; **deployed/player validation pending** |
+| **Mobile / iPad zoom** | engineering fixed; validated with Playwright WebKit using an iPad profile; **real-device iPad/iPhone player validation pending** (§121) |
+| **Sail residual sheen mottling** | measured (−19.5 % of mottling is the `sheen` lobe); **deferred visual-quality decision**, not a closed defect (§121) |
+| Rope free ends (backstay feet) | cause known: the foot sits ~0.72 m outboard of the planking; moving it is coupled to `fitRigEnvelope` / spanker clearance (§115) |
+| Far-sea dot-lattice aliasing | never isolated |
+| `wgeom` `tube`/`cyl`/`rope` normals | **bounded cross-system lead only.** Boston's land/island/box cases are proven inverted; vessel/buoy/creature consumers are unexamined. **Do not flip globally** without a per-consumer audit (§110, §117) |
+| Pale blocky blobs on a flat mirror sea | observed, pale not dark, uninvestigated (§119) |
+| Physics `no wave-riding speed blowout` | pre-existing unstable assertion. Established: **no code path from `src/ship/build/*` into the solver.** Do not re-investigate (§117 B) |
+| `measure-selftest` CONFOUND assertions | intermittently fail on `origin/main` too. Stochastic, not a regression (§116) |
+| Boston façades / city quality | blockout-grade by intent. Do not start façade polish before topology player-validation |
+
+## 6. Git and worktree rules — non-negotiable
+
+- **Never** `git add .`, `git add -A`, `git add --all`. Stage explicit paths only.
+- **Keep `.claude/` untracked.** It holds worktrees and local launch config.
+- **Do not push** unless the owner asks.
+- **Do not rewrite pushed history.** Do not squash or rebase to tidy up.
+- **Do not prune or delete worktrees** as part of any other task.
+- **Dirty ≠ interrupted.** Uncommitted files in a worktree may belong to a *live* writer.
+  Never restore, reset, stash or discard someone else's uncommitted work, and never
+  integrate partial work without an explicit completion handoff.
+- After any `git stash push` / `git stash pop` cycle, **check for `* 2.ts`-style duplicate
+  files** — a stash cycle has produced byte-identical duplicates here before (§116).
+
+### How to tell whether dirty files belong to an active writer
+
+There is no flag for it. Use evidence:
+
+```bash
+git worktree list
+for w in .claude/worktrees/*/; do
+  echo "$w"; git -C "$w" rev-parse --abbrev-ref HEAD
+  git -C "$w" log -1 --format='%cr  %s'
+  git -C "$w" status --short
+done
+```
+
+Note: `git status` inside a worktree can take tens of seconds here — query worktrees
+**one at a time**, not in a single loop, or the command will time out.
+
+Then judge:
+
+1. **Recency.** A worktree whose last commit is minutes old and whose files are dirty is
+   probably live. Days old is probably paused — still not yours to take.
+2. **Overlap.** Compare its dirty paths against what you intend to touch. If they overlap,
+   pick different work.
+3. **`npm run preflight`** prints each file in `notes/` with its age and marks recent ones
+   `MAY BE LIVE`.
+4. **A task may run in a worktree that does not exist in this repository at all** (another
+   machine or session). If the owner names an active task you cannot see, treat the files
+   it would plausibly own as off-limits and say so rather than guessing.
+
+When in doubt: **take nothing, touch nothing, and report.**
+
+## 7. How temporary notes are integrated
+
+Full protocol in `notes/README.md`. In short:
+
+- A concurrent/worktree agent writes `notes/<topic>.md` and **never touches `DIAGNOSIS.md`**
+  (numbered sections collide; it has happened three times).
+- Agents **must not** number their own sections. Citing an existing `§n` in prose is fine.
+- Only the integrating session on `main` folds a note into `DIAGNOSIS.md`, assigns the next
+  sequential number **at that moment**, and deletes the note — and **only once the owning
+  session has stopped.**
+- Delete a note only if nothing in it is unique. Check by content, not by assumption.
+
+## 8. How player-visible defects are validated
+
+1. **Reproduce at the player's own viewpoint class first.** Several defects here are
+   viewpoint-dependent and invisible from a level side view or a pure top-down. The stern
+   see-through was mis-described as needing an extreme overhead angle when it is plain from
+   an ordinary oblique stern-quarter.
+2. **Pin the weather** (see §9 below) and assert it held.
+3. **Isolate causally** — ablate one thing at a time, with a null control arm that changes
+   nothing. If the control moves as much as the result, you have measured noise.
+4. **Assert the lever binds.** A patched string is not a bound lever.
+5. **Fix only after causal closure**, then re-validate at the same viewpoints, and capture
+   before/after.
+6. Gates: `npm run typecheck`, `npm run check-glsl`, `npm run check-shaders`,
+   `npm run preflight`, `npm run build`.
+
+## 9. Instruments known to be INVALID — do not repeat these
+
+Each of these produced a wrong conclusion here. `AGENTS.md` → *Measuring anything: use the
+harness* is the binding list; these are the ones that cost the most.
+
+- **`Object.assign(world.env, …)` does not establish a weather condition.** A weather
+  simulation keeps driving `world.env`: `41 kn / sea 0 / wave 0.0` drifted to wave 2.38 /
+  sea 4.90 / wind 27.3 in **six seconds**. Use `world.ext.env.pin(field, value)` — the same
+  path the UI uses — then settle, read back, **assert**, then measure (§119).
+- **Reading numeric values out of the composited framebuffer.** AgX tonemapping and the look
+  LUT corrupt them; a zero channel comes back lifted. Sample a **pre-tonemap** target such
+  as the post stack's `post/scene` (rgba16f, NoColorSpace) instead. Cost three attempts
+  before it was believed (§112).
+- **Freezing a texture uniform's `.value`.** That holds a *pointer* to a render target that
+  is overwritten in place; the pixels keep changing and the "held" assertion is vacuous.
+  Stub the pass that writes the target and assert on blocked call count (§107).
+- **`dt = 0` does not freeze the image.** `time.frame` still increments, so TAA re-jitters,
+  film grain re-dithers ~90 % of pixels, the cloud march re-marches, and a 1-LSB dither
+  fires. State froze; the picture never did (§111).
+- **Fresh-load brightness boxes in the wake region.** Swamped by wake-state variance; the
+  same metric moved +45 % and −22 % across stations for one change (§112).
+- **Per-load arms are not pixel-joinable.** Separate page loads leave the ship in different
+  states. Swap the material's `fragmentShader` in-page instead (§112).
+- **Additive particles contaminate readbacks.** They lifted a "1.0" control arm to 1.0635.
+  Hide them for the run (§112).
+- **`RedFormat` targets are one channel.** Reading one with a `w*h*4` buffer leaves three
+  quarters unfilled and reads them as zeros — the tell was a mean of exactly 0.853/4 (§116).
+- **Vertex counts near sea level are not an acceptance metric** for Boston: 26 % of the mesh
+  sits within ±5 m of the surface either way, because moored hulls float there (§110).
+- Class names are **minified in production builds** — runtime scans by
+  `constructor.name` work in dev and silently find nothing in `dist` (§116).
+
+## 10. What to work on next
+
+Nothing is urgent. In rough priority:
+
+1. **Wait for player validation** of the three-commit round-2 package and of Boston harbour.
+2. The `wgeom` normals **bounded audit** — one representative vessel, buoy and creature
+   consumer each; classify before considering any shared change.
+3. Issue 4A rope free ends, if the owner wants it: either land the backstay foot on the
+   ship's side (needs a spanker-clearance pass across trim states) or add the missing
+   deadeye and chainplate at the existing foot (envelope-safe, 18 fittings).
+4. The deferred sail sheen mottling decision.
+
+Do not start façade polish, a global normals flip, or a new visual defect without the owner
+asking.

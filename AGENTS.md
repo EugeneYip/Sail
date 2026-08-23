@@ -6,6 +6,12 @@ the USS Constitution instead of driving.
 
 Read `src/types/index.ts` in full before writing anything. It is the contract.
 
+**Starting cold, with no conversation history?** Read `AI_HANDOFF.md` first — it
+carries the *current* operational state (what is deployed, what is open, which
+worktrees may be live, which instruments are known invalid) and a first-start
+procedure. This file is the permanent engineering contract; `AI_HANDOFF.md` is
+where things stand today; `DIAGNOSIS.md` is why. Then read `src/types/index.ts`.
+
 ## Design direction — playability first (set by the owner 2026-08-18)
 
 These override earlier assumptions where they conflict. Read them before you
@@ -354,6 +360,24 @@ bad reasoning. The harness closes those specific traps:
   the quantity under test guarantees the finding.
 - **Both mean and median, always.** Choosing after seeing the data is how a mean
   invariant got read as a median.
+- **PIN the weather; assigning to `world.env` does not hold it.** A weather
+  simulation keeps driving `world.env`, so `Object.assign(world.env, {...})` is a
+  suggestion, not a condition. Measured: `windSpeed 41, seaState 0, waveHeight 0.0`
+  drifted to wave 2.38 / sea 4.90 / wind 27.3 within **six seconds** and wave 2.94 /
+  wind 15.2 by seventeen. Four arms of one investigation were run on a condition that
+  never existed. Reproduce a player's sliders the way the UI does:
+
+  ```js
+  for (const [k, v] of Object.entries(cond)) world.ext.env.pin(k, v);
+  ```
+
+  then **settle, read back, assert the pinned values, and only then measure.** The
+  order matters: an assertion before the settle proves nothing.
+
+  Consequence for old results: no historical experiment that depended on an *absolute*
+  unpinned weather condition may be treated as evidence that the condition existed.
+  Same-load *relative* comparisons stay valid — every arm drifted together — unless the
+  conclusion itself depended on the absolute weather state.
 
 If a result contradicts physics, or arms order impossibly, suspect the instrument
 before believing the discovery.

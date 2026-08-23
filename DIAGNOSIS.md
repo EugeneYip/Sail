@@ -8677,6 +8677,9 @@ Not closed, and not to be described as closed:
 
 ## 118. Player round 2: the stern residual was the counter top, the sails were inventing sky, and the ensign was coplanar with the spanker
 
+> **STATUS SPLIT BY §121.** The sail work here closes the false-translucency /
+> ungated sky wash only. The residual sheen mottling is a separate OPEN item.
+
 Live play on the deployed build (which is this range — `origin/main` == `a6fd927`, so every
 earlier fix was in it) returned four defects. Three are ship-side and are fixed here. One
 correction first.
@@ -8850,6 +8853,9 @@ player validation.
 
 ## 120. iPad double-tap zoom: the meta is ignored, and the app blocks its own way out
 
+> **STATUS CORRECTED BY §121.** Engineering-fixed and validated on Playwright
+> WebKit with an iPad profile. This is NOT real-device closed.
+
 Investigated on **real WebKit** (Playwright's WebKit engine, iPad gen-7 landscape descriptor).
 The iOS Simulator was unavailable — Xcode is installed but not selected, and the fix
 (`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`) needs the owner's password
@@ -8911,3 +8917,36 @@ Why the player also reports it going *laggy* is not proven. The engine's own sta
 unchanged by the zoom, so the likely cause is Safari compositing a magnified layer rather than
 anything in the app — but that was not measured, and it is left as an open observation rather
 than a claim.
+
+
+## 121. Status corrections for the round-2 package
+
+Two statuses from §118–§120 were stated too broadly. Corrected here; the measurements in
+those sections stand.
+
+### Mobile / iPad zoom
+
+Not "real-device closed". The correct wording is:
+
+> **Engineering fixed; validated with Playwright WebKit using an iPad profile; real-device
+> iPad/iPhone player validation pending.**
+
+Playwright's WebKit is the same engine family as Safari and implements `visualViewport`, which
+is why it could expose the fault — but it is not an iPad. It does not reproduce iOS Safari's
+own compositing of a magnified layer, its rubber-banding, its URL-bar viewport transitions, or
+real touch hardware. The iOS Simulator was unavailable this pass (`sudo xcode-select -s
+/Applications/Xcode.app/Contents/Developer`, which needs the owner's password), so no
+real-device or Simulator evidence exists yet.
+
+### Sail visual anomaly — split into two items
+
+| item | status |
+|---|---|
+| false translucency / ungated sky-wash transmission (§118 B) | **closed** — cause measured, fix landed, validated at the player's own viewpoint class |
+| residual sheen mottling | **OPEN — deferred visual-quality issue** |
+
+The mottling is measured, not speculative: removing the `sheen` lobe drops mid-scale mottling
+RMS on canvas pixels from 21.94 to 17.66 (**−19.5 %**), while the normal map moves it −0.3 %,
+the AO map +0.1 %, and removing the environment makes it *worse* (+23.5 %). It was left alone
+deliberately — `sheen` is an art-direction property and the brief asked for minimal collateral
+damage to the sail look — so this is a deferred decision, not a closed defect.
