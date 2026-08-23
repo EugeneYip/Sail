@@ -812,11 +812,33 @@ function makeSailMaterial(
               lwSailShadow.shadowIntensity, lwSailShadow.shadowBias,
               lwSailShadow.shadowRadius, vDirectionalShadowCoord[ 0 ]);
           #endif
+          /*
+           * TRANSMITTED SKYLIGHT HAS TO COME FROM BEHIND THE CLOTH.
+           *
+           * The sun term above is gated by 'pow(back, 1.6)' — only a backlit sail
+           * glows — but the sky term was ungated, so every sail fragment on both
+           * faces carried a full sky wash whatever was behind it. On a sail with
+           * nothing but sea behind it that is skylight arriving from a direction
+           * there is no sky in, and it is why the canvas read as a translucent
+           * blue veil from any elevated oblique angle looking DOWN at the rig,
+           * while looking fine from a level side view. Measured on the render, the
+           * canvas came out blue-neutral — blue minus red +5.4 — where flax should
+           * be warm.
+           *
+           * 'wn' faces the viewer (the material is DoubleSide, so three has
+           * already flipped it), so the far side of the cloth spans the -wn
+           * hemisphere and its overlap with the sky is (0.5 - 0.5 * wn.y): unity
+           * when the back faces straight up, zero when it faces the water, and a
+           * half for a vertical sail — which is what a vertical sail really sees.
+           * The front face keeps its own sky ambient from the environment as
+           * before; this only stops the BACK side inventing sky that is not there.
+           */
+          float skyBehind = 0.5 - 0.5 * wn.y;
           vec3 through = material.diffuseColor * uClothTrans;
           reflectedLight.indirectDiffuse +=
               through * pow(back, 1.6) * uSunColor * uSunIntensity * INV_PI
                       * sh * lwCloudShadow(vSailWP)
-            + through * 0.28 * uSkyColor;
+            + through * 0.28 * uSkyColor * skyBehind;
 
           // And the same translucency seen from the OTHER side: light that came
           // through whatever is shadowing this sail.

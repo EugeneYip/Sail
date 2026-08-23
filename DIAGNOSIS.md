@@ -8674,3 +8674,97 @@ Not closed, and not to be described as closed:
 - **Far-sea dot-lattice aliasing** — recorded as probably separate from Issue 3, never isolated.
 - **Boston façade and city quality** — blockout-grade by intent; topology engineering-accepted,
   **deployed/player acceptance pending**.
+
+## 118. Player round 2: the stern residual was the counter top, the sails were inventing sky, and the ensign was coplanar with the spanker
+
+Live play on the deployed build (which is this range — `origin/main` == `a6fd927`, so every
+earlier fix was in it) returned four defects. Three are ship-side and are fixed here. One
+correction first.
+
+### §116's angle claim is withdrawn
+
+§116 said the stern residual needed an extreme overhead angle. **Wrong.** It is plainly
+visible from an ordinary oblique elevated stern-quarter — the class of viewpoint a chase
+camera actually occupies, and the one the player photographed. Reproduced first try at
+ship-local eye (0, 34, 46) looking at the transom: deck planking, then the bulwark, then
+**blue sea and white wake foam**, then the transom's exterior.
+
+### A. Stern residual: the counter top was never built
+
+`buildTransom` rakes the transom aft by `1.85 * f²` metres, so **at the sheer its top edge
+stands 1.85 m abaft the last station.** The counter band sweeps the hull's *outer* surface
+across that span, and the transverse bulwark from §117-A caps the deck at the station — but
+nothing ever capped the **flat on top of the counter**, between the two. That 1.85 m slot is
+the residual, and you look through it to the sea.
+
+This also explains why the earlier `t1 = 1.0` experiment could not work and was correctly
+reverted: **the gap is abaft t = 1.0, not short of it.** Extending the deck grid can never
+reach it.
+
+Fixed by adding the counter top: an 11-column grid from the taffrail line at the station
+across to the transom's own top edge, bulge included so the two meet exactly, with `flip: true`
+because `cross(d/di, d/dj)` points down here — the same winding trap the bulwark above it
+documents.
+
+**Validated** at port stern-quarter close, starboard stern-quarter close, both elevated, and
+astern-oblique, before/after with only `hull.ts` differing. The slot is gone at every station:
+deck → counter top → taffrail with stanchions → transom, no sea, no foam, no interior.
+
+### B. Sail visual anomaly: transmitted skylight was ungated
+
+The sails are **not transparent** — measured at runtime: `transparent: false, opacity: 1,
+transmission: 0, depthWrite: true`, and on the render the canvas takes none of the sea's blue
+(blue-minus-red +5.4 on sail pixels against +42.3 on the background behind them). Hiding the
+sails leaves the ship completely solid, so the "see-through" was never a hole.
+
+What it was: in the cloth-translucency block the **sun** term is gated by `pow(back, 1.6)`, so
+only a backlit sail glows — but the **sky** term was
+
+```glsl
++ through * 0.28 * uSkyColor;      // no directional gate at all
+```
+
+applied to every fragment on both faces whatever lay behind it. A sail with nothing but sea
+behind it still received a full sky wash: skylight arriving from a direction there is no sky
+in. That is why the canvas read as a translucent blue veil from elevated oblique angles
+looking down at the rig and looked fine from a level side view — **the defect is viewpoint
+dependent for a reason.**
+
+Gated by the back hemisphere's overlap with the sky, `0.5 - 0.5 * wn.y`: unity when the back
+faces straight up, zero when it faces the water, one half for a vertical sail. The front face
+keeps its own environment ambient untouched.
+
+**Also measured, and NOT changed:** the residual mid-scale mottling on the canvas is largely
+the **sheen** lobe — removing `sheen` drops mottling RMS 21.94 → 17.66 (−19.5 %), while the
+normal map (−0.3 %) and the AO map (+0.1 %) contribute nothing and removing the environment
+makes it *worse* (+23.5 %). Sheen is an art-direction property and the brief asked for minimal
+collateral damage to the sail look, so it is recorded, not touched.
+
+### C. Ensign penetrating the spanker: the standoff was in the sail's own plane
+
+`LEECH_CLEAR_M = 0.22` moves the anchor up-and-aft — but that step is **in the sail's plane**,
+along its leech, and the flag then hangs along that same leech. So the bunting was very nearly
+coplanar with the canvas, while its own travelling wave is `0.09 × fly ≈ 0.48 m`, **more than
+twice the clearance.** The wave alone drove the hoist through the sail every cycle.
+
+Fixed by standing the anchor off the sail's **face** by `FACE_CLEAR_M = 0.75` along the real
+plane normal, taken as `cross(gaffDir, boomDir)` from the two spars that bound the spanker.
+Computed in the build frame, which is the frame the anchor lives in — `shipPart(uEnsAnchor,
+PART.GAFF)` rotates it with the gaff, so a normal that is right at build stays right at every
+sheet angle.
+
+Note the near-miss in the existing code: `outward = new THREE.Vector3(0, leech.z, -leech.y)`
+is a rotation in the y–z plane with **x forced to zero**, so it is only perpendicular to
+anything while the boom sits on the centreline. It is retained for the in-plane step it was
+written for; the new term is what actually clears the canvas.
+
+**Validated** at astern, stern-quarter and abeam at 20 kn: the ensign flies clear of the
+spanker's edge with no intersection.
+
+### Still open from this round
+
+- **Dark blotches under high wind + flat sea** — the player's new condition (41 kn, sea state
+  0, wave height 0.0 m, chop 100 %, golden hour). Under investigation; first numbers are
+  contaminated by a mask that included the hull and wake, so nothing is concluded yet.
+- **Mobile / iPad double-tap browser zoom** not yet started.
+- Boston harbour remains **pending player validation** and is not to be described as closed.

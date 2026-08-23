@@ -1159,6 +1159,47 @@ function buildBulwarks(bins: Bins, stations: Station[], ports: PortSpec[], quali
       null,
       {},
     );
+
+    /*
+     * THE COUNTER TOP — the flat between the taffrail and the transom head, and
+     * the stern residual the previous pass left open.
+     *
+     * `buildTransom` rakes the transom aft by `1.85 * f^2` metres, so at the sheer
+     * its top edge stands **1.85 m abaft the last station**, and the counter band
+     * only sweeps the hull's OUTER surface across that span. Nothing ever capped
+     * the flat on top of it, so from an oblique elevated stern-quarter — which is
+     * where a chase camera actually sits — you look over the taffrail through a
+     * 1.85 m slot straight to the sea and the wake.
+     *
+     * That is why carrying the deck grid to t = 1.0 could never close it: the gap
+     * is ABAFT t = 1.0, not short of it. It is also why the earlier note describing
+     * this as needing an extreme overhead angle was wrong — the player sees it from
+     * an ordinary quarter view.
+     *
+     * Same winding trap as the bulwark above: d/di runs to starboard and d/dj runs
+     * aft, so cross(d/di, d/dj) points DOWN and the flat would be culled from every
+     * view above it.
+     */
+    {
+      const wT = stAft.widthAt(stAft.sheer) * 0.965;
+      const nCol = 11;
+      black.setColorHexLinear(0xffffff, 1.0);
+      black.grid(
+        nCol,
+        2,
+        (i, j, out) => {
+          const f = (i / (nCol - 1)) * 2 - 1;
+          if (j === 0) {
+            out.set(f * wCap, yCap - 0.05, stAft.z);
+          } else {
+            // The transom's own top edge, bulge included, so the two meet exactly.
+            out.set(f * wT, stAft.sheer, stAft.z + 1.85 + 0.32 * (1 - f * f));
+          }
+        },
+        null,
+        { flip: true, colorFn: (_i, j, c) => c.setScalar(j === 0 ? 0.92 : 0.84) },
+      );
+    }
   }
 
   // Hammock netting: iron cranes and a netted roll along the rail.

@@ -76,6 +76,19 @@ const STAR_INNER = Math.cos(Math.PI * 0.4) / Math.cos(Math.PI * 0.2);
 const HOIST_M = 3.8;
 /** Clearance from the spanker's leech, metres, in the sail's own plane. */
 const LEECH_CLEAR_M = 0.22;
+/**
+ * How far the hoist stands off the FACE of the spanker, metres.
+ *
+ * 'LEECH_CLEAR_M' above moves the anchor 0.22 m up-and-aft, but that is a step
+ * IN the sail's own plane, along its leech. The flag then hangs along that same
+ * leech, so the bunting is very nearly coplanar with the canvas — and its own
+ * travelling wave is 0.09 of the fly, about 0.48 m, more than twice the clearance.
+ * The wave alone therefore drives the hoist through the sail every cycle, which is
+ * the flag-through-canvas the player reported. Standing it off the sail's FACE by
+ * more than the wave amplitude removes the intersection without moving the flag
+ * anywhere a real ensign at the peak would not be.
+ */
+const FACE_CLEAR_M = 0.75;
 
 /**
  * Grid per quality tier, (along the fly, along the hoist).
@@ -389,9 +402,19 @@ export function buildEnsign(
   // out of the sail. The other sign points down and forward, straight into the
   // canvas, and buries the hoist third of the flag behind it.
   const outward = new THREE.Vector3(0, leech.z, -leech.y).normalize();
+  /*
+   * The spanker's own plane, from the two spars that bound it, so the standoff is
+   * off the CANVAS and not along it. Taken in the build frame, which is the frame
+   * the anchor lives in: 'shipPart(uEnsAnchor, PART.GAFF)' rotates it with the
+   * gaff, so a normal that is right here stays right at every sheet angle.
+   */
+  const boomDir = frame.spanker.boomEnd.clone().sub(frame.spanker.boomPivot);
+  const gaffDir = frame.spanker.gaffEnd.clone().sub(frame.spanker.gaffPivot);
+  const faceN = new THREE.Vector3().crossVectors(gaffDir, boomDir).normalize();
   const anchor = frame.spanker.gaffEnd.clone()
     .addScaledVector(outward, LEECH_CLEAR_M)
-    .addScaledVector(leech, 0.18);
+    .addScaledVector(leech, 0.18)
+    .addScaledVector(faceN, FACE_CLEAR_M);
 
   const u: EnsignUniforms = {
     uEnsAnchor: { value: anchor },
