@@ -49,6 +49,15 @@ console.log('  production   : https://eugeneyip.github.io/Sail/');
 console.log('  deploys from : push to `main` (.github/workflows/pages.yml)');
 console.log('  read first   : AI_HANDOFF.md, then AGENTS.md, then DIAGNOSIS.md');
 
+h2('Which repository is this?');
+const top = git(['rev-parse', '--show-toplevel']);
+console.log(`  toplevel : ${top ?? 'NOT A GIT REPOSITORY'}`);
+if (top && !/leeward$/.test(top)) {
+  console.log('  ** This is not the Sail/leeward checkout. A path is NOT evidence of');
+  console.log('     repository ownership -- a stray parent .git can capture a directory.');
+  console.log('     Stop and confirm where you are before writing anything. **');
+}
+
 h2('HEAD');
 const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
 const head = git(['rev-parse', '--short', 'HEAD']);

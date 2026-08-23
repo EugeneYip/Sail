@@ -105,6 +105,29 @@ than a tidy sequence.
 
 ## Reconciling another session's work
 
+**Before creating or trusting any worktree, verify which repository you are in:**
+
+```bash
+git rev-parse --show-toplevel
+```
+
+**A directory name or path is not evidence of repository ownership.** Nested and
+stray repositories happen — a home-level `.git` at `/Users/eugene` once made every
+directory under it look like part of a repository it had nothing to do with, so a
+worktree created "in Sail" could have been anchored somewhere else entirely. The
+toplevel is the only answer that means anything; the path you typed is not.
+
+Two corollaries:
+
+- **Never hardcode a worktree directory name.** They are generated, they tell a
+  later reader nothing, and one of ours (`reverent-jepsen-5ed163`) is checked out on
+  a branch of an entirely different name (`claude/gifted-lalande-041ee3`). Resolve
+  branch and HEAD from git, per worktree, every time.
+- **A task can run in a worktree this repository cannot see** — another machine, or
+  an ephemeral environment. Absence from `git worktree list` is not evidence that a
+  dispatched task failed, and it is not evidence its work is recoverable from here
+  either. Report it as external/unknown rather than reconstructing it.
+
 **Dirty is not a state. It is the normal condition of a worktree whose owner is
 mid-edit.** Uncommitted files and an untracked note mean *someone may still be
 typing*, not that a session died. Treat them as live until you have evidence

@@ -66,7 +66,12 @@ The two facts that do not change:
 
 ## 4. First-start procedure
 
+**Verify which repository you are in before anything else.** A directory name or path
+is not evidence of repository ownership — a stray home-level `.git` once made every
+directory beneath it look like part of an unrelated repository:
+
 ```bash
+git rev-parse --show-toplevel     # must be the Sail/leeward checkout, not a parent
 git fetch origin
 git status --short
 git rev-list --left-right --count origin/main...HEAD
@@ -100,6 +105,7 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 
 | item | state |
 |---|---|
+| **The whole round-2 visual package** | **deployed and awaiting player validation.** Counter top, sail sky-wash gate, ensign clearance, whitecaps-without-waves, iPad zoom. Engineering-complete; no player confirmation yet. Do not reopen any of it on suspicion alone — wait for a report |
 | **Boston harbour** | topology engineering-accepted; **deployed/player validation pending** |
 | **Mobile / iPad zoom** | engineering fixed; validated with Playwright WebKit using an iPad profile; **real-device iPad/iPhone player validation pending** (§121) |
 | **Sail residual sheen mottling** | measured (−19.5 % of mottling is the `sheen` lobe); **deferred visual-quality decision**, not a closed defect (§121) |
@@ -110,6 +116,18 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 | Physics `no wave-riding speed blowout` | pre-existing unstable assertion. Established: **no code path from `src/ship/build/*` into the solver.** Do not re-investigate (§117 B) |
 | `measure-selftest` CONFOUND assertions | intermittently fail on `origin/main` too. Stochastic, not a regression (§116) |
 | Boston façades / city quality | blockout-grade by intent. Do not start façade polish before topology player-validation |
+
+## 5a. Repository topology — things on disk that are NOT part of this repo
+
+Two artefacts exist outside the checkout. Both are deliberate. **Do not apply, restore or
+delete either** without the owner asking.
+
+| path | what it is |
+|---|---|
+| `/Users/eugene/.git-retired-2026-08-23` | a home-level `.git` that had accidentally made `/Users/eugene` a repository. Retired, not deleted. Its old branches and worktrees are unrelated historical tallship/Solo work. **Do not restore it.** Its existence is why `AGENTS.md` now requires `git rev-parse --show-toplevel` before trusting any worktree. |
+| `/Users/eugene/Desktop/sail/UNCOMMITTED-worktree-ca2247-2026-08-23.patch` | uncommitted work preserved from that migration. Audited read-only: it touches `.DS_Store`, `.claude/launch.json`, and `tallship/` paths only — **no** `src/physics/*`, `scripts/physics-test.mjs` or `tsconfig*`. Unrelated to any current task. **Do not apply it. Do not delete it yet.** |
+
+The Sail repository is `/Users/eugene/Desktop/sail/leeward` and nothing above is inside it.
 
 ## 6. Git and worktree rules — non-negotiable
 
@@ -138,7 +156,14 @@ done
 ```
 
 Note: `git status` inside a worktree can take tens of seconds here — query worktrees
-**one at a time**, not in a single loop, or the command will time out.
+**one at a time**, not in a single loop, or the command will time out. And confirm each
+one's toplevel with `git rev-parse --show-toplevel` before trusting it: **a path is not
+proof of which repository a worktree belongs to.**
+
+**Never hardcode a worktree directory name.** They are generated and can disagree with
+their own branch — `reverent-jepsen-5ed163` is checked out on `claude/gifted-lalande-041ee3`.
+Resolve branch and HEAD from git per worktree, every time. See `AGENTS.md` →
+*Reconciling another session's work* for the binding form of this rule.
 
 Then judge:
 
