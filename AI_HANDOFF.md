@@ -66,12 +66,21 @@ The two facts that do not change:
 
 ## 4. First-start procedure
 
-**Verify which repository you are in before anything else.** A directory name or path
-is not evidence of repository ownership — a stray home-level `.git` once made every
-directory beneath it look like part of an unrelated repository:
+**Verify which repository you are in before anything else.** A directory name or path is
+not evidence of repository ownership — a stray home-level `.git` once made every directory
+beneath it look like part of an unrelated repository, and a retired but otherwise perfectly
+valid clone of *this* repository still exists on this machine (§5a). Identity comes from
+these three:
 
 ```bash
-git rev-parse --show-toplevel     # must be the Sail/leeward checkout, not a parent
+git rev-parse --show-toplevel     # where this checkout actually is
+git rev-parse --git-common-dir    # `.git` = standalone clone; a path elsewhere = linked worktree
+git remote -v                     # must be github.com/EugeneYip/Sail
+```
+
+Then the state:
+
+```bash
 git fetch origin
 git status --short
 git rev-list --left-right --count origin/main...HEAD
@@ -117,17 +126,24 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 | `measure-selftest` CONFOUND assertions | intermittently fail on `origin/main` too. Stochastic, not a regression (§116) |
 | Boston façades / city quality | blockout-grade by intent. Do not start façade polish before topology player-validation |
 
-## 5a. Repository topology — things on disk that are NOT part of this repo
+## 5a. Where this repository lives, and what else is on disk
 
-Two artefacts exist outside the checkout. Both are deliberate. **Do not apply, restore or
-delete either** without the owner asking.
+**Canonical identity is established from git facts, never inferred from a directory name.**
+The three checks in §4 are the test. The table below is a fact about *today's* machine, not
+a rule: a legitimate future clone of `EugeneYip/Sail` may live at any path. Only the legacy
+checkout is named, because it is a genuine clone of this repository and would otherwise pass
+every check you could run on it.
 
-| path | what it is |
+| location | status |
 |---|---|
+| `/Volumes/Projects/sail/leeward` | **current canonical working location.** External SSD, APFS, created 2026-08-31 by a fresh clone from GitHub. All normal development, new agents and new worktrees originate here. |
+| `/Users/eugene/Desktop/sail/leeward` | **LEGACY / RECOVERY ONLY — DO NOT USE FOR NORMAL DEVELOPMENT.** A complete, valid, same-remote, same-HEAD clone — which is exactly what makes it dangerous: nothing in its contents says it is retired. It still holds five old worktrees, two of them dirty. **Do not modify, prune, reset, stash, merge or delete it or its worktrees.** They are historical recovery material pending a separate cleanup decision. `scripts/ai-context.mjs` warns by name if you run it there. |
 | `/Users/eugene/.git-retired-2026-08-23` | a home-level `.git` that had accidentally made `/Users/eugene` a repository. Retired, not deleted. Its old branches and worktrees are unrelated historical tallship/Solo work. **Do not restore it.** Its existence is why `AGENTS.md` now requires `git rev-parse --show-toplevel` before trusting any worktree. |
 | `/Users/eugene/Desktop/sail/UNCOMMITTED-worktree-ca2247-2026-08-23.patch` | uncommitted work preserved from that migration. Audited read-only: it touches `.DS_Store`, `.claude/launch.json`, and `tallship/` paths only — **no** `src/physics/*`, `scripts/physics-test.mjs` or `tsconfig*`. Unrelated to any current task. **Do not apply it. Do not delete it yet.** |
 
-The Sail repository is `/Users/eugene/Desktop/sail/leeward` and nothing above is inside it.
+No old `.claude/worktrees` were migrated, and none must be reconstructed. A worktree created
+before this migration belongs to the legacy checkout; create fresh ones from the canonical
+repository, after running the three checks in §4.
 
 ## 6. Git and worktree rules — non-negotiable
 
@@ -161,8 +177,10 @@ one's toplevel with `git rev-parse --show-toplevel` before trusting it: **a path
 proof of which repository a worktree belongs to.**
 
 **Never hardcode a worktree directory name.** They are generated and can disagree with
-their own branch — `reverent-jepsen-5ed163` is checked out on `claude/gifted-lalande-041ee3`.
-Resolve branch and HEAD from git per worktree, every time. See `AGENTS.md` →
+their own branch. The standing example — `reverent-jepsen-5ed163` checked out on
+`claude/gifted-lalande-041ee3` — is **history from the legacy Desktop repository (§5a), not
+a worktree registered in this one.** Resolve branch and HEAD from git per worktree, every
+time; never from a name written in a document. See `AGENTS.md` →
 *Reconciling another session's work* for the binding form of this rule.
 
 Then judge:

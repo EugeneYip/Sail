@@ -3,9 +3,14 @@
  * Repository context for an AI or human starting cold.
  *
  * Prints, in one pass, the things you must know before touching anything:
- * where HEAD is relative to what is deployed, what is dirty, which worktrees
- * exist and whether any of them looks like a LIVE writer, and which notes are
- * unintegrated.
+ * which repository this actually is, where HEAD is relative to what is deployed,
+ * what is dirty, which worktrees exist and whether any of them looks like a LIVE
+ * writer, and which notes are unintegrated.
+ *
+ * Repository identity is decided from git facts -- toplevel, git-common-dir and
+ * the origin remote -- never from the absolute path. A future clone may live
+ * anywhere; only the one known legacy checkout is named, because it is a real
+ * clone of this repository and would otherwise pass every check.
  *
  *   node scripts/ai-context.mjs
  *
@@ -19,7 +24,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const git = (args, opts = {}) => {
   try {
@@ -49,14 +54,58 @@ console.log('  production   : https://eugeneyip.github.io/Sail/');
 console.log('  deploys from : push to `main` (.github/workflows/pages.yml)');
 console.log('  read first   : AI_HANDOFF.md, then AGENTS.md, then DIAGNOSIS.md');
 
-h2('Which repository is this?');
+// The one checkout that is a genuine clone of this repository and must NOT be used.
+// Named explicitly because it passes every other identity check.
+const LEGACY_TOPLEVEL = '/Users/eugene/Desktop/sail/leeward';
+const SAIL_REMOTE = /github\.com[:/]+EugeneYip\/Sail(\.git)?$/i;
+
+h2('Which repository is this? — decide from git facts, never from the path');
 const top = git(['rev-parse', '--show-toplevel']);
-console.log(`  toplevel : ${top ?? 'NOT A GIT REPOSITORY'}`);
-if (top && !/leeward$/.test(top)) {
-  console.log('  ** This is not the Sail/leeward checkout. A path is NOT evidence of');
-  console.log('     repository ownership -- a stray parent .git can capture a directory.');
-  console.log('     Stop and confirm where you are before writing anything. **');
+const gitDir = git(['rev-parse', '--git-dir']);
+const commonDir = git(['rev-parse', '--git-common-dir']);
+const originUrl = git(['remote', 'get-url', 'origin']);
+const remotes = git(['remote', '-v']);
+
+console.log(`  toplevel       : ${top ?? 'NOT A GIT REPOSITORY'}`);
+console.log(`  git-common-dir : ${commonDir ?? '?'}`);
+console.log('  remotes        :');
+console.log(remotes ? remotes.split('\n').map((l) => `    ${l}`).join('\n') : '    (none)');
+
+// Standalone clone or linked worktree? --git-dir and --git-common-dir resolve to the
+// same place only in a standalone clone; in a linked worktree the common dir points
+// back at the parent repository's .git.
+if (top && gitDir && commonDir) {
+  if (resolve(gitDir) === resolve(commonDir)) {
+    console.log('  kind           : standalone clone');
+  } else {
+    console.log(`  kind           : LINKED WORKTREE of ${resolve(commonDir)}`);
+    console.log('  ** This is a worktree, not the main checkout. Its dirty files may');
+    console.log('     belong to another writer. Confirm you own it before writing. **');
+  }
 }
+
+if (!top) {
+  console.log('  ** Not a git repository. Stop before writing anything. **');
+} else if (!originUrl) {
+  console.log('  ** No `origin` remote — this may be a detached copy rather than a');
+  console.log('     clone of Sail. Confirm what it is before writing. **');
+} else if (!SAIL_REMOTE.test(originUrl.replace(/\/+$/, ''))) {
+  console.log(`  ** origin is not the Sail repository: ${originUrl}`);
+  console.log('     Expected github.com/EugeneYip/Sail. Stop and confirm where you are. **');
+}
+
+if (top === LEGACY_TOPLEVEL) {
+  console.log('');
+  console.log('  ** LEGACY / RECOVERY-ONLY CHECKOUT — DO NOT DEVELOP HERE **');
+  console.log(`     ${LEGACY_TOPLEVEL} was canonical until 2026-08-31.`);
+  console.log('     It is a complete, valid, same-remote clone, which is exactly why it');
+  console.log('     is dangerous: nothing in its contents says it is retired. It still');
+  console.log('     holds old worktrees. Do not develop in it, and do not prune, reset,');
+  console.log('     stash or delete anything in it. See AI_HANDOFF.md section 5a.');
+}
+
+console.log('  (A path is not evidence of identity. A different absolute path is not by');
+console.log('   itself wrong — a legitimate fresh clone may live anywhere.)');
 
 h2('HEAD');
 const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);

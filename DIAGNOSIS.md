@@ -8950,3 +8950,96 @@ RMS on canvas pixels from 21.94 to 17.66 (**−19.5 %**), while the normal map m
 the AO map +0.1 %, and removing the environment makes it *worse* (+23.5 %). It was left alone
 deliberately — `sheen` is an art-direction property and the brief asked for minimal collateral
 damage to the sail look — so this is a deferred decision, not a closed defect.
+
+## 122. Repo migration to the external SSD (2026-08-31) — §21's canonical location is superseded
+
+**§21 is not edited and stays as the record of the 2026-08-19 migration.** One instruction
+in it is now false and is superseded here:
+
+> §21: "`/Users/eugene/Desktop/sail/leeward` is the single source of truth"
+
+That was true from 2026-08-19 until 2026-08-31. **The canonical repository is now
+`/Volumes/Projects/sail/leeward`** (external SSD, APFS), created by a fresh clone from
+`github.com/EugeneYip/Sail`. The Desktop checkout is **legacy / recovery only**.
+
+### What was verified in the new clone
+
+Keep the provenance straight — these are two different evidence classes.
+
+**Re-run independently during this closeout:** toplevel `/Volumes/Projects/sail/leeward`;
+`--git-common-dir` = `.git` (standalone clone, not a linked worktree); origin
+`https://github.com/EugeneYip/Sail.git`; HEAD `4e0f30f` == `origin/main`, 0 ahead / 0 behind;
+working tree `?? .claude/` only; no `.git/worktrees`; `notes/` empty but for its README;
+`vite` `base` still `'./'`; `check-glsl` clean; `tsc --noEmit` clean; `preflight` push-ready
+at 257 tracked files.
+
+**Owner-reported, not re-run here:** `npm ci` with 0 vulnerabilities, `check-shaders` 44/44,
+`npm run build` at 225 modules. Nothing in this closeout touches shaders or the build graph,
+so re-running them would have tested the clone rather than the change.
+
+No stray parent `.git` exists at `/Volumes`, `/Volumes/Projects` or `/Volumes/Projects/sail` —
+git reports "not a git repository" up to the mount point. That is the specific hazard §21 and
+the 2026-08-23 home-repo retirement were both about, and it is absent here.
+
+### The environment facts that could have bitten and did not
+
+- The volume mounts `nodev, nosuid, noowners` — **no `noexec`**, so `node_modules/.bin` and
+  native binaries run. A `noexec` external volume would have broken every gate at once.
+- APFS, `core.filemode = true`. Scripts are `rw-r--r--` and always were (they are invoked as
+  `node scripts/x.mjs`, never executed directly), so no exec bit was lost in the move.
+- `noowners` means ownership is not enforced on this mount. Nothing here depends on it.
+
+### What actually still assumed the old location
+
+The migration was reported as clean on the strength of a search of `AGENTS.md`,
+`AI_HANDOFF.md`, `HANDOVER.md`, `scripts/` and `.github/`. A grep of **all 257 tracked
+files** found that `HANDOVER.md`, `scripts/` and `.github/` were indeed clean, and two
+documents were not:
+
+| location | what it said | disposition |
+|---|---|---|
+| `AI_HANDOFF.md` §5a, last line | "The Sail repository is `/Users/eugene/Desktop/sail/leeward`" | **the dangerous one.** A prescriptive, load-bearing sentence in the file a cold reader is told to read first, in its topology section. Rewritten. |
+| `AI_HANDOFF.md` §5a rows | the retired home repo and the preserved patch | **not stale** — both still exist at exactly those paths and are still do-not-touch. Retained verbatim. |
+| `AGENTS.md`, *Reconciling another session's work* | `/Users/eugene` as the rationale for the toplevel rule | **not stale** — historical narrative, and still the reason the rule exists. Retained. |
+| `DIAGNOSIS.md` §21 | "single source of truth" | superseded by this section, §21 left intact. |
+
+The lesson worth keeping is not "grep more files". It is that **a valid clone is
+indistinguishable from the canonical one by inspection.** The Desktop checkout has the same
+remote, the same HEAD, the same 257 files and passes every gate. Nothing an agent can read
+inside it reveals that it is retired. That is why the warning has to be an explicit,
+named-path exception in the tooling, and why identity has to be checked before work rather
+than assumed from a working directory that was inherited from a previous session.
+
+### The identity test, and why it is deliberately not a path test
+
+`scripts/ai-context.mjs` now prints `--show-toplevel`, `--git-common-dir` and `remote -v`,
+and warns on four conditions: not a repository; no `origin`; an `origin` that is not
+`EugeneYip/Sail` (both `https://` and `git@` forms accepted); and the legacy toplevel by
+exact name. It also reports **standalone clone vs linked worktree** by comparing
+`resolve(--git-dir)` against `resolve(--git-common-dir)` — equal in a clone, divergent in a
+worktree. Verified against all four cases, including a linked legacy worktree, which reports
+`LINKED WORKTREE of /Users/eugene/Desktop/sail/leeward/.git`.
+
+The previous guard was `!/leeward$/.test(top)` — a basename test, and wrong twice over: it
+passes for the legacy checkout (which also ends in `leeward`) and it would fail a legitimate
+future clone directory named anything else. It was removed rather than tightened. **The
+canonical path is a fact about today's machine, not an identity test.** A fresh clone of
+`EugeneYip/Sail` at an unrelated path now produces no warning at all — confirmed by test.
+
+### One host dependency that did not move
+
+Playwright resolves its browsers from `~/Library/Caches/ms-playwright`, in the home
+directory, not from the checkout. Every capture and measurement script depends on it, and
+`npm ci` installs the package but not the browsers. Moving the repository to the SSD did not
+make the harness self-contained; on a fresh machine or a cleared cache, `npx playwright
+install` is required first. Recorded in `AGENTS.md` → *Measuring anything: use the harness*.
+
+### Untouched, deliberately
+
+The legacy checkout was inspected read-only and nothing in it was modified: HEAD `4e0f30f`,
+`?? .claude/` only, and **all five worktrees still registered and present** — none pruned,
+reset, stashed or integrated. Two remain dirty and remain other sessions' property. The
+retired home repo and the preserved patch were confirmed present and left alone.
+
+No `src/` file was touched in this migration closeout. The deployed round-2 gameplay package
+is unchanged and still awaiting player validation.

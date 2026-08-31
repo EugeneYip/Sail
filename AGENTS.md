@@ -105,24 +105,43 @@ than a tidy sequence.
 
 ## Reconciling another session's work
 
-**Before creating or trusting any worktree, verify which repository you are in:**
+**Before creating or trusting any worktree, verify which repository you are in.
+All three, every time:**
 
 ```bash
-git rev-parse --show-toplevel
+git rev-parse --show-toplevel     # where this checkout actually is
+git rev-parse --git-common-dir    # `.git` = standalone clone; a path elsewhere = linked worktree
+git remote -v                     # must be github.com/EugeneYip/Sail
 ```
 
 **A directory name or path is not evidence of repository ownership.** Nested and
 stray repositories happen — a home-level `.git` at `/Users/eugene` once made every
 directory under it look like part of a repository it had nothing to do with, so a
 worktree created "in Sail" could have been anchored somewhere else entirely. The
-toplevel is the only answer that means anything; the path you typed is not.
+git facts are the only answer that means anything; the path you typed is not.
+
+Each command answers a different question, which is why one is not enough. The
+toplevel says *where* you are. `--git-common-dir` says *what* you are — it resolves
+to the same place as `--git-dir` in a standalone clone, and points back at the parent
+repository in a linked worktree, so it is the check that stops you committing into
+someone else's worktree believing it is the main checkout. `git remote -v` says
+*whose* repository it is; a clone with a valid-looking layout and the wrong origin is
+not this project. `node scripts/ai-context.mjs` prints all three and flags the
+failure cases, including the retired-but-still-valid legacy checkout.
+
+Do **not** turn any of this into a check on the absolute path. The canonical location
+has already moved twice; a legitimate clone may live anywhere. Identity is the remote
+plus the git facts, not the directory.
 
 Two corollaries:
 
 - **Never hardcode a worktree directory name.** They are generated, they tell a
-  later reader nothing, and one of ours (`reverent-jepsen-5ed163`) is checked out on
-  a branch of an entirely different name (`claude/gifted-lalande-041ee3`). Resolve
-  branch and HEAD from git, per worktree, every time.
+  later reader nothing, and one of them (`reverent-jepsen-5ed163`) was checked out on
+  a branch of an entirely different name (`claude/gifted-lalande-041ee3`). That pair
+  is a **historical example from the legacy Desktop checkout** (`AI_HANDOFF.md` §5a),
+  **not a worktree registered in the canonical repository** — which is itself the
+  point: a name in a document is never evidence a worktree exists. Resolve branch and
+  HEAD from git, per worktree, every time.
 - **A task can run in a worktree this repository cannot see** — another machine, or
   an ephemeral environment. Absence from `git worktree list` is not evidence that a
   dispatched task failed, and it is not evidence its work is recoverable from here
@@ -361,6 +380,17 @@ weathered flax canvas sails.
 
 `scripts/measure.mjs` (`npm run measure-selftest` proves it works). Use it for any
 A/B, ablation or parameter sweep instead of hand-rolling a probe.
+
+**Setup, on a fresh machine or a cleared cache:** the harness drives Playwright, and
+Playwright's browser binaries are **machine-local cache state, not repository state** —
+they live outside the checkout (on macOS, `~/Library/Caches/ms-playwright`) and no amount
+of cloning, copying or moving the repository brings them along. `npm ci` installs the
+Playwright *package*, not the browsers. Run the install step once before any capture or
+measurement workflow:
+
+```bash
+npx playwright install
+```
 
 Five conclusions on this project were retracted because of instrument mistakes, not
 bad reasoning. The harness closes those specific traps:
