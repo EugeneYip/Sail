@@ -523,7 +523,16 @@ const origin = await page.evaluate(() => {
     y: p.y,
   };
 });
-await page.evaluate(() => window.__leeward.world.ext.env.unpin('all'));
+// Releasing the last pin also clears `frozen` (Weather.unpin: `if (pinMask === 0)
+// this.frozen = false`), and BOW SLAM above had set it via `capture:scene`. Without
+// this re-emit the cost case below would run on an evolving weather state where it
+// used to run on a frozen one -- a quiet change of conditions rather than the
+// no-op it should be.
+await page.evaluate(() => {
+  const w = window.__leeward.world;
+  w.ext.env.unpin('all');
+  w.bus.emit('capture:scene', {});
+});
 note('rebases in 1400 s', origin.events);
 note('voyage distance banked in world.origin', `${(origin.sailed / 1852).toFixed(2)} NM`);
 note('render-space distance from origin after', `${origin.dist.toFixed(0)} m (L2), ` +
