@@ -136,14 +136,19 @@ every check you could run on it.
 
 | location | status |
 |---|---|
-| `/Volumes/Projects/sail/leeward` | **current canonical working location.** External SSD, APFS, created 2026-08-31 by a fresh clone from GitHub. All normal development, new agents and new worktrees originate here. |
-| `/Users/eugene/Desktop/sail/leeward` | **LEGACY / RECOVERY ONLY — DO NOT USE FOR NORMAL DEVELOPMENT.** A complete, valid, same-remote, same-HEAD clone — which is exactly what makes it dangerous: nothing in its contents says it is retired. It still holds five old worktrees, two of them dirty. **Do not modify, prune, reset, stash, merge or delete it or its worktrees.** They are historical recovery material pending a separate cleanup decision. `scripts/ai-context.mjs` warns by name if you run it there. |
-| `/Users/eugene/.git-retired-2026-08-23` | a home-level `.git` that had accidentally made `/Users/eugene` a repository. Retired, not deleted. Its old branches and worktrees are unrelated historical tallship/Solo work. **Do not restore it.** Its existence is why `AGENTS.md` now requires `git rev-parse --show-toplevel` before trusting any worktree. |
-| `/Users/eugene/Desktop/sail/UNCOMMITTED-worktree-ca2247-2026-08-23.patch` | uncommitted work preserved from that migration. Audited read-only: it touches `.DS_Store`, `.claude/launch.json`, and `tallship/` paths only — **no** `src/physics/*`, `scripts/physics-test.mjs` or `tsconfig*`. Unrelated to any current task. **Do not apply it. Do not delete it yet.** |
+| `/Volumes/Projects/sail/leeward` | **the canonical working location.** External SSD, APFS, created 2026-08-31 by a fresh clone from GitHub. All development, new agents and new worktrees originate here. |
+| `/Users/eugene/Desktop/sail/leeward` | **gone. Deleted 2026-08-31 to recover internal disk space, after being archived.** It was canonical from 2026-08-19 until the SSD migration. Nothing is there now — if you find a checkout at that path, someone has recreated it and it is not this repository's business. |
+| `/Volumes/Projects/_legacy/sail-desktop-legacy-2026-08-31.tar.gz` | **the archive of that whole Desktop tree**, 4.3 GB. Holds the historical recovery material: `UNCOMMITTED-worktree-ca2247-2026-08-23.patch`, the `reverent-jepsen-5ed163` and `youthful-newton-84a949` worktrees, and their `.git/worktrees` metadata. **Do not extract it** without a specific forensic need you can state. Do not delete it. |
+| `/Users/eugene/.git-retired-2026-08-23` | a home-level `.git` that had accidentally made `/Users/eugene` a repository. Retired, not deleted, still on disk. Its old branches and worktrees are unrelated historical tallship/Solo work. **Do not restore it.** Its existence is why identity is checked from git facts and never from a path. |
 
-No old `.claude/worktrees` were migrated, and none must be reconstructed. A worktree created
-before this migration belongs to the legacy checkout; create fresh ones from the canonical
-repository, after running the three checks in §4.
+The preserved patch is **no longer loose on disk** — it went into the archive with
+everything else. Earlier notes that describe it at
+`/Users/eugene/Desktop/sail/UNCOMMITTED-worktree-ca2247-2026-08-23.patch` are
+describing where it used to be.
+
+No old `.claude/worktrees` were migrated, and none must be reconstructed — not from the
+archive either. Create fresh worktrees from the canonical repository, after running the three
+checks in §4.
 
 ## 6. Git and worktree rules — non-negotiable
 

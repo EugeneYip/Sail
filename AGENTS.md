@@ -189,6 +189,12 @@ docs, HTML missing its crawler/share metadata, and a `vite` `base` that is not
 `'./'`. If you add a probe, put it in `.tmp/` (gitignored). If you add an asset,
 keep it small and say why it is not procedural.
 
+**Bulk measurement output does not belong in the repository at all**, gitignored or
+not — captures, traces, logs, montages, browser artefacts. Write those to
+`/Volumes/Projects/_scratch/leeward/` on the SSD and keep only the conclusion. The
+repository lives on an external volume with room to spare, which is exactly why it
+is worth not filling it with run output nobody will read twice.
+
 `index.html` carries the SEO and share metadata. Two standing notes: webfonts load
 **non-blocking** on purpose (a render-blocking third-party stylesheet was costing
 first paint, leaking every visitor's IP and breaking offline) and there is

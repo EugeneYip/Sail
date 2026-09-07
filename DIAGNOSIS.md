@@ -9043,3 +9043,52 @@ retired home repo and the preserved patch were confirmed present and left alone.
 
 No `src/` file was touched in this migration closeout. The deployed round-2 gameplay package
 is unchanged and still awaiting player validation.
+
+## 123. The Desktop tree is gone (2026-08-31) — §122's on-disk description is superseded
+
+**§122 stands as the record of the SSD migration and is not edited.** One thing it
+describes is no longer true. It says the Desktop checkout is "kept only as historical
+recovery material" and "still holds five old worktrees". That was true when written. It is
+not true now:
+
+> §122: "`/Users/eugene/Desktop/sail/leeward` | **LEGACY / RECOVERY ONLY** … It still holds
+> five old worktrees, two of them dirty."
+
+**The whole `/Users/eugene/Desktop/sail` tree was archived and then deleted**, to recover
+internal disk space. Nothing was lost:
+
+| | |
+|---|---|
+| archive | `/Volumes/Projects/_legacy/sail-desktop-legacy-2026-08-31.tar.gz`, 4.3 GB |
+| verified by the owner | `gzip -t` passed; contents inspected |
+| verified here, read-only | streams as a valid `tar.gz`; top level is `sail/`, `sail/leeward/`, and `sail/UNCOMMITTED-worktree-ca2247-2026-08-23.patch` |
+| holds | the preserved patch, `reverent-jepsen-5ed163`, `youthful-newton-84a949`, and the associated `.git/worktrees` metadata |
+| `/Users/eugene/Desktop/sail` | does not exist |
+
+Listing the archive header is not extracting it. `tar -tzf … | head` closes the pipe after a
+few entries, so it costs nothing and proves the file is readable and structured as claimed —
+which is worth doing once, because "the archive is fine" is otherwise a claim nobody has
+tested until the day it matters.
+
+**Do not extract it** without a forensic need you can state, do not delete it, and do not
+reconstruct any of those worktrees from it. A worktree in there predates the migration and
+belongs to a repository that no longer exists on disk.
+
+`/Users/eugene/.git-retired-2026-08-23` is a separate artefact and is **still on disk**,
+still retired, still not to be restored.
+
+### Why the legacy-path warning stays in the tooling
+
+`scripts/ai-context.mjs` still names `/Users/eugene/Desktop/sail/leeward` and warns if it
+finds itself there. That path cannot exist now, so the check should never fire — it stays
+because the archive does exist, and unpacking it in place would recreate a checkout with the
+same remote, a valid layout and a plausible HEAD. It would pass `--show-toplevel`,
+`--git-common-dir` and `remote -v` (it is a real clone of this repository), which is exactly
+the case a path-blind identity test cannot catch. The named exception is the only thing that
+would. Its wording now says the tree was archived and deleted rather than implying it is
+sitting there.
+
+This is the general shape worth remembering: **identity checks establish that a checkout is
+a genuine clone of this repository; they cannot establish that it is the one you should be
+writing to.** Only a named exception does that, and a named exception is a fact about one
+machine that has to be maintained.

@@ -54,8 +54,10 @@ console.log('  production   : https://eugeneyip.github.io/Sail/');
 console.log('  deploys from : push to `main` (.github/workflows/pages.yml)');
 console.log('  read first   : AI_HANDOFF.md, then AGENTS.md, then DIAGNOSIS.md');
 
-// The one checkout that is a genuine clone of this repository and must NOT be used.
-// Named explicitly because it passes every other identity check.
+// Where the canonical checkout used to live, until 2026-08-31. That tree has since
+// been archived and deleted, so this should never fire -- it stays because the
+// archive still exists and unpacking it in place would recreate a checkout that is
+// a genuine clone of this repository and passes every other identity check.
 const LEGACY_TOPLEVEL = '/Users/eugene/Desktop/sail/leeward';
 const SAIL_REMOTE = /github\.com[:/]+EugeneYip\/Sail(\.git)?$/i;
 
@@ -96,12 +98,13 @@ if (!top) {
 
 if (top === LEGACY_TOPLEVEL) {
   console.log('');
-  console.log('  ** LEGACY / RECOVERY-ONLY CHECKOUT — DO NOT DEVELOP HERE **');
+  console.log('  ** LEGACY CHECKOUT PATH — DO NOT DEVELOP HERE **');
   console.log(`     ${LEGACY_TOPLEVEL} was canonical until 2026-08-31.`);
-  console.log('     It is a complete, valid, same-remote clone, which is exactly why it');
-  console.log('     is dangerous: nothing in its contents says it is retired. It still');
-  console.log('     holds old worktrees. Do not develop in it, and do not prune, reset,');
-  console.log('     stash or delete anything in it. See AI_HANDOFF.md section 5a.');
+  console.log('     That tree was archived and deleted, so anything here now has been');
+  console.log('     recreated -- most likely by unpacking the archive. It is a complete,');
+  console.log('     valid, same-remote clone, which is exactly why it is dangerous:');
+  console.log('     nothing in its contents says it is retired. Work in the canonical');
+  console.log('     checkout instead, and change nothing here. See AI_HANDOFF.md 5a.');
 }
 
 console.log('  (A path is not evidence of identity. A different absolute path is not by');
