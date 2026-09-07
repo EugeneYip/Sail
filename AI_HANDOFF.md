@@ -130,7 +130,7 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 | Boston island bases are open | 84 boundary edges, all at y ≈ −18 (`ISLAND_BASE_Y`). The **land** volume is closed, as §110 left it. Only visible from underwater and nothing shows the camera can get there. Left open deliberately. **Now gated**: `npm run geometry-test` fails if a hole appears at the waterline or at `LAND_FLOOR` (§127, §128) |
 | Physics `no wave-riding speed blowout` | pre-existing unstable assertion. Established: **no code path from `src/ship/build/*` into the solver.** Do not re-investigate (§117 B) |
 | `measure-selftest` CONFOUND assertions | intermittently fail on `origin/main` too. Stochastic, not a regression (§116) |
-| Fresh-load reproducibility | two *unmodified* page loads differ by 9–10 mean \|ΔL\| over 55–59 % of the frame with weather pinned, TAA and auto-exposure off. Any visual A/B across loads on a feature smaller than that is unresolvable. Nothing depends on fixing it yet; know it before designing one (§124) |
+| Fresh-load reproducibility | two *unmodified* page loads differ by 9–10 mean \|ΔL\| over 55–59 % of the frame. **Still unresolvable for a visual A/B**, but the reason is now known (§129): the *simulation* CAN be forced identical — clock, sun and weather bit-identical, ship pose to 4 mm — and the rendered frame still is not. Do not spend more time pinning simulation state; the residue is in the render path, and it is not the unseeded spray either |
 | Boston façades / city quality | blockout-grade by intent. Do not start façade polish before topology player-validation |
 
 ## 5a. Where this repository lives, and what else is on disk

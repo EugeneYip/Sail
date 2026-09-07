@@ -9475,3 +9475,89 @@ run on every invocation instead of on the one day someone hand-breaks the source
 
 That is the general point: **a manual break proves a predicate fires today; a synthetic
 control proves it fires forever.** Prefer the second where the shape can be constructed.
+
+## 129. Cross-load determinism: the simulation can be forced, the rendered frame cannot
+
+§124 measured that two unmodified page loads differ by 9–10 mean |ΔL| over 55–59 % of the
+frame and concluded that any visual A/B smaller than that is unresolvable. This asks *why*,
+because "unresolvable" closes off a whole class of investigation and was worth one attempt.
+
+### Procedural generation was never the problem
+
+All 123 `Math.random()` calls in `src/` are in `vfx/` (121 — spray, ordnance, rain, wake,
+particles) and `audio/Context.ts` (1). Every world builder — Boston, the islands, ocean
+`Noise`, the cinematic camera — already draws from the seeded `makeRng` in `util/math`. So
+the world you get is the same world every time.
+
+### What actually diverges: the free-run before the harness takes control
+
+`time.elapsed` is a plain accumulator (`Engine.ts:178`) counting from page load, and the
+engine free-runs until a script calls `eng.stop()`. How long that takes depends on shader
+compilation and machine load. Measured across two loads with identical scripted setup:
+
+| | load A | load B |
+|---|---|---|
+| `time.elapsed` | 4.900 s | 4.183 s |
+| `env.timeOfDay` | 8.6016 h | 8.5721 h |
+| ship position | (412.1, −0.59, −590.7) | (406.5, −0.62, −582.1) |
+
+Everything downstream — sun direction, ocean phase, where the hull is and what it is doing —
+follows from that.
+
+### The recipe that fixes the simulation state
+
+Stop the engine **first**, then drive every subsequent frame by hand, so both the frame count
+and each frame's dt are identical instead of depending on boot speed:
+
+```js
+eng.stop();                       // before anything else
+w.time.elapsed = 300;             // fixed clock origin
+w.time.frame = 0;
+w.ext.env.pause(true);            // freeze weather evolution
+w.ext.env.pin('timeOfDay', 9.5);  // and the sun with it
+/* pin the weather fields, then: */
+w.ext.physics.reset(headingDeg, knots);
+for (let k = 0; k < 600; k++) { t += 16.6667; eng.tick(t); }   // settle AND measure
+```
+
+Result, two fresh loads: `time.elapsed`, `env.timeOfDay` and `env.sunDirection` **bit
+identical**; ship position agreeing to **4 mm**, heading to **1.4e-5 rad**, speed to
+**0.0004 kn**. The simulation is reproducible.
+
+Order matters. Forcing `elapsed` *late* — after a real-time settle — made things **worse**
+(frame difference 6.1 → 28.3), because jumping the clock shocks every temporal subsystem and
+each re-converges from whatever state it had already reached. Stop first, then force.
+
+### The rendered frame is NOT reproducible, and that hypothesis is rejected
+
+The obvious next claim — that the recipe lowers the visual noise floor — does not survive its
+control. Five **interleaved** pairs per arm (interleaved because arm-versus-run-order
+confounding is exactly what §126 was about):
+
+| | mean \|ΔL\| per pair | median |
+|---|---|---|
+| control | 23.37, 1.97, 16.33, 25.05, 29.04 | **23.37** |
+| recipe | 1.08, 8.91, 11.86, 17.73, 11.00 | **11.00** |
+
+The median halves, and the first pair measured 1.078 against a control of 23.4 — a 21.7×
+improvement that looked like a result until the second pair came back at 8.9 with the control
+at 2.0. Mann-Whitney on the five interleaved pairs gives **U = 5 against a critical value of
+2** at p<0.05. **Inside variance. Rejected.**
+
+Nor is it the unseeded spray. Running the same recipe on a pinned flat calm — no whitecaps,
+no spray, no rain — gave 29.4 and 15.2, no better than the storm. The 121 unseeded
+`Math.random()` calls in `src/vfx` are the obvious suspect and the calm arm does not support
+them.
+
+### What this leaves
+
+**Do not spend more time pinning simulation state.** It is already forceable to four
+millimetres and it does not deliver a reproducible image. Whatever moves the remaining pixels
+survives an identical simulation state, an identical sun, an identical clock and a flat calm.
+It is somewhere in the render path, and finding it is a separate investigation with no
+current consumer — nothing in the backlog is blocked on it except visual A/Bs the owner has
+not asked for.
+
+§124's practical conclusion stands unchanged: **a cross-load visual A/B on a feature smaller
+than the floor is still not resolvable.** What has changed is that the reason is now known,
+and the next agent can skip the simulation half.

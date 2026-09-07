@@ -441,6 +441,15 @@ bad reasoning. The harness closes those specific traps:
   Same-load *relative* comparisons stay valid — every arm drifted together — unless the
   conclusion itself depended on the absolute weather state.
 
+- **You can force the simulation identical across loads; you cannot force the
+  frame.** Stop the engine *first*, then set `time.elapsed` and `time.frame`,
+  `pause()` the clock, pin `timeOfDay` and the weather, `px.reset()` the hull, and
+  drive every frame by hand — two fresh loads then agree on clock, sun and weather
+  exactly and on the hull to 4 mm. The rendered image still does not agree, and
+  five interleaved pairs per arm could not separate it from the control
+  (U = 5, critical 2). Force the state when you need a repeatable scenario; do not
+  expect a repeatable picture (§129). Force the clock *before* the settle, never
+  after — a late jump shocks every temporal subsystem and makes it worse.
 - **A live ocean measurement must span a wave GROUP, not a wave.** With the
   weather pinned exactly, the sea still beats: heave range swings 3.0 to 8.0 m on
   a **~45 s cycle**, and anything driven by wave encounter — bow slam, spray,
