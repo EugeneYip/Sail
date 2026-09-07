@@ -9652,3 +9652,41 @@ is not being made autonomously here.
 
 **What it does not prove:** that a shader is correct. A program that links can still compute
 nonsense. This is the compile/link floor and nothing above it.
+
+## 132. No resource leak in spawn/retire — hypothesis rejected, no change made
+
+Vessels retire past `RETIRE_M` and respawn on a `MEAN_GAP_S` cadence, wildlife pods come and
+go, and nothing watches whether any of that leaks GPU resources. A leak would degrade a long
+play session, is objectively measurable, and needs no visual judgement — so it was worth one
+controlled look.
+
+Four minutes with `world:showcase` re-emitted every 20 s, cycling `near`, `dolphins`,
+`whales`, `buoy` and `vessels`, to force far more spawn/retire churn than real time produces.
+Sampling `renderer.info` every 10 s:
+
+| wall (s) | 0 | 31 | 69 | 97 | 129 | 169 | 204 | 245 |
+|---|---|---|---|---|---|---|---|---|
+| geometries | 49 | 63 | 67 | 69 | 73 | 73 | 73 | 73 |
+| textures | 134 | 143 | 149 | 156 | 162 | 162 | 162 | 162 |
+| programs | 64 | 67 | 67 | 72 | 72 | 72 | 72 | 72 |
+| meshes in scene | 48 | 60 | 60 | 60 | 60 | 60 | 60 | 60 |
+| JS heap MB | 82 | 82 | 82 | 82 | 82 | 82 | 82 | 82 |
+
+**Everything plateaus at ~130 s and then does not move at all** — the last six showcase
+emissions, 120 seconds of continued churn, produced *zero* change in every counter. Mesh count
+is flat from 11 s. The heap never moves off 82 MB.
+
+That shape is lazy allocation reaching steady state: each showcase kind instantiates its
+geometry and material the first time it is asked for, and reuses them forever after. The
+counters are monotonically non-decreasing, which is exactly what a pool looks like — resources
+are not freed because they are about to be reused.
+
+**Rejected. No source change.** A per-spawn leak is excluded: it would have shown up on every
+emission and six consecutive ones moved nothing. A much slower purely time-based leak is not
+excluded by a four-minute window, but there is no evidence for one and chasing it would be
+speculation.
+
+**Not gated.** A leak gate needs a long run to say anything, which makes it slow and flaky for
+a failure nobody has seen. The baseline above is the more useful artefact: if someone suspects
+a leak later, the plateau is **73 geometries / 162 textures / 72 programs** after five
+showcase kinds, and a run that keeps climbing past it is the signal.
