@@ -33,9 +33,12 @@
  * And it does not cover the MATERIAL shaders at all -- `ocean/shaders/surface`,
  * `ship/shaders/{parts,sail,line}`, `vfx`, `world`. Those are injected into
  * three's own chunks via `onBeforeCompile`, so only a real engine boot
- * assembles them. For those, `capture.mjs`'s "zero ERROR:/Material Name: in
- * console" check is the instrument. Do not read a green run here as covering
- * them.
+ * assembles them. Do not read a green run here as covering them: run
+ * `npm run check-materials`, which boots the engine with `?showcase=all` and
+ * links all 66 of them on the real driver. Proven complementary rather than
+ * assumed -- an undeclared identifier in `world/shaders/terrain.ts` leaves
+ * check-glsl, `tsc` AND this script all green at exit 0, and fails
+ * check-materials (DIAGNOSIS 131).
  *
  * The program list is DISCOVERED, not hand-written, so a new pass is covered
  * the moment it is exported. Only the define permutations below are manual.

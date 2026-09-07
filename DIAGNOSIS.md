@@ -9599,3 +9599,56 @@ Both files restored to identical blob hashes afterwards.
 The rule is deliberately blunt: a future author who genuinely needs unseeded randomness in a
 new subsystem has to either seed it or put it where variety is expected. That decision should
 be conscious, which is the whole point of the gate.
+
+## 131. The material shaders had no gate at all, and now they do
+
+`check-shaders.mjs` has always said, in its own header, that it does not cover the material
+shaders — `ocean/shaders/surface`, `ship/shaders/{parts,sail,line}`, `vfx`, `world` — because
+those are injected into three's chunks through `onBeforeCompile` and only a real engine boot
+assembles them. It named `capture.mjs`'s console check as the instrument for those.
+
+That pointer was wrong in practice. **`capture.mjs` is a screenshot harness**: not an npm
+script, not in CI, and nobody runs it to check a shader. So the material programs had *no*
+automated gate — in the bug class this project has said cost it most. §27/§34: a structural
+fix was written and never called, `vAback` was left undeclared in the depth material, and sail
+shadows silently stopped compiling.
+
+`npm run check-materials` boots the engine at `?showcase=all` so every subsystem instantiates,
+then asserts on the real ANGLE-on-Metal driver that no program carries a failed `diagnostics`
+record, that nothing shader-shaped reached the console, and — so a boot that built nothing
+cannot pass by being quiet — that programs were actually linked and the named material
+programs are among them. **66 link on a clean boot**, including `ocean-surface`,
+`world-terrain`, `world-shore`, `world-buoy`, `world-vessel-liner`, `world-gull` and all
+twenty post passes.
+
+It also checks `renderer.debug.checkShaderErrors` is true. If three is not checking, a broken
+program links silently and every other assertion in the file is vacuous.
+
+### The control proves it is complementary, not duplicative
+
+A new gate is only worth its runtime if it catches something the existing ones do not. So the
+break was chosen to be **semantic, not lexical** — an undeclared identifier inside
+`terrainFrag`'s `main()`, which parses, lexes and is perfectly valid TypeScript inside a
+template literal:
+
+| gate | result |
+|---|---|
+| `npm run check-glsl` | **clean, exit 0** — blind |
+| `npx tsc --noEmit` | **exit 0** — blind |
+| `npm run check-shaders` | **44/44 pass, exit 0** — blind, exactly as its header says |
+| `npm run check-materials` | **exit 1** |
+
+and it failed for the right reason, on three independent assertions, naming the material:
+`world-terrain: Fragment shader is not compiled`, and
+`THREE.WebGLProgram: Shader Error 0 - VALIDATE_STATUS false / Material Name: world-terrain`.
+`terrain.ts` restored to its identical blob hash afterwards.
+
+### Not in CI, and why
+
+It needs the dev server, like `physics-test`, `assist-test` and `geometry-test`.
+`check-shaders` deliberately avoids booting the engine so it can run in CI without one.
+Putting a dev server into `pages.yml` is a separate decision with its own failure modes and
+is not being made autonomously here.
+
+**What it does not prove:** that a shader is correct. A program that links can still compute
+nonsense. This is the compile/link floor and nothing above it.

@@ -205,6 +205,7 @@ console.log('                         (it does NOT detect a downloaded asset as 
 console.log('                          that rule is AGENTS.md #7 plus review)');
 console.log('  npm run build          tsc --noEmit && vite build');
 console.log('  npm run geometry-test  mesh topology: Boston stays a closed volume');
+console.log('  npm run check-materials links every onBeforeCompile material program');
 console.log('                         (needs the dev server, like the two batteries below)');
 console.log('  node scripts/physics-test.mjs --quick');
 console.log('  node scripts/assist-test.mjs');

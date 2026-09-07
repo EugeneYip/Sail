@@ -235,8 +235,10 @@ Full protocol in `notes/README.md`. In short:
 5. **Fix only after causal closure**, then re-validate at the same viewpoints, and capture
    before/after.
 6. Gates: `npm run typecheck`, `npm run check-glsl`, `npm run check-shaders`,
-   `npm run preflight`, `npm run build`. Geometry work also has
-   `npm run geometry-test` (needs the dev server, like the two physics batteries).
+   `npm run preflight`, `npm run build`. Two more need the dev server, like the
+   physics batteries: `npm run geometry-test` (Boston stays a closed volume) and
+   `npm run check-materials` (every `onBeforeCompile` material program links —
+   `check-shaders` explicitly does not cover those).
 
 ## 9. Instruments known to be INVALID — do not repeat these
 

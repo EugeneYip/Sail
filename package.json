@@ -12,6 +12,7 @@
     "preflight": "node scripts/preflight.mjs",
     "check-shaders": "node scripts/check-shaders.mjs",
     "geometry-test": "node scripts/geometry-test.mjs",
+    "check-materials": "node scripts/check-materials.mjs",
     "measure-selftest": "node scripts/measure-selftest.mjs"
   },
   "dependencies": {
