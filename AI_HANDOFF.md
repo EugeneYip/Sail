@@ -109,6 +109,10 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 - Ensign penetrating the spanker — §118 C
 - Dark specks at high wind on a flat sea — §119 (whitecaps without waves)
 - Accidental iPad double-tap zoom — §120, §121
+- `wgeom` `cyl` and `rope` normals — §124 (audited: correct; the old lead was wrong)
+- `tsconfig.render-check.json` — §125 (it never existed here; nothing to retire)
+- `assist-test` irons case failing under `--quick` — §125 (settle 10 s short of the transient)
+- `physics-test` floating-origin case — §125 (asserted an L2 bound the solver never promised)
 
 **Open — do not describe these as closed:**
 
@@ -120,10 +124,12 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 | **Sail residual sheen mottling** | measured (−19.5 % of mottling is the `sheen` lobe); **deferred visual-quality decision**, not a closed defect (§121) |
 | Rope free ends (backstay feet) | cause known: the foot sits ~0.72 m outboard of the planking; moving it is coupled to `fitRigEnvelope` / spanker clearance (§115) |
 | Far-sea dot-lattice aliasing | never isolated |
-| `wgeom` `tube`/`cyl`/`rope` normals | **bounded cross-system lead only.** Boston's land/island/box cases are proven inverted; vessel/buoy/creature consumers are unexamined. **Do not flip globally** without a per-consumer audit (§110, §117) |
+| `wgeom` normals — **vessel hulls only** | audited per consumer in §124. `cyl` and `rope` are **correct**; `tube` has no convention of its own. What is left: `vesselGeom`'s hull rings wind inward (flanks 2–9 % outward, deck correct in the same mesh) and the vessel shader only cancels it for cloth. **Whether it is visible is unmeasured** — three instruments failed. Needs one screenshot pair judged by eye, not more measurement. Do not flip it on the geometry alone |
+| `creatureGeom.loftBody` winding | inward, but the creature shader flips N to face the camera unconditionally, so it reaches no pixel. Cosmetic-in-source only; leave it (§124) |
 | Pale blocky blobs on a flat mirror sea | observed, pale not dark, uninvestigated (§119) |
 | Physics `no wave-riding speed blowout` | pre-existing unstable assertion. Established: **no code path from `src/ship/build/*` into the solver.** Do not re-investigate (§117 B) |
 | `measure-selftest` CONFOUND assertions | intermittently fail on `origin/main` too. Stochastic, not a regression (§116) |
+| Fresh-load reproducibility | two *unmodified* page loads differ by 9–10 mean \|ΔL\| over 55–59 % of the frame with weather pinned, TAA and auto-exposure off. Any visual A/B across loads on a feature smaller than that is unresolvable. Nothing depends on fixing it yet; know it before designing one (§124) |
 | Boston façades / city quality | blockout-grade by intent. Do not start façade polish before topology player-validation |
 
 ## 5a. Where this repository lives, and what else is on disk

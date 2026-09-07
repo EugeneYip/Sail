@@ -9184,3 +9184,122 @@ eye. That is an owner call and it needs one screenshot pair, not a measurement c
 
 The false claim has been removed from the `box()` comment in `wgeom.ts`, because that comment
 is where the next reader will start.
+
+## 125. The two lost investigations, restarted from scratch: one had no subject, the other no defect
+
+Two tasks were dispatched to worktrees that never returned a handoff, and the tree they ran in
+has since been archived (§123). Their execution is unavailable, so both were restarted from
+current `main` rather than recovered. Ownership was checked first: one worktree, no notes, no
+other writer.
+
+### A2 — `tsconfig.render-check.json`: DEAD / ORPHANED, and it was never ours
+
+The task was "fix or retire" it. There is nothing to retire. **The file has never existed on
+any ref in this repository:**
+
+```
+git log --all -- tsconfig.render-check.json     -> empty
+git grep -I -F render-check                     -> no match in any tracked file
+git for-each-ref                                -> main, origin/main, origin/HEAD only
+ls tsconfig*                                    -> tsconfig.json
+```
+
+Every `tsc` invocation in the repository is a bare `tsc --noEmit` (`build` and `typecheck` in
+`package.json`; nothing else). No `-p`, no `--project`, no `extends`, no `references`. So it
+had no consumer, transitively or otherwise, and the classification is not a judgement call.
+
+It presumably existed only inside one of the ephemeral worktrees and was never committed —
+which is also why nothing about it survived. **No forensic need to open the archive**: the
+question "does it have a current consumer" is answered entirely by the current repository, and
+an unmerged, unpushed file in a dead worktree is not a consumer whatever it contained.
+
+**Do not recreate it, and do not broaden the root config to compensate for it.**
+
+### The gap it might have been for, which is real
+
+`tsconfig.json` had `"include": ["src"]`. `vite.config.ts` is the only TypeScript file in the
+repository outside `src`, so **the shipping typecheck had never read it**. Proven with a
+control rather than asserted — inject `const __probe: number = "x"` into `vite.config.ts`:
+
+| | exit |
+|---|---|
+| `npm run typecheck`, `include: ["src"]` | **0** — sees nothing |
+| same, with `vite.config.ts` in `include` | **2** — TS2322 |
+
+Vite strips types with esbuild and never checks them, so nothing downstream would have caught
+it either. The file decides `base: './'`, the one setting that 404s the entire Pages deploy if
+it changes. Closed by adding `vite.config.ts` to `include`; no new errors, build green,
+`check-shaders` 44/44.
+
+`scripts/*.mjs` stays out deliberately. It is plain JavaScript with no annotations, so
+covering it needs `allowJs` + `checkJs`, which is a scope change with its own argument rather
+than a gap being closed.
+
+### A1 — "Infinity reads in the physics battery": not reproducible, and the batteries are clean
+
+Ran both suites, both modes. **No non-finite value appeared anywhere**, and both report the
+absence positively:
+
+- `physics-test.mjs`: *0 non-finite values over 5 × 36 000 frames* of gale on the real wave field.
+- `assist-test.mjs`: *0 bad in 18 000 assisted gale frames*.
+- Neither run printed `Infinity` or `NaN` in any line, in `--quick` or full.
+
+The original observation cannot be checked — the run that produced it is gone with its
+worktree. What can be done is to say where a non-finite reported quantity *could* come from,
+and whether it can actually arise. Every division in the two suites whose denominator can
+reach zero:
+
+| site | guard | reachable? |
+|---|---|---|
+| `assist-test` `radius90` | explicit `t90 ? … : Infinity` sentinel | yes if she never turns 90° in 120 s — but then the assertion on it FAILS loudly, because `Infinity < 3 * 53.3` is false. Safe by construction |
+| `assist-test` `meanKn` | explicit `nQuarter ? … : 0` | guarded |
+| `assist-test` `firstQuarter` | seeded `Infinity`, lowered only for rows with `turned <= 90` | the trace is one row per frame and the first row has turned ≈ 0.08°, so it is always assigned. **Unreachable** |
+| `assist-test` `radiusCircle` | none; `steady` in the denominator | `steady` is 0.40 deg/s even in Pro with the helm hard over. Not observed at 0 |
+
+One of those deserves naming even though it is unreachable today. `firstQuarter` is seeded to
+`Infinity` and then fed to `check(turn.bear.firstQuarter > 0.65 * turn.bear.kn0, …)`. Had it
+ever stayed unassigned, **`Infinity > anything` is true and the assertion would have passed on
+missing data.** It is safe only because the trace is dense. Left alone — a guard against an
+unreachable state is speculative work — but recorded, because "the assertion passed" and "the
+assertion had data" are not the same claim.
+
+**Conclusion: A1 is closed as NOT REPRODUCIBLE, not as fixed.** No solver change was made and
+none was warranted. Had one been made on the strength of a displayed `Infinity`, it would have
+been a change to correct physics.
+
+### What the batteries were actually wrong about
+
+Restarting A1 meant running the suites properly for the first time in a while, and that found
+two assertions that were measuring the harness rather than the ship. Both are the same shape:
+**a number that depends on something the test never controlled.** Neither is a solver defect
+and `src/physics` is untouched by either.
+
+- **The irons case needed 100 s and `--quick` gave it 90.** Full detail in the commit; the
+  short version is that stalled at TWA 45 she never reaches a steady state at all, but swings
+  with a ~150 s period about roughly 42°, and the latch arms the first time that swing carries
+  her inside 44°. First latch at 100 s. Floored that one arm at 150 s. Sweeping commanded TWA
+  10–70 showed the no-go zone itself was never in question — irons latches everywhere from 10
+  to 44 and clears from 45 up, exactly where the constant says.
+- **The floating-origin case asserted a radius the solver never promised.** `shiftOrigin`
+  rebases on the L-infinity norm at 4000 m; the test asserted the Euclidean radius under
+  4100 m, which is not a property the code has ever had — at a rebase, L2 can legitimately
+  reach `R√2` = 5657 m. Eight arms with the wind bearing pinned, everything else identical,
+  gave L2 of 4161/3903 m alternating with a 90° period (4/8 under 4100) while the largest
+  component held 8/8. Now pinned through `world.ext.env.pin`, asserted, and measured on the
+  component. Quick and full agree to 1 m where they used to disagree by 4 km.
+
+Both were latent for as long as the assertions have existed. Neither is a regression, and
+nothing about the ship changed to expose them.
+
+### And one stale contract
+
+`src/physics/index.ts` publishes the Pro polar as the module's measured contract and claimed
+`irons` at TWA 60 and 65. She sails at both — 3.60 and 4.29 kn, VMG +1.2, checked at 90, 180
+and 240 s of settle. Only 50 latches. The rest of the table matches today's full run to the
+digit, and `src/physics` has had no functional change since the block was written in
+`6264d46`, so only those two cells had gone stale.
+
+How it survived: `steady()` in the harness has always returned `inIrons`, and the polar table
+has never printed it. **The one number that would have contradicted the doc was measured on
+every single run and thrown away.** It is printed now, so the doc cannot drift from the
+harness again without someone seeing it.
