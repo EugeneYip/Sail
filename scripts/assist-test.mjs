@@ -540,7 +540,7 @@ const pro = await run(`
     const tr = px.run(ARG.settle, 1 / 60);
     const last = tr[tr.length - 1];
     out[twa] = { kn: last.knots, heel: last.heelDeg, leeway: last.leewayDeg, held: last.twaDeg,
-                 vmg: last.vmgKnots };
+                 vmg: last.vmgKnots, irons: w.ship.inIrons };
   }
   // NOT ARG.settle. Every other Pro case here reaches a steady state in well
   // under a minute; this one never reaches one at all. Stalled at TWA 45 she
@@ -571,6 +571,15 @@ check(Math.abs(pro[70].twaDeg ?? pro[70].held) + Math.abs(pro[70].leeway) >= 65,
 check(pro[70].kn > 4 && pro[70].kn < 7, 'Pro close-hauled is still hard work', `${pro[70].kn.toFixed(2)} kn`);
 check(pro.irons === true, 'Pro still goes into irons at TWA 45',
   `inIrons = ${pro.irons}, holding ${pro.ironsHeld.toFixed(1)} deg off the wind (latch arms inside 44)`);
+// The other half of the bracket. Until this existed, NOTHING in either battery
+// asserted `inIrons === false` anywhere, so a latch stuck permanently true would
+// have passed every check in both suites -- including the one directly above,
+// which is the whole reason that one is worth having. These three angles are
+// already measured in this case and she plainly sails at all of them.
+check(pro[70].irons === false && pro[90].irons === false && pro[175].irons === false,
+  '...and NOT in irons where she is sailing',
+  `TWA 70/90/175 -> ${pro[70].irons} / ${pro[90].irons} / ${pro[175].irons} ` +
+  `at ${pro[70].kn.toFixed(1)} / ${pro[90].kn.toFixed(1)} / ${pro[175].kn.toFixed(1)} kn`);
 
 /* ------------------------------------------------------------------ *
  *  7. determinism and cost, assisted

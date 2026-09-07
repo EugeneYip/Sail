@@ -553,7 +553,12 @@ check(origin.events >= 1, 'the world gets rebased', `${origin.events} origin:shi
 // a diagonal of the rebase box and a diagonal wind puts it on an axis. Distance
 // sailed was 2.28-2.42 NM in all eight, so nothing about the ship changed. The
 // old assertion was passing or failing on which way the world happened to face.
-check(origin.linf <= 4001, 'she never wanders far from the render origin',
+// Strictly under the radius, with no tolerance, because none is owed: `tick()`
+// calls `shiftOrigin` AFTER the substep loop on every frame, and `run()` is a
+// loop over `tick`, so when the run returns the last rebase has already happened.
+// The invariant is exactly `max(|x|, |z|) < ORIGIN_SHIFT_RADIUS`. Measured max
+// across the eight bearings above: 3950 m.
+check(origin.linf < 4000, 'she never wanders far from the render origin',
   `largest component ${origin.linf.toFixed(0)} m against the 4000 m rebase radius ` +
   `(L2 ${origin.dist.toFixed(0)} m)`);
 check(origin.sailed > 3000, 'world.origin accumulates the distance actually sailed',
