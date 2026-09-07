@@ -11,6 +11,7 @@
     "check-glsl": "node scripts/check-glsl.mjs",
     "preflight": "node scripts/preflight.mjs",
     "check-shaders": "node scripts/check-shaders.mjs",
+    "geometry-test": "node scripts/geometry-test.mjs",
     "measure-selftest": "node scripts/measure-selftest.mjs"
   },
   "dependencies": {

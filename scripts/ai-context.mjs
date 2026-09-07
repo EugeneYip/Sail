@@ -204,5 +204,8 @@ console.log('  npm run preflight      publishability: scratch files, secrets, si
 console.log('                         (it does NOT detect a downloaded asset as downloaded --');
 console.log('                          that rule is AGENTS.md #7 plus review)');
 console.log('  npm run build          tsc --noEmit && vite build');
+console.log('  npm run geometry-test  mesh topology: Boston stays a closed volume');
+console.log('                         (needs the dev server, like the two batteries below)');
 console.log('  node scripts/physics-test.mjs --quick');
+console.log('  node scripts/assist-test.mjs');
 console.log('\n  DO NOT PUSH unless the owner asks — a push to main deploys to players.\n');

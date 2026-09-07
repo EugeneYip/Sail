@@ -9418,3 +9418,60 @@ Recorded rather than fixed, with the number that makes it cheap to re-check: **8
 edges, all at y ≈ −18.** If underwater views are ever supported, or that count ever moves,
 this is where to start. A count that changes at the waterline or at −52 would be a real
 regression of §110 and should be treated as one.
+
+## 128. §110's closed volume is now gated, and the waterline predicate needed a synthetic rim
+
+§109/§110 fixed a player-visible defect — Boston was a hollow shell you could see inside —
+and nothing has guarded it since. §127 measured the current state; this turns that
+measurement into `npm run geometry-test`.
+
+### What it asserts, and what it deliberately does not
+
+Not "there are exactly 84 boundary edges". That would break on any legitimate island tweak
+and would be a magic number, not an invariant. It asserts **where a hole is allowed to be**:
+
+- none at or near the waterline — the §110 signature, the one a player can see;
+- none down at `LAND_FLOOR` — the land volume's bottom is still capped;
+- the only open rims are the harbour island bases at `ISLAND_BASE_Y`, eighteen metres down
+  and deliberate (§127).
+
+The band is `ISLAND_BASE_Y ± 4 m`. Measured rim spread is 1.15 m (−18.59…−17.44), so that is
+~3.5× the real spread and still nowhere near either the waterline or the floor.
+
+Two supporting checks come with it. **The weld-tolerance sweep**: the boundary count must be
+identical at 1 mm, 1 cm, 10 cm and 1 m, because a numerical seam collapses as the tolerance
+coarsens and a hole does not — without it the whole statistic could be float noise. And
+**non-manifold edges must stay under 0.5 %** of all edges; they are T-junctions where the
+wharf and quays meet the land, currently 16 of 24 071.
+
+### The controls are part of the test, not a one-off
+
+A topology check that cannot tell a closed mesh from an open one is worse than none, because
+it is green. So the test builds shapes of known topology first and refuses to report on
+Boston unless they come out right: a `box()` must read 0 boundary edges, and a two-rim
+`tube()` must read exactly 2 × segments.
+
+### The finding worth recording: Boston's outer ring is submerged
+
+Both location predicates were hand-broken against the real source to prove they fire:
+
+| break | result |
+|---|---|
+| hub fan removed (`buildLand`) | boundary 84 → **290**, lowest vertex exactly **−52.00 = LAND_FLOOR**, floor predicate FAILS, exit 1 |
+| skirt wall removed (`b.tube([ring, floor], true)`) | boundary 84 → **496**, lowest vertex **−52.00**, floor predicate FAILS, exit 1 |
+
+Both fired the **floor** predicate. Neither lifted the **waterline** one: `yHi` stayed at
+−17.44 in both. The reason is worth knowing before someone else spends the same hour on it —
+**Boston's entire perimeter ring is below −17 m.** The `OFF` ladder runs from −460 m offshore
+to +1240 m inland, but the ring's vertices are welded into other structure at those
+positions, so opening the land's skirt does not expose anything above water. There is no
+cheap hand-break of `buildLand` that raises `yHi`.
+
+So the waterline predicate had **no demonstration at all**. Rather than contort the source
+until one appeared, both predicates were extracted into named functions and the controls now
+build a rim at y 0…5 and a rim at y −60…−55 and assert that *those same functions* reject
+them. The controls exercise the code Boston is judged by, not a re-spelling of it, and they
+run on every invocation instead of on the one day someone hand-breaks the source.
+
+That is the general point: **a manual break proves a predicate fires today; a synthetic
+control proves it fires forever.** Prefer the second where the shape can be constructed.
