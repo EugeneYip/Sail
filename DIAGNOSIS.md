@@ -9092,3 +9092,95 @@ This is the general shape worth remembering: **identity checks establish that a 
 a genuine clone of this repository; they cannot establish that it is the one you should be
 writing to.** Only a named exception does that, and a named exception is a fact about one
 machine that has to be maintained.
+
+## 124. The `wgeom` normals lead, audited per consumer: two thirds of it is not real
+
+§110 fixed `box()` and left a note saying `tube`, `cyl` and `rope` "share the same inverted
+convention". §117 carried that forward as a **STRONG CROSS-SYSTEM LEAD**. Audited now, one
+primitive at a time. **The lead is wrong about `cyl` and `rope`, and misattributed for
+`tube`.** One real inversion is left, in one consumer, and its visual consequence is
+**unknown** rather than zero.
+
+### The instrument, and its calibration
+
+For a closed shape an outward normal satisfies `dot(n, p − centroid) > 0`. Score the fraction
+of vertices that satisfy it: outward geometry reads ~100 %, inverted reads ~0 %. The
+calibration is `box()` — proven inverted in §110 and fixed there, so it **must** now read
+outward or the instrument is worthless. One isolated shape per primitive, one builder each:
+
+| primitive | verts | outward | mean dot | reads as |
+|---|---|---|---|---|
+| `box()` | 24 | **100.0 %** | +0.577 | OUTWARD — calibration passes |
+| `cyl()` | 34 | **100.0 %** | +0.611 | OUTWARD |
+| `tube()`, ring ccw about the advance direction | 48 | **100.0 %** | +0.804 | OUTWARD |
+| `tube()`, ring cw about the advance direction | 48 | **0.0 %** | −0.804 | INWARD |
+| `rope()` | 10 | 40 % | **0.000** | not a surface normal at all |
+
+Three conclusions, and none of them is what the lead said:
+
+- **`cyl()` is correct and always was.** Its ring runs counter-clockwise about the axis it
+  advances along, both caps included. Nothing built with `cyl` — every buoy, the spars, the
+  masts — was ever affected.
+- **`rope()` does not derive a normal from winding.** Both vertices of a station sit on the
+  axis, so every triangle is degenerate and `finish()` would produce nothing; `nfix`
+  overwrites all of them with the rope's own axis, which is what the ribbon shader needs. A
+  mean radial dot of exactly 0.000 is that, measured. Winding cannot affect its lighting.
+- **`tube()` has no convention of its own.** The caller's ring order decides, and the two
+  control rows above are the same primitive with the ring wound each way. So "`tube` is
+  inverted" is not a statement that can be true or false — only a caller can be.
+
+### Which callers are wound inward
+
+| consumer | primitive | measurement | does it reach the pixels? |
+|---|---|---|---|
+| `Boston.ts` land/islands | `tube` | fixed in §110 | — |
+| `creatureGeom.loftBody` | `tube` | dolphin 20 %, whale 15 %, fish 4 % outward | **No.** `shaders/creature.ts` runs `if (dot(N, V) < 0.0) N = -N;` unconditionally, so the body is shaded with a camera-facing normal whichever way it was wound. The material is `DoubleSide`, so culling does not see it either. |
+| `vesselGeom` hull rings | `tube` | flanks **2.2–8.5 % outward**, mean dot −0.79 to −0.88 | **Yes, in principle.** `shaders/vessel.ts` runs the same flip but gates it: `if (vCloth > 0.5 && dot(N, V) < 0.0)`. The hull carries `KIND_FIXED = 0`, so `cloth` is 0 and the flip does not apply. |
+
+The vessel measurement carries its own control **inside the same mesh**: the deck, built by
+`tube` from rows running +x to −x, reads UP (63/20, 29/9, 170/24 for smack, brig, liner)
+while the flanks read inboard. Same builder, same run, opposite answers — so this is the
+hull ring order specifically and not a systematic error in the statistic.
+
+The ring is the reason: it runs starboard rail → starboard keel → port keel → port rail,
+which is clockwise about +z, and the rings advance along +z. That is exactly the second
+`tube()` control row.
+
+### Whether it is visible: NOT ESTABLISHED, and three instruments failed proving it
+
+This is the part worth recording, because the temptation was to fix it on the geometry alone.
+
+1. **Canvas readback is void.** Reading the composited canvas in-page via `drawImage`
+   returned luma 0.000 for every pixel including the sky. Caught by the sky control, which
+   cannot legitimately be black. (Same trap as §112; `page.screenshot` is fine.)
+2. **Attribute mutation does not bind.** Negating `geometry.attributes.normal` in the page
+   and setting `needsUpdate` changed nothing — and neither did setting every normal to
+   `(0,1,0)`, a perturbation no shading model could ignore. Measured against a repeat of the
+   unchanged arm: floor 0.950, negated 0.973, all-up 0.967 mean |ΔL|. **An A/B whose lever
+   does not bind reads exactly like an A/B with no effect**, and the first two runs of this
+   would have been reported as "no visual difference" if the all-up arm had not been there.
+3. **Fresh-load A/B cannot resolve it.** Rebuilding the geometry with the ring reversed does
+   bind, by construction. But two *unmodified* loads differ by 9.0–10.2 mean |ΔL| over 55–59 %
+   of the frame, with the sky control alone moving 2.6–3.8; base-vs-patched came in at
+   8.2–10.7. The change is confined to three hulls covering **2.5 % of the frame**, and load
+   to load the sun angle, ship pose and cloud field do not reproduce anywhere near well
+   enough to see it.
+
+So: **the winding is inverted, the shader does consume it, and nobody has yet seen what it
+looks like either way.** No player report names the background vessels.
+
+### Not fixed, deliberately
+
+Reversing the hull ring is a one-line change and it is *probably* right. It is not being made:
+
+- The visual consequence is unmeasured, and these hulls have shipped and been reviewed. If
+  they currently read correctly to the owner, flipping every hull normal is an art-direction
+  change wearing a bug fix's clothes.
+- §110's Boston fix was justified by a *reported, visible* defect — buildings reading as
+  black slabs. There is no equivalent report here.
+
+What would settle it: a still of the same three hulls, same sun, wound each way, judged by
+eye. That is an owner call and it needs one screenshot pair, not a measurement campaign.
+
+The false claim has been removed from the `box()` comment in `wgeom.ts`, because that comment
+is where the next reader will start.

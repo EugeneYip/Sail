@@ -82,10 +82,31 @@ export class MeshBuilder {
       // That is why Boston's quays, wharf and buildings rendered as black slabs.
       //
       // Only Boston reaches this method -- the ship has its own MeshBuilder --
-      // so the correction is contained. `tube`, `cyl` and `rope` here share the
-      // same inverted convention and are NOT touched: those are also reached by
-      // the vessels, the buoys and the creatures, and re-lighting all of them is
-      // its own pass with its own verification.
+      // so the correction is contained.
+      //
+      // This comment used to go on to say that `tube`, `cyl` and `rope` "share
+      // the same inverted convention". They do not, and that claim sent the next
+      // reader looking for a defect in the wrong three places. Audited with an
+      // isolated shape per primitive, scored as the fraction of vertices whose
+      // normal points away from the centroid (DIAGNOSIS 124):
+      //
+      //   box()                      100 % outward   -- this fix, calibration
+      //   cyl()                      100 % outward   -- correct, always was
+      //   tube(), ccw about advance  100 % outward
+      //   tube(), cw  about advance    0 % outward
+      //   rope()                     mean radial dot 0.000
+      //
+      // `tube` has no convention of its own: the CALLER's ring order decides,
+      // and Boston's rows happened to be wound the inward way. `cyl` winds them
+      // the outward way and is correct. `rope` never derives a normal from
+      // winding at all -- `nfix` overwrites every one with the rope's axis for
+      // the ribbon shader, which is why its radial dot is exactly zero.
+      //
+      // What IS wound inward, by their own callers: `loftBody` in creatureGeom
+      // and the hull rings in vesselGeom. See DIAGNOSIS 124 before touching
+      // either -- the creature shader already cancels it and the vessel one does
+      // not, and the visual consequence for the vessels is measured as unknown,
+      // not as zero.
       this.quad(i0, i3, i2, i1);
     }
   }
