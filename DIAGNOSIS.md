@@ -9561,3 +9561,41 @@ not asked for.
 §124's practical conclusion stands unchanged: **a cross-load visual A/B on a feature smaller
 than the floor is still not resolvable.** What has changed is that the reason is now known,
 and the next agent can skip the simulation half.
+
+## 130. The world is the same world every load, and now something guards that
+
+§129 established that every world builder already draws from the seeded `makeRng`, but that
+was read off the source rather than measured. Measured now, hashing the vertex buffer of
+every named mesh across two fresh page loads:
+
+**31 of 31 identical** — the ship's twelve material groups (`ship-oak` 22 332 verts,
+`ship-iron` 14 120, `ship-black` 7 086, …), `world-boston` at 26 539, both islands, all three
+background vessels, the gull, dolphin and whale, the buoy, and the VFX geometry. Calling the
+exported builders twice in the same page also returns identical buffers.
+
+So procedural generation is genuinely deterministic. Nothing guarded it.
+
+### The guard is on the cause, not the symptom
+
+Comparing buffers costs a second page load in a gate that already needs one. The cause is
+cheaper to check than the symptom, and it is a one-line invariant: **every `Math.random()` in
+`src/` is under `vfx/` or `audio/`**, where per-frame variety is the point and no geometry is
+persisted from it. All 123 of them, today. So `preflight` now fails on a `Math.random()` in
+any other `src/**.ts`, with a message naming `makeRng` and this section.
+
+It runs in CI — `preflight` is in `pages.yml` — so this is a deploy gate, not just a local one.
+
+### Two-sided control
+
+A rule that only ever fires is as useless as one that never does:
+
+| arm | result |
+|---|---|
+| `Math.random()` appended to `src/world/Boston.ts` | **NOT PUSH-READY**, exit 1, message names the file |
+| the identical line appended to `src/vfx/Particles.ts` | **push-ready**, exit 0 — the exemption holds |
+
+Both files restored to identical blob hashes afterwards.
+
+The rule is deliberately blunt: a future author who genuinely needs unseeded randomness in a
+new subsystem has to either seed it or put it where variety is expected. That decision should
+be conscious, which is the whole point of the gate.

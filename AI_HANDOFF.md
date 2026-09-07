@@ -27,8 +27,9 @@ Constitution (1797 frigate) on an open ocean. Three.js + TypeScript + Vite, WebG
 audio. **No downloaded assets of any kind** — no textures, models, HDRIs or audio files.
 That constraint is deliberate and non-negotiable. Note what enforces it: `AGENTS.md`
 non-negotiable #7 and review — **not** `npm run preflight`, which gates scratch files,
-plausible secrets, file size, docs, HTML metadata, the Vite base and notes, but would not
-recognise a small downloaded texture as downloaded. Do not rely on the tooling to catch it.
+plausible secrets, file size, docs, HTML metadata, the Vite base, notes and unseeded
+randomness outside `src/vfx`/`src/audio` (§130), but would not recognise a small downloaded
+texture as downloaded. Do not rely on the tooling to catch it.
 
 Repository: `https://github.com/EugeneYip/Sail`
 

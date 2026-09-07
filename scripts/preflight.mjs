@@ -250,6 +250,32 @@ async function findNotes(trackedFiles) {
   }
 }
 
+/* 9. World generation must stay seeded. ------------------------------------- */
+// Unseeded randomness in a world builder means the world regenerates differently
+// on every load. Measured on today's code: 31/31 named meshes are byte-identical
+// across two fresh page loads -- the ship's twelve material groups, Boston's
+// 26 539 vertices, the islands, the vessels, the creatures, the buoys (see
+// DIAGNOSIS 129). Nothing guarded that invariant, and comparing buffers costs a
+// second page load; the cause is cheaper to check than the symptom. Every
+// `Math.random()` in `src/` today is under `vfx/` or `audio/`, where per-frame
+// variety is the entire point and no geometry is persisted from it.
+const SEEDED_EXEMPT = /^src\/(vfx|audio)\//;
+for (const f of tracked) {
+  if (!/^src\/.*\.ts$/.test(f) || SEEDED_EXEMPT.test(f)) continue;
+  let text;
+  try {
+    text = await readFile(f, 'utf8');
+  } catch {
+    continue;
+  }
+  if (/\bMath\.random\s*\(/.test(text)) {
+    fail.push(`${f} calls Math.random() — world generation must draw from the seeded`
+      + ' makeRng() in src/util/math.ts, or the world is a different world every load'
+      + ' (DIAGNOSIS 129). If this really is per-frame variety that nothing persists,'
+      + ' it belongs under src/vfx/ or src/audio/.');
+  }
+}
+
 /* 8. A licence is required to publish, and is the owner's choice. ----------- */
 if (!tracked.some((f) => /^LICEN[SC]E/.test(f))) warn.push('no LICENSE — pick one before publishing');
 
