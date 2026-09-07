@@ -441,5 +441,16 @@ bad reasoning. The harness closes those specific traps:
   Same-load *relative* comparisons stay valid — every arm drifted together — unless the
   conclusion itself depended on the absolute weather state.
 
+- **Never run two headless batteries at once.** They contend for the GPU and the
+  dev server, and it is not merely slow: `measure-selftest` has been killed
+  outright by a 30 s page-load timeout while a physics run was compiling shaders.
+  `capture.mjs` already refuses to print an unflagged frame time when it detects
+  another one, which is what that flag is for.
+- **Interleave arms, or do not compare them.** Running every control arm before
+  every treatment arm confounds the treatment with everything else that drifts
+  over a session. This was done here, by hand, inside the harness's own test, and
+  produced a clean 2/2-versus-0/3 split for a one-line change that could not
+  possibly have caused it (§126).
+
 If a result contradicts physics, or arms order impossibly, suspect the instrument
 before believing the discovery.

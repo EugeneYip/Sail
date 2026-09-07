@@ -9303,3 +9303,60 @@ How it survived: `steady()` in the harness has always returned `inIrons`, and th
 has never printed it. **The one number that would have contradicted the doc was measured on
 every single run and thrown away.** It is printed now, so the doc cannot drift from the
 harness again without someone seeing it.
+
+## 126. `measure-selftest` is too noisy to validate a change against, and my A/B on it was confounded
+
+A one-line change to `scripts/measure.mjs` was investigated and **not made**. The reasoning is
+worth more than the change was.
+
+### What prompted it
+
+`measure-selftest` died mid-run with `page.goto: Timeout 30000ms exceeded`, and
+`measure.mjs:140` is the **only** `page.goto` in `scripts/` without an explicit timeout — so it
+takes Playwright's 30 s default, while every sibling passes 60 s or a configurable budget, and
+the very next line in the same function is willing to wait 120 s for the same page. It looked
+like an obvious tidy-up: give it 120 s to match.
+
+The trigger was self-inflicted — I had two headless batteries compiling shaders at once. The
+project already knows about this: `capture.mjs` refuses to print an unflagged frame time when
+another battery is running, and has an `--allow-contention` flag for exactly this. **Do not run
+two Playwright batteries against the same dev server concurrently.** It is not just slow; it
+can kill a run outright.
+
+### Why the change was dropped
+
+Five runs of `measure-selftest`, each about twelve minutes:
+
+| run | `measure.mjs` | result |
+|---|---|---|
+| 2 | unmodified | all checks passed |
+| 3 | 120 s timeout | FAIL — "the harness rejects it anyway, because the control floor absorbs the drift" |
+| 4 | 120 s timeout | FAIL — same check |
+| baseline | unmodified | all checks passed |
+| 5 | 120 s timeout | FAIL — **a different check**: "fresh-load run reports NO significant effect between identical arms" |
+
+0/3 with the change, 2/2 without. The mechanism says that is impossible: a `goto` deadline that
+is never reached cannot influence a downstream statistical verdict — it is a deadline, not a
+delay. And the failing check *moved* between runs 4 and 5, which is the signature of a noisy
+suite rather than of a deterministic cause.
+
+But look at the design. **Every unmodified run happened earlier in the session than every
+modified run.** Arm and run order are perfectly correlated, so session drift — thermal state,
+page cache, whatever else accumulated over an afternoon of headless browsers — is confounded
+with the treatment. That is the same error the harness itself exists to prevent, committed by
+hand in the harness's own test, and the strong prior that the change is inert is exactly the
+kind of prior AGENTS.md says not to lean on.
+
+Separating it honestly needs interleaved arms and roughly ten runs a side: two hours to justify
+a timeout constant on a suite nothing gates on. Not worth it. The change is reverted and this
+is the record.
+
+**What stands:** `measure-selftest`'s CONFOUND assertions are stochastic — already noted in
+§116 — and now measured at roughly 3 failures in 5 runs on this machine, with *which* check
+fails varying between runs. Neither failure is a regression, and neither should be treated as
+one without interleaved repeats.
+
+**What is still true and unfixed:** `measure.mjs` has the only bare `page.goto` in `scripts/`,
+so it is the one harness that will fall over on a busy machine. Anyone who wants to fix it
+should do it when the suite is not the thing under test — or simply not run two batteries at
+once, which is the actual lesson.
