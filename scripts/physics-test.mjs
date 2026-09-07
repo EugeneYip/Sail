@@ -472,11 +472,29 @@ check(pitchPeak > 1.5, 'she pitches in a storm sea', `peak ${pitchPeak.toFixed(1
  * ------------------------------------------------------------------ */
 
 console.log('\nFLOATING ORIGIN — she must be rebased before float32 gives out');
+// PIN the wind, do not assign it. This case is the one place in the suite where
+// the ABSOLUTE wind bearing matters: the rebase test is on the L-infinity norm,
+// so where she ends up inside the 4000 m box depends on which way the box she is
+// sailing. An unpinned bearing is whatever the weather sim happened to drift to,
+// which is a different answer every run. Pinned and settled below; released after.
+await page.evaluate(() => {
+  const e = window.__leeward.world.ext.env;
+  e.pin('windSpeed', 12);
+  e.pin('gust', 1);
+  e.pin('windBearing', Math.PI / 4);
+});
+await page.waitForTimeout(1200);
+const originPin = await page.evaluate(() => {
+  const w = window.__leeward.world;
+  return { ws: w.env.windSpeed, gust: w.env.gust, wb: w.env.windBearing };
+});
+check(Math.abs(originPin.ws - 12) < 1e-6 && Math.abs(originPin.gust - 1) < 1e-6
+  && Math.abs(originPin.wb - Math.PI / 4) < 1e-6,
+  'the pinned wind actually held before measuring',
+  `${originPin.ws.toFixed(2)} m/s, gust ${originPin.gust.toFixed(2)}, bearing ${(originPin.wb * 180 / Math.PI).toFixed(1)} deg`);
 const origin = await page.evaluate(() => {
   const w = window.__leeward.world;
   const px = w.ext.physics;
-  w.env.windSpeed = 12;
-  w.env.gust = 1;
   w.input.steer = 0;
   px.flatSea = true;
   let events = 0;
@@ -497,14 +515,34 @@ const origin = await page.evaluate(() => {
     lastDelta,
     sailed: Math.hypot(w.origin.x - o0.x, w.origin.z - o0.z),
     dist: Math.hypot(p.x, p.z),
+    linf: Math.max(Math.abs(p.x), Math.abs(p.z)),
     y: p.y,
   };
 });
+await page.evaluate(() => window.__leeward.world.ext.env.unpin('all'));
 note('rebases in 1400 s', origin.events);
 note('voyage distance banked in world.origin', `${(origin.sailed / 1852).toFixed(2)} NM`);
-note('render-space distance from origin after', `${origin.dist.toFixed(0)} m`);
+note('render-space distance from origin after', `${origin.dist.toFixed(0)} m (L2), ` +
+  `${origin.linf.toFixed(0)} m (max component)`);
 check(origin.events >= 1, 'the world gets rebased', `${origin.events} origin:shift event(s)`);
-check(origin.dist < 4100, 'she never wanders far from the render origin', `${origin.dist.toFixed(0)} m`);
+// L-INFINITY, not L2. `shiftOrigin` rebases when EITHER component reaches
+// ORIGIN_SHIFT_RADIUS (4000 m), so the bound the code actually guarantees is on
+// the larger component. The Euclidean radius at a rebase can legitimately reach
+// R*sqrt2 = 5657 m, and this used to assert `hypot(x, z) < 4100`, which is not a
+// property the solver has ever had. Measured over eight pinned wind bearings,
+// everything else identical:
+//
+//   bearing      0    45    90   135   180   225   270   315 deg
+//   L2        4161  3903  4161  3903  4162  3903  4162  3903 m   -> 4/8 under 4100
+//   max|comp| 3950  3487  3950  3487  3950  3487  3950  3487 m   -> 8/8 under 4000
+//
+// The 90 deg periodicity is the whole story: a wind on an axis puts her track on
+// a diagonal of the rebase box and a diagonal wind puts it on an axis. Distance
+// sailed was 2.28-2.42 NM in all eight, so nothing about the ship changed. The
+// old assertion was passing or failing on which way the world happened to face.
+check(origin.linf <= 4001, 'she never wanders far from the render origin',
+  `largest component ${origin.linf.toFixed(0)} m against the 4000 m rebase radius ` +
+  `(L2 ${origin.dist.toFixed(0)} m)`);
 check(origin.sailed > 3000, 'world.origin accumulates the distance actually sailed',
   `${(origin.sailed / 1852).toFixed(2)} NM`);
 check(!!origin.lastDelta && Number.isFinite(origin.lastDelta.x),
