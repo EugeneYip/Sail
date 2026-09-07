@@ -441,6 +441,14 @@ bad reasoning. The harness closes those specific traps:
   Same-load *relative* comparisons stay valid — every arm drifted together — unless the
   conclusion itself depended on the absolute weather state.
 
+- **A live ocean measurement must span a wave GROUP, not a wave.** With the
+  weather pinned exactly, the sea still beats: heave range swings 3.0 to 8.0 m on
+  a **~45 s cycle**, and anything driven by wave encounter — bow slam, spray,
+  camera shake, foam — tracks it. Two independent loads reproduced that cycle
+  window for window. A single 8-second sample of a peak is therefore a coin toss
+  on where in the beat it landed, and no amount of pinning fixes it; the window
+  has to be long enough to contain a beat (§126 note, and the LIVE case in
+  `assist-test.mjs`).
 - **Never run two headless batteries at once.** They contend for the GPU and the
   dev server, and it is not merely slow: `measure-selftest` has been killed
   outright by a 30 s page-load timeout while a physics run was compiling shaders.

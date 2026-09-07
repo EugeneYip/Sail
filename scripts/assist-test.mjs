@@ -495,18 +495,60 @@ check(feel.pitch > 1.5, 'she still pitches to a storm sea', `peak ${feel.pitch.t
 // thing live, with the ocean advancing and the ordinary game loop ticking —
 // which also proves the settings -> solver sync works in flight.
 console.log('\nLIVE — assist switched on through world.settings, storm sea, real frames');
-await page.evaluate(() => {
+// PIN the storm. `Object.assign(w.env, ...)` plus an empty `capture:scene` is
+// what this used to do, and it does not hold a condition: the payload is empty
+// so nothing is pinned, and `frozen` only stops the preset machine choosing a
+// NEW preset -- the integrators keep writing `env` every frame. Measured over
+// this arm's own 8.4 s window, three runs, the storm it was supposed to be
+// measuring simply decayed underneath it:
+//
+//   windSpeed  22   -> 8.0 / 10.1 / 11.8 m/s
+//   choppiness 0.85 -> 0.16 / 0.22 / 0.27
+//   waveHeight 6.5  -> 5.08 / 5.72 / 5.97 m
+//
+// So the arm measured a gale collapsing into a breeze, and how far it had
+// collapsed when the biggest wave arrived was the whole variance. Pinned, the
+// same read-back is exact to 0.0 on every run.
+const LIVE_STORM = { windSpeed: 22, waveHeight: 6.5, seaState: 7, choppiness: 0.85 };
+await page.evaluate((storm) => {
   const w = window.__leeward.world;
   w.settings.assist = true;
   w.ext.physics.flatSea = false;
-  Object.assign(w.env, { windSpeed: 22, waveHeight: 6.5, seaState: 7, choppiness: 0.85 });
-  w.bus.emit('capture:scene', {});
+  for (const [k, v] of Object.entries(storm)) w.ext.env.pin(k, v);
+}, LIVE_STORM);
+await page.waitForTimeout(6000);
+const liveEnv = await page.evaluate(() => {
+  const e = window.__leeward.world.env;
+  return { windSpeed: e.windSpeed, waveHeight: e.waveHeight, seaState: e.seaState,
+           choppiness: e.choppiness };
 });
+// Tolerances are ~1000x the observed error: every field read back exactly equal
+// over six runs. Anything looser would not be an assertion.
+const LIVE_TOL = { windSpeed: 0.01, waveHeight: 0.01, seaState: 0.01, choppiness: 0.001 };
+const liveHeld = Object.keys(LIVE_STORM)
+  .every((k) => Math.abs(liveEnv[k] - LIVE_STORM[k]) <= LIVE_TOL[k]);
+check(liveHeld, 'the pinned storm actually held before measuring',
+  `wind ${liveEnv.windSpeed.toFixed(2)} m/s, wave ${liveEnv.waveHeight.toFixed(2)} m, ` +
+  `sea ${liveEnv.seaState.toFixed(2)}, chop ${liveEnv.choppiness.toFixed(3)}`);
+
+// The window has to span a wave GROUP, not a wave. With the weather pinned the
+// remaining variation is the sea's own beat: heave range swings 3.0 -> 8.0 m on
+// a ~45 s cycle and bowSlam tracks it, measured in consecutive 8.4 s windows,
+// two independent loads agreeing window for window:
+//
+//   t after pin   8    17    25    34    42    50    59    67    76 s
+//   bowSlam    2.67  2.71  2.81  1.46  3.90  4.19  2.04  2.76  1.79
+//              2.77  2.94  2.64  1.53  4.01  4.22  2.93  2.57  2.72
+//
+// One 8.4 s window is a coin toss on where in that cycle it lands, which is the
+// rest of the old variance. 54 s covers a full beat. Sampling stays coarse: the
+// polled peak and a per-frame peak over the same window agreed to 0.01 m/s^2, so
+// bowSlam is not being aliased at this cadence.
 let slamPeak = 0;
 let pitchPeak = 0;
 let minKnots = Infinity;
 let syncedOn = false;
-for (let i = 0; i < 70; i++) {
+for (let i = 0; i < 360; i++) {
   const s = await page.evaluate(() => {
     const w = window.__leeward.world;
     return {
@@ -520,8 +562,17 @@ for (let i = 0; i < 70; i++) {
   pitchPeak = Math.max(pitchPeak, s.pitch);
   minKnots = Math.min(minKnots, s.kn);
   syncedOn = s.assist;
-  await page.waitForTimeout(120);
+  await page.waitForTimeout(150);
 }
+// Release the storm. `put()` in the next case writes `w.env.windSpeed` directly,
+// and a live pin would win over it -- every Pro case after this one would run in
+// 22 m/s instead of 10. Re-emit `capture:scene` because unpinning the last field
+// also clears `frozen`, which this arm has always left set for what follows.
+await page.evaluate(() => {
+  const w = window.__leeward.world;
+  w.ext.env.unpin('all');
+  w.bus.emit('capture:scene', {});
+});
 note('live peaks', `bowSlam ${slamPeak.toFixed(1)} m/s^2, pitch ${pitchPeak.toFixed(1)} deg`);
 check(syncedOn, 'the solver picked the mode up from world.settings on its own', 'assist = true');
 check(slamPeak > 3 && slamPeak < 60, 'bowSlam still drives spray and camera shake',
