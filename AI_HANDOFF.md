@@ -69,9 +69,10 @@ The two facts that do not change:
 
 **Verify which repository you are in before anything else.** A directory name or path is
 not evidence of repository ownership — a stray home-level `.git` once made every directory
-beneath it look like part of an unrelated repository, and a retired but otherwise perfectly
-valid clone of *this* repository still exists on this machine (§5a). Identity comes from
-these three:
+beneath it look like part of an unrelated repository, and for a while a second, perfectly
+valid clone of *this* repository sat on this machine as well. That one has since been
+archived and deleted (§5a), but the lesson outlives it: identity comes from these three, not
+from where you are:
 
 ```bash
 git rev-parse --show-toplevel     # where this checkout actually is
@@ -138,9 +139,11 @@ Then read, in this order: this file → `AGENTS.md` → the `DIAGNOSIS.md` secti
 
 **Canonical identity is established from git facts, never inferred from a directory name.**
 The three checks in §4 are the test. The table below is a fact about *today's* machine, not
-a rule: a legitimate future clone of `EugeneYip/Sail` may live at any path. Only the legacy
-checkout is named, because it is a genuine clone of this repository and would otherwise pass
-every check you could run on it.
+a rule: a legitimate future clone of `EugeneYip/Sail` may live at any path. The former
+Desktop checkout is named even though it is **gone**, because of what it was — a genuine,
+same-remote clone that would have passed every check you could run on it. Its archive is
+still recovery material, so that path could appear again; if it does, it is not the canonical
+checkout.
 
 | location | status |
 |---|---|
