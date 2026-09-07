@@ -169,7 +169,11 @@ for (const twa of ANGLES) {
     `  TWA ${String(twa).padStart(3)}  ${r.knots.toFixed(2).padStart(5)} kn   ` +
       `heel ${r.heelDeg.toFixed(1).padStart(5)}   leeway ${r.leewayDeg.toFixed(1).padStart(5)}   ` +
       `VMG ${r.vmgKnots.toFixed(2).padStart(5)}   AWA ${r.awaDeg.toFixed(0).padStart(4)}   ` +
-      `held ${r.twaDeg.toFixed(0).padStart(4)}   rudder ${r.rudderDeg.toFixed(1).padStart(5)}   ${r.pointOfSail}`,
+      `held ${r.twaDeg.toFixed(0).padStart(4)}   rudder ${r.rudderDeg.toFixed(1).padStart(5)}   ` +
+      // `steady()` has always returned this and the table has never shown it,
+      // which is how the published polar in src/physics/index.ts came to claim
+      // irons at three angles the harness sails through. Print it.
+      `${r.inIrons ? 'IRONS  ' : '       '}${r.pointOfSail}`,
   );
 }
 

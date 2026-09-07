@@ -60,9 +60,16 @@ import { ShipDynamics } from './ShipDynamics';
  * sea, full press of sail unless stated:
  *
  *   TWA     50    60    65    70    80    90   110   140   175
- *   knots  irons irons irons  5.5   7.8   9.5  10.9  10.1   6.1
- *   heel     -     -     -   11.4  12.2  12.3   8.8   1.1   0.7
- *   leeway   -     -     -    8.7   4.8   3.1   1.6   0.3   0.1
+ *   knots  irons   3.6   4.3   5.5   7.8   9.5  10.9  10.1   6.1
+ *   heel     -     9.1  10.6  11.4  12.2  12.3   8.8   1.1   0.7
+ *   leeway   -    15.2  12.4   8.7   4.8   3.1   1.6   0.3   0.1
+ *
+ * 60 and 65 used to read `irons` here and never were: she works to windward at
+ * both, slowly, making good VMG +1.2 kn. Only 50 latches. The polar row in
+ * `physics-test.mjs` now prints the flag alongside the speed so this cannot go
+ * stale again. Read at the FULL settle -- `--quick` halves it, and the cases that
+ * are not steered to a heading have not stopped moving by then, so their numbers
+ * differ. That is a property of the measurement, not of the ship.
  *
  *   closest track she can make good        69-76 deg off the true wind
  *   top speed, any wind up to 34 m/s       12.8 kn (13.4 kn surfing in a gale)
