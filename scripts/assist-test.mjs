@@ -542,9 +542,25 @@ const pro = await run(`
     out[twa] = { kn: last.knots, heel: last.heelDeg, leeway: last.leewayDeg, held: last.twaDeg,
                  vmg: last.vmgKnots };
   }
+  // NOT ARG.settle. Every other Pro case here reaches a steady state in well
+  // under a minute; this one never reaches one at all. Stalled at TWA 45 she
+  // swings with a ~150 s period about roughly 42 deg, and the irons latch only
+  // arms when that swing first carries her inside 44 deg. Measured, Pro, 10 m/s,
+  // flat sea, full press, one independent settle per point:
+  //
+  //   settle   40    60    80    90   100   120   150   180   240   300 s
+  //   held   48.2  47.8  45.8  44.2  42.6  39.7  37.5  38.7  45.6  41.7 deg
+  //   irons     -     -     -     -  true  true  true  true  true  true
+  //
+  // First latch at 100 s, and it is sticky afterwards -- the hold gate is 62 deg
+  // and 1.6 m/s, both of which she stays inside. So --quick's 90 s settle was
+  // 10 s short and this assertion failed on a correct solver, deterministically,
+  // to 0.1 deg over four repeats. Floor it at 150 s: 50 s past the crossing, at
+  // the deepest point of the swing. Full mode's 180 s is unchanged.
   put(45, 6, { assist: false });
-  px.run(ARG.settle, 1 / 60);
+  const ir = px.run(Math.max(ARG.settle, 150), 1 / 60);
   out.irons = w.ship.inIrons;
+  out.ironsHeld = ir[ir.length - 1].twaDeg;
   return out;
 `, { settle: SETTLE });
 note('pro TWA 70/90/175', `${pro[70].kn.toFixed(2)} / ${pro[90].kn.toFixed(2)} / ${pro[175].kn.toFixed(2)} kn`);
@@ -553,7 +569,8 @@ check(Math.abs(pro[70].twaDeg ?? pro[70].held) + Math.abs(pro[70].leeway) >= 65,
   'Pro still cannot point inside 65 deg',
   `${(Math.abs(pro[70].held) + Math.abs(pro[70].leeway)).toFixed(1)} deg made good`);
 check(pro[70].kn > 4 && pro[70].kn < 7, 'Pro close-hauled is still hard work', `${pro[70].kn.toFixed(2)} kn`);
-check(pro.irons === true, 'Pro still goes into irons at TWA 45', `inIrons = ${pro.irons}`);
+check(pro.irons === true, 'Pro still goes into irons at TWA 45',
+  `inIrons = ${pro.irons}, holding ${pro.ironsHeld.toFixed(1)} deg off the wind (latch arms inside 44)`);
 
 /* ------------------------------------------------------------------ *
  *  7. determinism and cost, assisted
