@@ -9360,3 +9360,61 @@ one without interleaved repeats.
 so it is the one harness that will fall over on a busy machine. Anyone who wants to fix it
 should do it when the suite is not the thing under test — or simply not run two batteries at
 once, which is the actual lesson.
+
+## 127. Boston is closed where §110 said it was; the island bases are open 18 m down
+
+A topology check, run because §110's "closed the volume" is a binary claim with no aesthetic
+component and nothing had ever tested it. In a closed 2-manifold every edge is shared by
+exactly two triangles. Vertices are duplicated at seams by `MeshBuilder.vert`, so edges are
+keyed on quantised position rather than index.
+
+**Controls first**, from the same builder in the same run: a `box()` reads CLOSED (0 boundary
+edges), and a bare `tube(rings, true)` with two open rims reads OPEN with exactly 16 boundary
+edges — 2 rims × 8 segments, the number it must be. The instrument measures what it claims to.
+
+| mesh | tris | edges | shared by 2 | boundary | >2 |
+|---|---|---|---|---|---|
+| CONTROL `box()` | 12 | 18 | 18 | **0** | 0 |
+| CONTROL open tube, 2 rims | 32 | 56 | 40 | **16** | 0 |
+| `world-boston` | 16942 | 24071 | 23971 | **84** | 16 |
+
+### The 84 are real, and the weld tolerance proves it
+
+A boundary edge can be an artefact of welding: two vertices that should be coincident but
+differ by a hair read as two separate rims. Sweeping the tolerance across three orders of
+magnitude settles it — a numerical seam collapses as the tolerance coarsens, a hole does not:
+
+| weld tolerance | 1 mm | 1 cm | 10 cm | 1 m |
+|---|---|---|---|---|
+| boundary edges | **84** | **84** | **84** | **84** |
+| non-manifold edges | 12 | 16 | 33 | 57 |
+
+Exactly 84 at every tolerance. These are genuine open rims. (The non-manifold count climbing
+with the tolerance is the expected artefact of over-welding distinct vertices, and is what
+tells you the sweep is behaving.)
+
+### Where they are, and why this is not §110 reopening
+
+Every boundary vertex sits between **y = −18.59 and −17.44 m**, spread over x −2102…2002 and
+z −3339…−1211. `ISLAND_BASE_Y = -18`. Nothing is at the waterline and nothing is near
+`LAND_FLOOR = -52`.
+
+So the **land volume is closed** — which is precisely what §110 claimed and fixed, with its
+boundary ring walled down to the floor and a hub fan across the bottom. Had that regressed,
+there would be boundary edges at −52. There are none.
+
+What is open is the **harbour islands**: `b.tube([...rings].reverse(), true)` is closed
+circumferentially and capped at the summit, but its bottom rim at `ISLAND_BASE_Y` has no cap.
+Eighteen metres below the surface, each island is a cone with no floor.
+
+### Not fixed
+
+Capping the island bases means adding triangles to hide geometry no camera has been shown to
+reach. It would only ever be visible from underwater, looking at an island from below or
+inside, and nothing establishes that the camera can get there — `camera/Collision.ts` exists
+and was not investigated. No player report mentions it.
+
+Recorded rather than fixed, with the number that makes it cheap to re-check: **84 boundary
+edges, all at y ≈ −18.** If underwater views are ever supported, or that count ever moves,
+this is where to start. A count that changes at the waterline or at −52 would be a real
+regression of §110 and should be treated as one.
